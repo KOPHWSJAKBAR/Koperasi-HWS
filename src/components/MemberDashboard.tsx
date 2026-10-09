@@ -715,7 +715,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   required
                   value={tfTargetRek}
                   onChange={(e) => setTfTargetRek(e.target.value)}
-                  placeholder="Contoh: 7729666666 atau HWS-CKR-..."
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs focus:ring-2 focus:ring-amber-500"
                 />
 
@@ -751,7 +750,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   max={currentMember.saldoUmum}
                   value={tfNominal}
                   onChange={(e) => setTfNominal(e.target.value)}
-                  placeholder="Contoh: 50000"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-amber-500"
                 />
               </div>
@@ -765,7 +763,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   type="text"
                   value={tfCatatan}
                   onChange={(e) => setTfCatatan(e.target.value)}
-                  placeholder="Contoh: Titip belanja sembako"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs"
                 />
               </div>
@@ -781,7 +778,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   maxLength={6}
                   value={tfPin}
                   onChange={(e) => setTfPin(e.target.value)}
-                  placeholder="Default: 123456"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest text-sm focus:ring-2 focus:ring-amber-500"
                 />
               </div>
@@ -870,7 +866,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   type="text"
                   value={tarikCatatan}
                   onChange={(e) => setTarikCatatan(e.target.value)}
-                  placeholder="Contoh: Keperluan usaha harian"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs"
                 />
               </div>

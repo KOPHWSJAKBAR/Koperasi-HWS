@@ -30,6 +30,17 @@ export interface PengurusItem {
   nik?: string;
 }
 
+export interface FreezeRequest {
+  requestedByRole: 'admin_write' | 'admin_kelola' | 'super_admin' | string;
+  requestedByName: string;
+  reason: string;
+  requestedAt: string;
+  approvedByKelola?: boolean;
+  approvedByKelolaName?: string;
+  approvedBySuperAdmin?: boolean;
+  approvedBySuperAdminName?: string;
+}
+
 export interface KoperasiProfile {
   nama: string;
   badanHukum: string;
@@ -39,6 +50,7 @@ export interface KoperasiProfile {
   visi?: string;
   misi?: string;
   ketuaPengurus?: string;
+  wakilKetua?: string;
   sekretaris?: string;
   bendahara?: string;
   pengawas?: string;
@@ -76,6 +88,22 @@ export interface AdminUser {
   securityQuestion?: string;
   securityAnswer?: string;
   createdAt: string;
+  // Data diri lengkap sesuai pendaftaran anggota (Req 1)
+  alamatLengkap?: string;
+  rt?: string;
+  rw?: string;
+  kelurahan?: string;
+  kecamatan?: string;
+  kota?: string;
+  provinsi?: string;
+  kodePos?: string;
+  bankPribadi?: {
+    namaBank: string;
+    nomorRekening: string;
+    atasNama: string;
+  };
+  status?: 'aktif' | 'nonaktif' | 'dibekukan' | 'pending_freeze';
+  freezeRequest?: FreezeRequest;
 }
 
 export interface MemberUser {
@@ -114,7 +142,8 @@ export interface MemberUser {
   saldoQurban: number; // Rp 500/hari, dikelola pengurus
   saldoUmum: number; // Bebas setor & tarik kapan saja
   
-  status: 'aktif' | 'nonaktif' | 'pending' | 'pending_deletion';
+  status: 'aktif' | 'nonaktif' | 'pending' | 'pending_deletion' | 'dibekukan' | 'pending_freeze';
+  freezeRequest?: FreezeRequest;
   terdaftarSejak: string;
 }
 

@@ -288,7 +288,6 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
                   required
                   value={perihal}
                   onChange={(e) => setPerihal(e.target.value)}
-                  placeholder="Contoh: Undangan Rapat Anggota Tahunan (RAT)"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>

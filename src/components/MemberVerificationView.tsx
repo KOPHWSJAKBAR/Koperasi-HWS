@@ -639,7 +639,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                       required
                       value={nominalUmum}
                       onChange={(e) => setNominalUmum(e.target.value)}
-                      placeholder="Contoh: 50000"
                       className="w-full pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
                     />
                   </div>
@@ -708,7 +707,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   type="text"
                   value={catatan}
                   onChange={(e) => setCatatan(e.target.value)}
-                  placeholder="Contoh: Setoran kewajiban 5 hari Maret"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                 />
               </div>
@@ -879,7 +877,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   step={1000}
                   value={nominalTarik}
                   onChange={(e) => setNominalTarik(e.target.value)}
-                  placeholder="Contoh: 100000"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                 />
               </div>

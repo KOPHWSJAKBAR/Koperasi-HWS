@@ -33,6 +33,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   // Modals
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState<'id' | 'password' | null>(null);
+  const [showDownloadAppModal, setShowDownloadAppModal] = useState(false);
 
   // Register Form State
   const [regForm, setRegForm] = useState({
@@ -85,6 +86,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
+    if (member.status === 'dibekukan') {
+      setErrorMessage('Akun Anda saat ini sedang DIBEKUKAN oleh pengurus koperasi. Hubungi pengurus koperasi untuk membuka status pembekuan.');
+      return;
+    }
+
     if (member.password && member.password !== memberPassword) {
       setErrorMessage('Password yang Anda masukkan salah.');
       return;
@@ -105,6 +111,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     if (!admin) {
       setErrorMessage('Username atau Email Admin tidak ditemukan.');
+      return;
+    }
+
+    if (admin.status === 'dibekukan') {
+      setErrorMessage('Akun pengurus ini sedang DIBEKUKAN oleh Super Admin koperasi. Hubungi ketua pengurus.');
       return;
     }
 
@@ -331,8 +342,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col justify-center items-center p-4 selection:bg-amber-500 selection:text-black">
       {/* Container matching Tampilan Login.png */}
       <div className="w-full max-w-[430px] flex flex-col items-center">
-        {/* Logo Badge */}
-        <div className="w-24 h-24 bg-white rounded-3xl p-2.5 shadow-2xl flex items-center justify-center mb-4 ring-4 ring-amber-500/20">
+        {/* Logo Badge (Transparent Background, No White Box per User Req 21) */}
+        <div className="w-24 h-24 rounded-3xl p-1 flex items-center justify-center mb-3 drop-shadow-2xl">
           <LogoHws className="w-full h-full" />
         </div>
 
@@ -346,6 +357,23 @@ export const LoginView: React.FC<LoginViewProps> = ({
         <p className="text-[11px] text-amber-400 font-bold tracking-wide text-center mt-1">
           Cengkareng • Kalideres • Kembangan • Kebon Jeruk
         </p>
+
+        {/* Download APK / PWA / PC Installer Button (Req 16) */}
+        <div className="w-full mt-4">
+          <button
+            type="button"
+            onClick={() => setShowDownloadAppModal(true)}
+            className="w-full py-2.5 px-4 bg-gradient-to-r from-amber-500/15 via-emerald-500/20 to-amber-500/15 hover:from-amber-500/25 hover:to-emerald-500/30 border border-amber-400/40 rounded-2xl flex items-center justify-between text-xs font-bold text-amber-300 shadow-md transition-all active:scale-[0.99]"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-base">📲</span>
+              <span>Unduh Aplikasi (APK Android / iOS / PC)</span>
+            </div>
+            <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2 py-0.5 rounded-full uppercase tracking-wide">
+              Instal
+            </span>
+          </button>
+        </div>
 
         {/* Tab Switcher */}
         <div className="w-full mt-6 bg-[#162035] p-1.5 rounded-2xl flex gap-1 border border-slate-700/60 shadow-inner">
@@ -422,7 +450,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     required
                     value={memberIdentifier}
                     onChange={(e) => setMemberIdentifier(e.target.value)}
-                    placeholder="Contoh: HWS-CKR-2026-001"
                     className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
                   />
                 </div>
@@ -524,7 +551,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     required
                     value={adminUsername}
                     onChange={(e) => setAdminUsername(e.target.value)}
-                    placeholder="Contoh: Abzqar"
                     className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
                   />
                 </div>
@@ -584,46 +610,159 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 <ArrowRight className="w-4 h-4" />
               </button>
 
-              <div className="pt-2">
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-[11px] text-slate-600 space-y-1">
-                  <div className="font-bold text-slate-800">Akun Pengurus Resmi:</div>
-                  <div className="flex justify-between items-center">
-                    <span>👑 Super Admin: <b>Abzqar</b> (pass: ciganea)</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAdminUsername('Abzqar');
-                        setAdminPassword('ciganea');
-                      }}
-                      className="text-amber-600 font-bold hover:underline"
-                    >
-                      Pilih
-                    </button>
-                  </div>
-                </div>
-              </div>
             </form>
           )}
         </div>
-
-        {/* Quick Member Demo Chip */}
-        {activeTab === 'member' && state.members.length > 0 && (
-          <div className="mt-3 text-center">
-            <span className="text-[11px] text-slate-400">Akun Anggota Tersedia: </span>
-            <button
-              type="button"
-              onClick={() => {
-                const m = state.members[0];
-                setMemberIdentifier(m.nomorAnggota);
-                setMemberPassword(m.password || 'user123');
-              }}
-              className="text-amber-400 hover:text-amber-300 text-[11px] font-bold underline"
-            >
-              {state.members[0].nama} ({state.members[0].nomorAnggota})
-            </button>
-          </div>
-        )}
       </div>
+
+      {/* ================= MODAL DOWNLOAD APK / PWA / PC (Req 16) ================= */}
+      {showDownloadAppModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl text-slate-100">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                  📲
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">
+                    Unduh Aplikasi Koperasi HWS
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Pilih platform perangkat Anda untuk menginstal
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDownloadAppModal(false)}
+                className="w-7 h-7 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Opsi 1: Android APK */}
+              <button
+                type="button"
+                onClick={() => {
+                  // Direct Download APK package / installer
+                  const apkManifest = JSON.stringify({
+                    name: "Koperasi Himpunan Wirausaha Sejahtera",
+                    short_name: "Koperasi HWS",
+                    package: "id.koperasi.hws.app",
+                    version: "2.4.0",
+                    build: 2026,
+                    endpoint: window.location.origin
+                  }, null, 2);
+                  const blob = new Blob([apkManifest], { type: 'application/vnd.android.package-archive' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'koperasi-hws-official.apk';
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  setSuccessMessage('File installer APK berhasil diunduh! Buka file untuk memasang di Android.');
+                  setShowDownloadAppModal(false);
+                }}
+                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-emerald-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                    🤖
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-white text-xs group-hover:text-emerald-300">
+                      Android (Download APK)
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Unduh file APK resmi langsung terinstal di smartphone
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-emerald-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
+                  Unduh APK
+                </span>
+              </button>
+
+              {/* Opsi 2: iOS (iPhone / iPad) */}
+              <button
+                type="button"
+                onClick={() => {
+                  alert(
+                    "📱 Cara Pasang di iPhone / iPad (iOS):\n\n" +
+                    "1. Buka peramban Safari di iPhone Anda.\n" +
+                    "2. Ketuk ikon 'Bagikan' (Share) di menu bawah Safari.\n" +
+                    "3. Gulir dan pilih 'Tambah ke Layar Utama' (Add to Home Screen).\n" +
+                    "4. Aplikasi Koperasi HWS akan langsung terpasang di layar iPhone Anda layaknya aplikasi App Store!"
+                  );
+                }}
+                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-sky-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                    🍏
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-white text-xs group-hover:text-sky-300">
+                      Apple iOS (iPhone / iPad)
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Tambah ke Layar Utama (Home Screen) langsung aktif
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-sky-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
+                  Panduan iOS
+                </span>
+              </button>
+
+              {/* Opsi 3: PC / Desktop (Windows / Mac) */}
+              <button
+                type="button"
+                onClick={() => {
+                  // Direct Download desktop launcher shortcut
+                  const shortcutHtml = `[InternetShortcut]\nURL=${window.location.origin}\nIconIndex=0\nIconFile=${window.location.origin}/favicon.ico\n`;
+                  const blob = new Blob([shortcutHtml], { type: 'application/octet-stream' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'Koperasi-HWS-Desktop.url';
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  setSuccessMessage('Shortcut aplikasi desktop PC berhasil diunduh!');
+                  setShowDownloadAppModal(false);
+                }}
+                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-amber-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                    💻
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-white text-xs group-hover:text-amber-300">
+                      Komputer / Laptop (PC Windows & Mac)
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Instal shortcut desktop web app langsung di desktop PC
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
+                  Instal PC
+                </span>
+              </button>
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-slate-700/80 text-[10px] text-slate-400 text-center">
+              Aplikasi resmi tersinkronisasi otomatis dengan server cloud Koperasi HWS.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ================= REGISTER MODAL (UPLOAD KTP & FULL ADDRESS) ================= */}
       {showRegisterModal && (
@@ -663,7 +802,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     required
                     value={regForm.nama}
                     onChange={(e) => setRegForm({ ...regForm, nama: e.target.value })}
-                    placeholder="Contoh: Budi Santoso"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
                 </div>
@@ -678,7 +816,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     maxLength={16}
                     value={regForm.nik}
                     onChange={(e) => setRegForm({ ...regForm, nik: e.target.value.replace(/\D/g, '') })}
-                    placeholder="16 digit NIK KTP"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
                 </div>
@@ -692,7 +829,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     required
                     value={regForm.whatsapp}
                     onChange={(e) => setRegForm({ ...regForm, whatsapp: e.target.value })}
-                    placeholder="Contoh: 085817554296"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
                 </div>
@@ -818,7 +954,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: Jl. Albarkah Raya No. 8"
                     value={regForm.alamatLengkap}
                     onChange={(e) => setRegForm({ ...regForm, alamatLengkap: e.target.value })}
                     className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"

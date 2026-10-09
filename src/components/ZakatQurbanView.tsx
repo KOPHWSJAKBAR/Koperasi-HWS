@@ -587,7 +587,6 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
                   step={500}
                   value={nominalPerAnggota}
                   onChange={(e) => setNominalPerAnggota(e.target.value)}
-                  placeholder="Contoh: 10000"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
                 />
               </div>
@@ -599,7 +598,6 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
                   required
                   value={keterangan}
                   onChange={(e) => setKeterangan(e.target.value)}
-                  placeholder="Contoh: Penyaluran Paket Zakat Beras Idul Fitri 1447H"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>

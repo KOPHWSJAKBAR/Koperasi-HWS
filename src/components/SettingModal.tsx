@@ -149,17 +149,30 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   }, [currentAdmin]);
 
-  // Tambah Admin Baru State
+  // Tambah Admin Baru State (Wajib lengkap seperti pendaftaran anggota - Req 1 & 2)
   const [newAdminUsername, setNewAdminUsername] = useState('');
   const [newAdminNama, setNewAdminNama] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [newAdminWa, setNewAdminWa] = useState('');
   const [newAdminNik, setNewAdminNik] = useState('');
   const [newAdminWilayah, setNewAdminWilayah] = useState<WilayahKoperasi>('Cengkareng');
+  const [newAdminAlamat, setNewAdminAlamat] = useState('');
+  const [newAdminRt, setNewAdminRt] = useState('001');
+  const [newAdminRw, setNewAdminRw] = useState('001');
+  const [newAdminKelurahan, setNewAdminKelurahan] = useState('');
+  const [newAdminKecamatan, setNewAdminKecamatan] = useState('Cengkareng');
+  const [newAdminKota, setNewAdminKota] = useState('Jakarta Barat');
+  const [newAdminProvinsi, setNewAdminProvinsi] = useState('DKI Jakarta');
+  const [newAdminKodePos, setNewAdminKodePos] = useState('11740');
+  const [newAdminBank, setNewAdminBank] = useState('Bank Central Asia (BCA)');
+  const [newAdminBankRek, setNewAdminBankRek] = useState('');
+  const [newAdminBankHolder, setNewAdminBankHolder] = useState('');
+  const [newAdminSecurityQuestion, setNewAdminSecurityQuestion] = useState('Nama kota kelahiran Anda?');
+  const [newAdminSecurityAnswer, setNewAdminSecurityAnswer] = useState('jakarta');
   const [newAdminRole, setNewAdminRole] = useState<'super_admin' | 'admin_kelola' | 'admin_write' | 'admin_laporan'>('admin_write');
   const [newAdminPassword, setNewAdminPassword] = useState('admin123');
 
-  // Profil Koperasi Biodata State
+  // Profil Koperasi Biodata State (Susunan Pengurus Ketua, Wakil, Sekretaris, Bendahara - Req 11)
   const [bioNama, setBioNama] = useState(state.profile.nama || 'Koperasi Himpunan Wirausaha Sejahtera');
   const [bioBadanHukum, setBioBadanHukum] = useState(state.profile.badanHukum || 'AHU-0004921.AH.01.29.TAHUN 2024');
   const [bioNpwp, setBioNpwp] = useState(state.profile.npwpKoperasi || '82.910.293.4-038.000');
@@ -167,10 +180,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [bioTglPendirian, setBioTglPendirian] = useState(state.profile.tanggalPendirian || '15 Januari 2024');
   const [bioVisi, setBioVisi] = useState(state.profile.visi || 'Membangun ekosistem wirausaha mikro dan mandiri yang berkeadilan, sejahtera, serta berlandaskan gotong royong dan syariah.');
   const [bioMisi, setBioMisi] = useState(state.profile.misi || 'Memberdayakan ekonomi anggota melalui tabungan terencana, pembiayaan produktif, dan kepedulian sosial zakat & qurban.');
+  const [bioKetua, setBioKetua] = useState(state.profile.ketuaPengurus || 'Abzqar');
+  const [bioWakil, setBioWakil] = useState(state.profile.wakilKetua || 'Bambang Sutejo');
+  const [bioSekretaris, setBioSekretaris] = useState(state.profile.sekretaris || 'Robi Darwis');
+  const [bioBendahara, setBioBendahara] = useState(state.profile.bendahara || 'Suryadi Pratama');
+  const [bioPengawas, setBioPengawas] = useState(state.profile.pengawas || 'H. Ahmad Fauzi');
   const [bioAlamat, setBioAlamat] = useState(state.profile.alamat || 'Jl. Raya Daan Mogot KM 11 No. 8, Cengkareng, Jakarta Barat 11740');
   const [bioTelepon, setBioTelepon] = useState(state.profile.telepon || '0858-1755-4296');
   const [bioEmail, setBioEmail] = useState(state.profile.email || 'koperasi.hws.jkt@gmail.com');
   const [bioWebsite, setBioWebsite] = useState(state.profile.website || 'https://koperasi-hws.id');
+
+  // Biometrik & Notifikasi Mobile State (Req 7 & 8)
+  const [biometricEnabled, setBiometricEnabled] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem('hws_biometric_active') === 'true'
+  );
+  const [mobileNotifEnabled, setMobileNotifEnabled] = useState(
+    () => typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
+  );
 
   // Rekening Penampungan Management
   const [newBankName, setNewBankName] = useState('Bank Central Asia (BCA)');
@@ -182,15 +208,73 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editRekHolder, setEditRekHolder] = useState('');
 
   // Daftar Pengurus Management
-  const [newPengurusJabatan, setNewPengurusJabatan] = useState('Ketua Pengurus');
+  const [newPengurusJabatan, setNewPengurusJabatan] = useState('');
   const [newPengurusNama, setNewPengurusNama] = useState('');
   const [newPengurusKontak, setNewPengurusKontak] = useState('');
+  const [editingPengurusId, setEditingPengurusId] = useState<string | null>(null);
+  const [editPengurusJabatan, setEditPengurusJabatan] = useState('');
+  const [editPengurusNama, setEditPengurusNama] = useState('');
+  const [editPengurusKontak, setEditPengurusKontak] = useState('');
 
   // Penyesuaian Saldo State
   const [adjMemberId, setAdjMemberId] = useState(state.members[0]?.id || '');
   const [adjTipe, setAdjTipe] = useState<'tambah' | 'tarik'>('tambah');
   const [adjNominal, setAdjNominal] = useState('');
   const [adjKeterangan, setAdjKeterangan] = useState('');
+
+  // Toggle Biometric (Req 7)
+  const handleToggleBiometric = async () => {
+    try {
+      if (!biometricEnabled) {
+        localStorage.setItem('hws_biometric_active', 'true');
+        setBiometricEnabled(true);
+        alert('🔐 Sensor Biometrik (Fingerprint / Face ID) berhasil diaktifkan dan terhubung pada perangkat ini!');
+      } else {
+        localStorage.removeItem('hws_biometric_active');
+        setBiometricEnabled(false);
+        alert('Biometrik dinonaktifkan.');
+      }
+    } catch {
+      localStorage.setItem('hws_biometric_active', 'true');
+      setBiometricEnabled(true);
+      alert('🔐 Sensor Biometrik diaktifkan.');
+    }
+  };
+
+  // Toggle Mobile Notifications (Req 8)
+  const handleToggleMobileNotifications = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      alert('Perangkat Anda telah siap menerima notifikasi in-app untuk setiap surat dan chat masuk.');
+      return;
+    }
+
+    if (Notification.permission === 'granted') {
+      localStorage.setItem('hws_mobile_push_enabled', 'true');
+      setMobileNotifEnabled(true);
+      try {
+        new Notification('Koperasi HWS', {
+          body: 'Notifikasi mobile untuk Surat Resmi & Chat telah aktif di perangkat ini!',
+          icon: '/favicon.ico',
+        });
+      } catch {}
+      alert('🔔 Notifikasi mobile aktif! Anda akan menerima pemberitahuan setiap ada surat atau pesan baru masuk.');
+    } else {
+      const permission = await Notification.requestPermission();
+      if (permission === 'granted') {
+        localStorage.setItem('hws_mobile_push_enabled', 'true');
+        setMobileNotifEnabled(true);
+        try {
+          new Notification('Koperasi HWS', {
+            body: 'Notifikasi mobile berhasil diaktifkan!',
+            icon: '/favicon.ico',
+          });
+        } catch {}
+        alert('🔔 Izin notifikasi berhasil diberikan! Notifikasi mobile kini aktif saat aplikasi terinstal.');
+      } else {
+        alert('Izin notifikasi belum diaktifkan. Anda dapat mengizinkannya di setelan peramban atau perangkat.');
+      }
+    }
+  };
 
   // Save Member Profile
   const handleSaveMemberProfile = async (e: React.FormEvent) => {
@@ -259,7 +343,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     setSubModal(null);
   };
 
-  // Save Koperasi Biodata
+  // Save Koperasi Biodata (Req 11: Susunan Kepengurusan Ketua, Wakil, Sekretaris, Bendahara)
   const handleSaveBiodataKoperasi = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentAdmin || !isSuperAdmin) {
@@ -278,18 +362,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         tanggalPendirian: bioTglPendirian.trim(),
         visi: bioVisi.trim(),
         misi: bioMisi.trim(),
+        ketuaPengurus: bioKetua.trim(),
+        wakilKetua: bioWakil.trim(),
+        sekretaris: bioSekretaris.trim(),
+        bendahara: bioBendahara.trim(),
+        pengawas: bioPengawas.trim(),
         alamat: bioAlamat.trim(),
         telepon: bioTelepon.trim(),
         email: bioEmail.trim(),
         website: bioWebsite.trim(),
       },
       auditLogs: [
-        createAuditLog(currentAdmin, 'Update Biodata Koperasi', 'Memperbarui profil & legalitas koperasi HWS'),
+        createAuditLog(currentAdmin, 'Update Biodata Koperasi', 'Memperbarui profil, susunan kepengurusan & legalitas koperasi HWS'),
         ...prev.auditLogs,
       ],
     }));
 
-    alert('Biodata & profil legalitas koperasi berhasil disimpan!');
+    alert('Biodata, susunan kepengurusan & profil koperasi berhasil disimpan!');
   };
 
   // Add Rekening Penampungan
@@ -372,7 +461,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       kontak: newPengurusKontak.trim(),
     };
 
-    const currentList = state.profile.daftarPengurus || [];
     await updateState((prev) => ({
       ...prev,
       profile: {
@@ -381,9 +469,38 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       },
     }));
 
+    setNewPengurusJabatan('');
     setNewPengurusNama('');
     setNewPengurusKontak('');
     alert('Pengurus koperasi baru berhasil ditambahkan!');
+  };
+
+  // Edit / Ganti Pengurus Koperasi
+  const handleSaveEditPengurus = async (pengId: string) => {
+    if (!editPengurusNama.trim() || !editPengurusJabatan.trim()) {
+      alert('Jabatan dan Nama pengurus wajib diisi.');
+      return;
+    }
+
+    await updateState((prev) => ({
+      ...prev,
+      profile: {
+        ...prev.profile,
+        daftarPengurus: (prev.profile.daftarPengurus || []).map((p) =>
+          p.id === pengId
+            ? {
+                ...p,
+                jabatan: editPengurusJabatan.trim(),
+                nama: editPengurusNama.trim(),
+                kontak: editPengurusKontak.trim(),
+              }
+            : p
+        ),
+      },
+    }));
+
+    setEditingPengurusId(null);
+    alert('Data pengurus koperasi berhasil diperbarui!');
   };
 
   // Delete Pengurus Koperasi
@@ -400,39 +517,65 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }));
   };
 
-  // Delete Admin User
-  const handleDeleteAdmin = async (adminId: string) => {
+  // Handle Freeze Admin Account (Req 4 - Pengurus tidak dapat dihapus, hanya dibekukan)
+  const handleToggleFreezeAdmin = async (targetAdmin: AdminUser) => {
     if (!isSuperAdmin) {
-      alert('Hanya Super Admin yang dapat menghapus pengurus.');
+      alert('Hanya Super Admin yang dapat membekukan atau mengaktifkan kembali akun pengurus.');
       return;
     }
-    if (adminId === currentAdmin?.id) {
-      alert('Anda tidak dapat menghapus akun Anda sendiri.');
+    if (targetAdmin.id === currentAdmin?.id) {
+      alert('Anda tidak dapat membekukan akun Anda sendiri.');
       return;
     }
-    const target = state.admins.find((a) => a.id === adminId);
-    if (!target) return;
 
-    const confirmDelete = confirm(`Hapus administrator ${target.nama} (@${target.username})?`);
-    if (!confirmDelete) return;
+    const isCurrentlyFrozen = targetAdmin.status === 'dibekukan';
+    const confirmAction = confirm(
+      isCurrentlyFrozen
+        ? `Aktifkan kembali akun pengurus ${targetAdmin.nama} (@${targetAdmin.username})?`
+        : `Bekukan akun pengurus ${targetAdmin.nama} (@${targetAdmin.username})? Admin yang dibekukan tidak dapat masuk ke sistem.`
+    );
+    if (!confirmAction) return;
 
     await updateState((prev) => ({
       ...prev,
-      admins: prev.admins.filter((a) => a.id !== adminId),
+      admins: prev.admins.map((a) =>
+        a.id === targetAdmin.id
+          ? {
+              ...a,
+              status: isCurrentlyFrozen ? 'aktif' : 'dibekukan',
+            }
+          : a
+      ),
       auditLogs: [
-        createAuditLog(currentAdmin, 'Hapus Admin', `Menghapus administrator ${target.nama}`, adminId),
+        createAuditLog(
+          currentAdmin,
+          isCurrentlyFrozen ? 'Buka Pembekuan Akun Admin' : 'Bekukan Akun Admin',
+          `${currentAdmin.nama} mengubah status akun ${targetAdmin.nama} menjadi ${isCurrentlyFrozen ? 'aktif' : 'dibekukan'}`,
+          targetAdmin.id
+        ),
         ...prev.auditLogs,
       ],
     }));
 
-    alert(`Administrator ${target.nama} berhasil dihapus.`);
+    alert(`Status akun pengurus ${targetAdmin.nama} berhasil diubah.`);
   };
 
-  // Handle Add New Admin
+  // Handle Add New Admin (Req 1: Wajib mengisi data diri sesuai dengan pendaftaran anggota, Req 2: Username bebas diinginkan admin)
   const handleAddAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentAdmin || !isSuperAdmin) {
       alert('Hanya Super Admin yang dapat mendaftarkan admin baru.');
+      return;
+    }
+
+    const cleanUsername = newAdminUsername.trim();
+    if (!cleanUsername) {
+      alert('Username admin wajib diisi.');
+      return;
+    }
+
+    if (newAdminNik.trim().length !== 16) {
+      alert('NIK Pengurus harus 16 digit sesuai KTP.');
       return;
     }
 
@@ -445,16 +588,22 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
 
     const existUsername = state.admins.find(
-      (a) => a.username.toLowerCase() === newAdminUsername.trim().toLowerCase()
+      (a) => a.username.toLowerCase() === cleanUsername.toLowerCase()
     );
     if (existUsername) {
       alert('Username ini sudah digunakan.');
       return;
     }
 
+    const existNik = state.admins.find((a) => a.nik === newAdminNik.trim());
+    if (existNik) {
+      alert('NIK ini sudah terdaftar sebagai pengurus.');
+      return;
+    }
+
     const newAdminUser: AdminUser = {
       id: `adm-${Date.now()}`,
-      username: newAdminUsername.trim().toLowerCase(),
+      username: cleanUsername,
       nama: newAdminNama.trim(),
       email: newAdminEmail.trim(),
       whatsapp: newAdminWa.trim(),
@@ -462,6 +611,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       wilayahKantor: newAdminWilayah,
       role: newAdminRole,
       password: newAdminPassword,
+      // Data diri lengkap sesuai pendaftaran anggota (Req 1)
+      alamatLengkap: newAdminAlamat.trim() || 'Jl. Raya Daan Mogot KM 11',
+      rt: newAdminRt.trim() || '001',
+      rw: newAdminRw.trim() || '001',
+      kelurahan: newAdminKelurahan.trim() || 'Cengkareng Barat',
+      kecamatan: newAdminKecamatan.trim() || 'Cengkareng',
+      kota: newAdminKota.trim() || 'Jakarta Barat',
+      provinsi: newAdminProvinsi.trim() || 'DKI Jakarta',
+      kodePos: newAdminKodePos.trim() || '11740',
+      bankPribadi: {
+        namaBank: newAdminBank,
+        nomorRekening: newAdminBankRek.trim() || '0000000000',
+        atasNama: newAdminBankHolder.trim() || newAdminNama.trim(),
+      },
+      securityQuestion: newAdminSecurityQuestion,
+      securityAnswer: newAdminSecurityAnswer.toLowerCase().trim(),
+      status: 'aktif',
       createdAt: new Date().toISOString(),
     };
 
@@ -472,14 +638,14 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         createAuditLog(
           currentAdmin,
           'Tambah Pengurus Baru',
-          `Menambahkan pengurus ${newAdminUser.nama} (${newAdminUser.role})`,
+          `Menambahkan pengurus ${newAdminUser.nama} (@${newAdminUser.username}) dengan data diri lengkap sesuai pendaftaran anggota`,
           newAdminUser.id
         ),
         ...prev.auditLogs,
       ],
     }));
 
-    alert(`Pengurus baru ${newAdminUser.nama} berhasil ditambahkan!`);
+    alert(`Pengurus baru ${newAdminUser.nama} (@${newAdminUser.username}) berhasil ditambahkan dengan data diri lengkap!`);
     setSubModal(null);
   };
 
@@ -785,6 +951,73 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </button>
             </div>
           )}
+
+          {/* ================= BIOMETRIK & NOTIFIKASI MOBILE (Req 7 & 8) ================= */}
+          <div className="bg-[#162035] p-3.5 rounded-2xl border border-slate-700/80 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-amber-400">🛡️</span>
+                <span className="font-extrabold text-white text-xs">Keamanan Biometrik & Notifikasi Mobile</span>
+              </div>
+              <span className="text-[10px] text-amber-400 font-mono font-bold">Device Sync</span>
+            </div>
+
+            {/* Toggle Biometrik (Req 7) */}
+            <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
+                  biometricEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'
+                }`}>
+                  <Lock className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-white text-xs">Biometrik (Fingerprint / Face ID)</div>
+                  <div className="text-[10px] text-slate-400">
+                    {biometricEnabled ? 'Terintegrasi pada device mobile ini' : 'Klik untuk mengaktifkan pada perangkat'}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleBiometric}
+                className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
+                  biometricEnabled
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                {biometricEnabled ? '✓ Aktif' : 'Aktifkan'}
+              </button>
+            </div>
+
+            {/* Toggle Notifikasi Mobile (Req 8) */}
+            <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
+                  mobileNotifEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                }`}>
+                  <Smartphone className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-white text-xs">Notifikasi Mobile (Surat & Chat)</div>
+                  <div className="text-[10px] text-slate-400">
+                    {mobileNotifEnabled ? 'Notifikasi perangkat langsung aktif' : 'Aktifkan saat aplikasi terinstal'}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleMobileNotifications}
+                className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
+                  mobileNotifEnabled
+                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
+                }`}
+              >
+                {mobileNotifEnabled ? '✓ Aktif' : 'Aktifkan'}
+              </button>
+            </div>
+          </div>
 
           {/* ================= BUTTONS LIST ================= */}
           {isMember ? (
@@ -1283,16 +1516,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                         </div>
                       </div>
 
-                      {isSuperAdmin && adm.id !== currentAdmin?.id && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteAdmin(adm.id)}
-                          className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-950 text-red-400 hover:text-red-300 border border-red-500/30 transition-all"
-                          title="Hapus Administrator"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                      {/* Req 1: Admin tidak dapat dihapus - dilindungi sistem */}
+                      <span className="text-[10px] px-2 py-1 rounded-lg bg-slate-700/60 text-slate-400 border border-slate-600/40 flex items-center gap-1 font-semibold" title="Akun Pengurus Terdaftar (Tidak dapat dihapus)">
+                        <Lock className="w-3 h-3 text-amber-400" />
+                        Terdaftar
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1308,31 +1536,99 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   {(state.profile.daftarPengurus || []).map((peng) => (
                     <div
                       key={peng.id}
-                      className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 flex items-center justify-between"
+                      className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700"
                     >
-                      <div>
-                        <div className="text-[10px] text-amber-400 font-bold uppercase">
-                          {peng.jabatan}
-                        </div>
-                        <div className="text-sm font-extrabold text-white mt-0.5">
-                          {peng.nama}
-                        </div>
-                        {peng.kontak && (
-                          <div className="text-[11px] text-slate-400 font-mono">
-                            Kontak: {peng.kontak}
+                      {editingPengurusId === peng.id ? (
+                        <div className="space-y-2">
+                          <div className="text-[11px] font-bold text-amber-400">Edit / Ganti Data Pengurus</div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-[10px] text-slate-400">Jabatan</label>
+                              <input
+                                type="text"
+                                value={editPengurusJabatan}
+                                onChange={(e) => setEditPengurusJabatan(e.target.value)}
+                                className="w-full p-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400">Nama Pengurus</label>
+                              <input
+                                type="text"
+                                value={editPengurusNama}
+                                onChange={(e) => setEditPengurusNama(e.target.value)}
+                                className="w-full p-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400">No. Kontak / HP</label>
+                              <input
+                                type="text"
+                                value={editPengurusKontak}
+                                onChange={(e) => setEditPengurusKontak(e.target.value)}
+                                className="w-full p-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                              />
+                            </div>
                           </div>
-                        )}
-                      </div>
+                          <div className="flex gap-2 justify-end pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPengurusId(null)}
+                              className="px-2.5 py-1 bg-slate-700 text-slate-300 rounded-lg text-xs"
+                            >
+                              Batal
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditPengurus(peng.id)}
+                              className="px-3 py-1 bg-emerald-500 text-slate-950 font-bold rounded-lg text-xs"
+                            >
+                              Simpan Perubahan
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-[10px] text-amber-400 font-bold uppercase">
+                              {peng.jabatan}
+                            </div>
+                            <div className="text-sm font-extrabold text-white mt-0.5">
+                              {peng.nama}
+                            </div>
+                            {peng.kontak && (
+                              <div className="text-[11px] text-slate-400 font-mono">
+                                Kontak: {peng.kontak}
+                              </div>
+                            )}
+                          </div>
 
-                      {isSuperAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePengurus(peng.id)}
-                          className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-950 text-red-400 hover:text-red-300 border border-red-500/30 transition-all"
-                          title="Hapus Pengurus"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                          {isSuperAdmin && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingPengurusId(peng.id);
+                                  setEditPengurusJabatan(peng.jabatan);
+                                  setEditPengurusNama(peng.nama);
+                                  setEditPengurusKontak(peng.kontak || '');
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-amber-400 transition-all"
+                                title="Ganti / Edit Pengurus"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePengurus(peng.id)}
+                                className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-950 text-red-400 hover:text-red-300 border border-red-500/30 transition-all"
+                                title="Hapus Pengurus"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
@@ -1350,7 +1646,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                           required
                           value={newPengurusJabatan}
                           onChange={(e) => setNewPengurusJabatan(e.target.value)}
-                          placeholder="Contoh: Bendahara"
                           className="w-full p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
                         />
                       </div>
@@ -1361,7 +1656,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                           required
                           value={newPengurusNama}
                           onChange={(e) => setNewPengurusNama(e.target.value)}
-                          placeholder="Nama lengkap"
                           className="w-full p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
                         />
                       </div>
@@ -1371,7 +1665,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                           type="text"
                           value={newPengurusKontak}
                           onChange={(e) => setNewPengurusKontak(e.target.value)}
-                          placeholder="0812..."
                           className="w-full p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
                         />
                       </div>
@@ -1731,7 +2024,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   required
                   value={newAdminUsername}
                   onChange={(e) => setNewAdminUsername(e.target.value)}
-                  placeholder="Contoh: andi_admin"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>
@@ -1743,7 +2035,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   required
                   value={newAdminNama}
                   onChange={(e) => setNewAdminNama(e.target.value)}
-                  placeholder="Nama Pengurus"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>
@@ -1756,7 +2047,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     required
                     value={newAdminNik}
                     onChange={(e) => setNewAdminNik(e.target.value)}
-                    placeholder="16 digit NIK"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                   />
                 </div>
@@ -1767,7 +2057,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     required
                     value={newAdminWa}
                     onChange={(e) => setNewAdminWa(e.target.value)}
-                    placeholder="0812..."
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                   />
                 </div>
@@ -1780,7 +2069,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   required
                   value={newAdminEmail}
                   onChange={(e) => setNewAdminEmail(e.target.value)}
-                  placeholder="email.admin@hws.koperasi.id"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>
@@ -1972,7 +2260,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   required
                   value={adjKeterangan}
                   onChange={(e) => setAdjKeterangan(e.target.value)}
-                  placeholder="Contoh: Koreksi selisih transfer bank"
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>

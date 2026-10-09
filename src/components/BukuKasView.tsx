@@ -966,7 +966,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                     required
                     value={newCatName}
                     onChange={(e) => setNewCatName(e.target.value)}
-                    placeholder="Contoh: Operasional IT"
                     className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                   />
                 </div>

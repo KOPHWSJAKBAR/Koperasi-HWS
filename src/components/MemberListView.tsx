@@ -6,7 +6,7 @@ import {
   WilayahKoperasi,
 } from '../types';
 import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
-import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
+import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import {
   Users,
@@ -25,6 +25,8 @@ import {
   X,
   CreditCard,
   AlertTriangle,
+  Snowflake,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface MemberListViewProps {
@@ -42,6 +44,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [selectedWilayah, setSelectedWilayah] = useState<string>('semua');
   const [selectedMemberForKta, setSelectedMemberForKta] = useState<MemberUser | null>(null);
   const [editingMember, setEditingMember] = useState<MemberUser | null>(null);
+  const [viewingMemberProfile, setViewingMemberProfile] = useState<MemberUser | null>(null);
+  const [memberToFreeze, setMemberToFreeze] = useState<MemberUser | null>(null);
+  const [freezeReasonInput, setFreezeReasonInput] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Period filter states for reports
@@ -78,6 +83,172 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const pendingDeleteMembers = state.members.filter(
     (m) => m.status === 'pending_deletion' || m.status === 'pending'
   );
+
+  // Members pending freeze approval (Req 4)
+  const pendingFreezeMembers = state.members.filter(
+    (m) => m.status === 'pending_freeze'
+  );
+
+  // Propose account freeze (Req 4: diajukan oleh admin write)
+  const handleProposeFreeze = async (member: MemberUser, reason: string) => {
+    if (!reason.trim()) {
+      alert('Harap masukkan alasan pembekuan akun.');
+      return;
+    }
+
+    const freezeReq = {
+      requestedByRole: currentAdmin.role,
+      requestedByName: currentAdmin.nama,
+      reason: reason.trim(),
+      requestedAt: new Date().toISOString(),
+      approvedByKelola: isKelola,
+      approvedByKelolaName: isKelola ? currentAdmin.nama : undefined,
+      approvedBySuperAdmin: isSuperAdmin,
+      approvedBySuperAdminName: isSuperAdmin ? currentAdmin.nama : undefined,
+    };
+
+    const isDirectlyFrozen = isSuperAdmin;
+
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              status: isDirectlyFrozen ? 'dibekukan' : 'pending_freeze',
+              freezeRequest: freezeReq,
+            }
+          : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          isDirectlyFrozen ? 'Bekukan Akun Anggota' : 'Pengajuan Pembekuan Akun',
+          `${currentAdmin.nama} (${currentAdmin.role}) mengajukan pembekuan akun ${member.nama} (${member.nomorAnggota}). Alasan: ${reason}`,
+          member.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    setMemberToFreeze(null);
+    setFreezeReasonInput('');
+    alert(
+      isDirectlyFrozen
+        ? `Akun ${member.nama} berhasil DIBEKUKAN.`
+        : `Pengajuan pembekuan akun ${member.nama} berhasil dikirim! Menunggu persetujuan Admin Kelola dan Super Admin.`
+    );
+  };
+
+  // Approve account freeze by Kelola or Super Admin
+  const handleApproveFreeze = async (member: MemberUser) => {
+    const existingReq = member.freezeRequest || {
+      requestedByRole: 'admin_write',
+      requestedByName: 'Admin',
+      reason: 'Pelanggaran ketentuan koperasi',
+      requestedAt: new Date().toISOString(),
+    };
+
+    const updatedKelola = isKelola ? true : !!existingReq.approvedByKelola;
+    const updatedSuperAdmin = isSuperAdmin ? true : !!existingReq.approvedBySuperAdmin;
+
+    // Fully frozen if Super Admin approves or both approve
+    const isFinalized = isSuperAdmin || (updatedKelola && updatedSuperAdmin);
+
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              status: isFinalized ? 'dibekukan' : 'pending_freeze',
+              freezeRequest: {
+                ...existingReq,
+                approvedByKelola: updatedKelola,
+                approvedByKelolaName: isKelola ? currentAdmin.nama : existingReq.approvedByKelolaName,
+                approvedBySuperAdmin: updatedSuperAdmin,
+                approvedBySuperAdminName: isSuperAdmin ? currentAdmin.nama : existingReq.approvedBySuperAdminName,
+              },
+            }
+          : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          isFinalized ? 'Persetujuan Pembekuan Akun (Final)' : 'Persetujuan Pembekuan Akun (Bertahap)',
+          `${currentAdmin.nama} (${currentAdmin.role}) menyetujui pembekuan akun ${member.nama}`,
+          member.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    alert(
+      isFinalized
+        ? `Akun anggota ${member.nama} telah resmi DIBEKUKAN.`
+        : `Persetujuan Admin Kelola berhasil dicatat. Menunggu persetujuan Super Admin untuk memfinalisasi pembekuan.`
+    );
+  };
+
+  // Reject account freeze
+  const handleRejectFreeze = async (member: MemberUser) => {
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              status: 'aktif',
+              freezeRequest: undefined,
+            }
+          : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          'Tolak Pembekuan Akun',
+          `Menolak permohonan pembekuan akun ${member.nama}`,
+          member.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+    alert(`Pengajuan pembekuan akun ${member.nama} telah dibatalkan.`);
+  };
+
+  // Unfreeze account
+  const handleUnfreeze = async (member: MemberUser) => {
+    if (!isSuperAdmin && !isKelola) {
+      alert('Hanya Super Admin atau Admin Kelola yang dapat membuka status pembekuan akun.');
+      return;
+    }
+
+    const confirmUnfreeze = confirm(`Buka pembekuan akun anggota ${member.nama} (${member.nomorAnggota})?`);
+    if (!confirmUnfreeze) return;
+
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              status: 'aktif',
+              freezeRequest: undefined,
+            }
+          : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          'Buka Pembekuan Akun (Unfreeze)',
+          `Membuka status pembekuan akun ${member.nama} (${member.nomorAnggota}) kembali aktif`,
+          member.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+    alert(`Status akun ${member.nama} telah aktif kembali.`);
+  };
 
   // Filter members
   const filteredMembers = state.members.filter((m) => {
@@ -348,71 +519,94 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     alert('Data anggota berhasil diperbarui!');
   };
 
-  // Export Rekap Anggota
+  // Export Rekap Anggota (User Req 12 & 13)
   const handleExportMembers = (format: 'pdf' | 'excel') => {
-    if (format === 'excel') {
-      // Sesuai permintaan 3: kolom pada excel hanya menampilkan nomor anggota, nama lengkap, nomor rekening, wilayah, tabungan pokok, tabungan umum, tabungan simpanan, dan total keseluruhan.
-      const rows = filteredMembers.map((m) => ({
-        'Nomor Anggota': m.nomorAnggota,
-        'Nama Lengkap': m.nama,
-        'Nomor Rekening': m.nomorRekening,
-        'Wilayah': m.wilayah,
-        'Tabungan Pokok': m.saldoPokok,
-        'Tabungan Umum': m.saldoUmum,
-        'Tabungan Simpanan': m.saldoZakatFitrah + m.saldoQurban,
-        'Total Keseluruhan': m.saldoPokok + m.saldoUmum + m.saldoZakatFitrah + m.saldoQurban,
-      }));
-      downloadExcelCsv(rows, `Rekap_Anggota_HWS_${selectedWilayah}_${Date.now()}`);
-    } else {
-      const tableRows = filteredMembers
-        .map(
-          (m) => `
-        <tr style="border-bottom: 1px solid #ddd; font-size: 11px;">
-          <td style="padding: 6px; font-family: monospace;">${m.nomorAnggota}</td>
-          <td style="padding: 6px; font-weight: 700;">${m.nama}</td>
-          <td style="padding: 6px; font-family: monospace;">${m.nomorRekening}</td>
-          <td style="padding: 6px;">${m.wilayah}</td>
-          <td style="padding: 6px; text-align: right;">${formatRupiah(m.saldoPokok)}</td>
-          <td style="padding: 6px; text-align: right;">${formatRupiah(m.saldoUmum)}</td>
-          <td style="padding: 6px; text-align: right;">${formatRupiah(m.saldoZakatFitrah + m.saldoQurban)}</td>
-          <td style="padding: 6px; text-align: right; font-weight: 700;">
-            ${formatRupiah(m.saldoPokok + m.saldoUmum + m.saldoZakatFitrah + m.saldoQurban)}
-          </td>
-        </tr>
-      `
-        )
-        .join('');
+    const periodeStr =
+      periodeTipe === 'semua'
+        ? 'Semua Periode'
+        : periodeTipe === 'harian'
+        ? `${filterStartDate || 'Awal'} s/d ${filterEndDate || 'Akhir'}`
+        : periodeTipe === 'bulanan'
+        ? `Bulan ${filterMonth}`
+        : `Tahun ${filterYear}`;
 
-      const html = `
-        <div style="padding: 10px;">
-          <div style="border-bottom: 2px solid #000; padding-bottom: 8px;">
-            <h2 style="font-size: 16px; font-weight: 900;">KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA</h2>
-            <div style="font-size: 12px; font-weight: 700;">Laporan Rekapitulasi Data Anggota (${selectedWilayah.toUpperCase()})</div>
-            <div style="font-size: 10px; color: #555;">Periode: ${periodeTipe.toUpperCase()} • Total: ${filteredMembers.length} Anggota</div>
-          </div>
-          <table style="width: 100%; border-collapse: collapse; margin-top: 14px;">
-            <thead>
-              <tr style="background: #f3f4f6; font-size: 11px; text-align: left;">
-                <th style="padding: 6px;">No. Anggota</th>
-                <th style="padding: 6px;">Nama Lengkap</th>
-                <th style="padding: 6px;">No. Rekening</th>
-                <th style="padding: 6px;">Wilayah</th>
-                <th style="padding: 6px; text-align: right;">Tab. Pokok</th>
-                <th style="padding: 6px; text-align: right;">Tab. Umum</th>
-                <th style="padding: 6px; text-align: right;">Tab. Simpanan</th>
-                <th style="padding: 6px; text-align: right;">Total Keseluruhan</th>
-              </tr>
-            </thead>
-            <tbody>${tableRows}</tbody>
-          </table>
-        </div>
-      `;
-      printDocumentHtml(html, `Rekap_Anggota_${selectedWilayah}`);
+    if (format === 'excel') {
+      // User Req 13: Kolom Nama, Wilayah, Tabungan Pokok, Tabungan Qurban, Tabungan Zakat, dan Jumlah, Judul & Periode di atas, Total keseluruhan kebawah (Req 12)
+      exportAnggotaExcel(
+        filteredMembers,
+        periodeStr,
+        `LAPORAN DATA & TABUNGAN ANGGOTA (${selectedWilayah.toUpperCase()})`
+      );
+    } else {
+      // User Req 12: PDF dengan total keseluruhan anggota kebawah & watermark anti-pemalsuan (Req 10)
+      exportAnggotaPdf(filteredMembers, periodeStr, selectedWilayah);
     }
   };
 
   return (
     <div className="space-y-6">
+      {/* PENDING FREEZE APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN KELOLA (Req 4) */}
+      {(isSuperAdmin || isKelola) && pendingFreezeMembers.length > 0 && (
+        <div className="bg-amber-950/40 border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
+          <div className="flex items-center gap-2.5">
+            <Snowflake className="w-5 h-5 text-amber-400" />
+            <h4 className="font-black text-sm text-amber-200">
+              Permintaan Pembekuan Akun Anggota Menunggu Persetujuan ({pendingFreezeMembers.length} Akun)
+            </h4>
+          </div>
+          <p className="text-xs text-amber-300/80">
+            Diajukan oleh Admin Write. Memerlukan persetujuan dari Admin Kelola dan Super Admin sebelum akun anggota resmi dibekukan.
+          </p>
+          <div className="space-y-2 pt-1">
+            {pendingFreezeMembers.map((m) => {
+              const req = m.freezeRequest;
+              return (
+                <div
+                  key={m.id}
+                  className="p-3 bg-slate-900/90 rounded-2xl border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                >
+                  <div>
+                    <div className="font-extrabold text-white">
+                      {m.nama} ({m.nomorAnggota})
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Rekening: <span className="font-mono text-amber-400">{m.nomorRekening}</span> • Wilayah: {m.wilayah}
+                    </div>
+                    <div className="text-[11px] text-amber-300 mt-1">
+                      Alasan: <span className="italic font-medium">"{req?.reason || 'Pelanggaran ketentuan'}"</span> • Diajukan oleh: <b>{req?.requestedByName || 'Admin Write'}</b>
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] mt-1 font-bold">
+                      <span className={req?.approvedByKelola ? 'text-emerald-400' : 'text-slate-400'}>
+                        {req?.approvedByKelola ? '✓ Disetujui Admin Kelola' : '⏳ Menunggu Admin Kelola'}
+                      </span>
+                      <span>•</span>
+                      <span className={req?.approvedBySuperAdmin ? 'text-emerald-400' : 'text-slate-400'}>
+                        {req?.approvedBySuperAdmin ? '✓ Disetujui Super Admin' : '⏳ Menunggu Super Admin'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleRejectFreeze(m)}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl"
+                    >
+                      Tolak
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApproveFreeze(m)}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow"
+                    >
+                      Setujui Pembekuan
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {/* PENDING DELETION APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN KELOLA */}
       {(isSuperAdmin || isKelola) && pendingDeleteMembers.length > 0 && (
         <div className="bg-red-950/40 border border-red-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
@@ -630,7 +824,24 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     </div>
                   </td>
                   <td className="py-3 px-3">
-                    <div className="font-bold text-white uppercase">{member.nama}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-white uppercase">{member.nama}</span>
+                      {member.status === 'dibekukan' && (
+                        <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.2 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-black uppercase">
+                          <Snowflake className="w-2.5 h-2.5" /> DIBEKUKAN
+                        </span>
+                      )}
+                      {member.status === 'pending_freeze' && (
+                        <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-black uppercase">
+                          ⏳ PENDING BEKU
+                        </span>
+                      )}
+                      {member.status === 'pending_deletion' && (
+                        <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.2 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-black uppercase">
+                          ⚠️ PENDING HAPUS
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-slate-400">
                       WA: {member.whatsapp} • NIK: {member.nik}
                     </div>
@@ -665,20 +876,56 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   </td>
                   <td className="py-3 px-3 text-right">
                     <div className="flex justify-end gap-1.5">
+                      {/* Req 14: Admin Super, Admin Write, dan Admin Approval dapat melihat profile anggota */}
+                      <button
+                        onClick={() => setViewingMemberProfile(member)}
+                        className="p-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg"
+                        title="Lihat Profil Lengkap Anggota"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+
                       <button
                         onClick={() => setSelectedMemberForKta(member)}
-                        className="p-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg"
+                        className="p-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-lg"
                         title="Lihat KTA Digital"
                       >
                         <CreditCard className="w-3.5 h-3.5" />
                       </button>
+
+                      {/* Req 14: Admin Super, Admin Write, dan Admin Approval dapat mengganti profile anggota */}
                       <button
                         onClick={() => setEditingMember({ ...member })}
                         className="p-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg"
-                        title="Edit Profil & Password"
+                        title="Edit Profil & Data Anggota"
                       >
                         <Edit className="w-3.5 h-3.5" />
                       </button>
+
+                      {/* Req 4: Akun anggota dapat dibekukan dengan pengajuan admin write dan disetujui admin kelola & super admin */}
+                      {member.status === 'dibekukan' ? (
+                        (isSuperAdmin || isKelola) && (
+                          <button
+                            onClick={() => handleUnfreeze(member)}
+                            className="p-1.5 bg-emerald-950/60 hover:bg-emerald-900 text-emerald-400 rounded-lg"
+                            title="Buka Pembekuan Akun (Aktifkan)"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" />
+                          </button>
+                        )
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setMemberToFreeze(member);
+                            setFreezeReasonInput('');
+                          }}
+                          className="p-1.5 bg-amber-950/60 hover:bg-amber-900 text-amber-400 rounded-lg"
+                          title="Ajukan Pembekuan Akun (Freeze)"
+                        >
+                          <Snowflake className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
                       {(isSuperAdmin || isWriter) && (
                         <button
                           onClick={() => handleDeleteMember(member)}
@@ -890,6 +1137,214 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL LIHAT DETAIL PROFIL ANGGOTA (Req 14) ================= */}
+      {viewingMemberProfile && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-6 shadow-2xl max-h-[88vh] overflow-y-auto text-slate-100">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                  <Eye className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">
+                    Detail Profil Anggota: {viewingMemberProfile.nama}
+                  </h3>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {viewingMemberProfile.nomorAnggota} • Rek: {viewingMemberProfile.nomorRekening}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingMemberProfile(null)}
+                className="w-7 h-7 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Status Badge */}
+              <div className="flex items-center justify-between p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
+                <span className="text-slate-400 font-bold">Status Akun:</span>
+                <span className={`px-2.5 py-1 rounded-full font-black uppercase text-[10px] ${
+                  viewingMemberProfile.status === 'dibekukan'
+                    ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                    : viewingMemberProfile.status === 'pending_freeze'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                }`}>
+                  {viewingMemberProfile.status}
+                </span>
+              </div>
+
+              {/* Data Pribadi */}
+              <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/80 space-y-2">
+                <div className="font-black text-amber-400 text-xs uppercase tracking-wide">
+                  Identitas & Kontak Anggota
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-slate-300">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">NIK KTP</span>
+                    <span className="font-mono font-bold text-white">{viewingMemberProfile.nik}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">WhatsApp / HP</span>
+                    <span className="font-mono font-bold text-white">{viewingMemberProfile.whatsapp}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Email</span>
+                    <span className="font-bold text-white truncate block">{viewingMemberProfile.email || '-'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Wilayah</span>
+                    <span className="font-bold text-amber-300">{viewingMemberProfile.wilayah}</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-700/60">
+                  <span className="text-[10px] text-slate-400 block">Alamat Lengkap</span>
+                  <div className="text-slate-200 mt-0.5">
+                    {viewingMemberProfile.alamatLengkap || '-'}, RT {viewingMemberProfile.rt || '001'} / RW {viewingMemberProfile.rw || '001'}, Kel. {viewingMemberProfile.kelurahan || '-'}, Kec. {viewingMemberProfile.kecamatan || '-'}, {viewingMemberProfile.kota || 'Jakarta Barat'} {viewingMemberProfile.kodePos || '11740'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Rekening Pribadi & Tabungan */}
+              <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/80 space-y-2">
+                <div className="font-black text-sky-400 text-xs uppercase tracking-wide">
+                  Rekening Bank & Saldo Tabungan
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-slate-300">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Bank Pencairan Pribadi</span>
+                    <span className="font-bold text-white">{viewingMemberProfile.bankPribadi?.namaBank}</span>
+                    <span className="font-mono text-[11px] text-slate-400 block">
+                      {viewingMemberProfile.bankPribadi?.nomorRekening} (a.n {viewingMemberProfile.bankPribadi?.atasNama})
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Total Semua Tabungan</span>
+                    <span className="font-mono font-black text-amber-400 text-sm block">
+                      {formatRupiah(
+                        viewingMemberProfile.saldoPokok +
+                        viewingMemberProfile.saldoUmum +
+                        viewingMemberProfile.saldoZakatFitrah +
+                        viewingMemberProfile.saldoQurban
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-700/60 text-[11px]">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Tabungan Pokok</span>
+                    <span className="font-mono font-bold text-amber-300">{formatRupiah(viewingMemberProfile.saldoPokok)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Tabungan Qurban</span>
+                    <span className="font-mono font-bold text-emerald-300">{formatRupiah(viewingMemberProfile.saldoQurban)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Zakat Fitrah</span>
+                    <span className="font-mono font-bold text-emerald-300">{formatRupiah(viewingMemberProfile.saldoZakatFitrah)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions from within View Profile Modal */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingMember({ ...viewingMemberProfile });
+                    setViewingMemberProfile(null);
+                  }}
+                  className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-xl flex items-center justify-center gap-2"
+                >
+                  <Edit className="w-4 h-4" />
+                  Edit Data Anggota Ini
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewingMemberProfile(null)}
+                  className="px-5 py-2.5 bg-slate-800 text-slate-300 font-bold rounded-xl"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL PENGAJUAN PEMBEKUAN AKUN (Req 4) ================= */}
+      {memberToFreeze && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-amber-500/50 w-full max-w-md rounded-3xl p-5 shadow-2xl text-slate-100">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
+              <div className="flex items-center gap-2">
+                <Snowflake className="w-5 h-5 text-amber-400" />
+                <h3 className="text-sm font-black text-white">
+                  Ajukan Pembekuan Akun
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMemberToFreeze(null)}
+                className="w-7 h-7 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-slate-800 rounded-2xl border border-slate-700">
+                <div className="font-bold text-white">{memberToFreeze.nama}</div>
+                <div className="text-[11px] text-slate-400 font-mono">
+                  {memberToFreeze.nomorAnggota} • Rek: {memberToFreeze.nomorRekening}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Alasan Pembekuan Akun *
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={freezeReasonInput}
+                  onChange={(e) => setFreezeReasonInput(e.target.value)}
+                  className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[10px] text-amber-300">
+                ℹ️ Alur Pembekuan: Diajukan oleh Admin Write / Pengurus, lalu disetujui oleh Admin Kelola dan Super Admin sebelum akun dibekukan secara penuh.
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setMemberToFreeze(null)}
+                  className="flex-1 py-2.5 bg-slate-800 text-slate-300 font-bold rounded-xl"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleProposeFreeze(memberToFreeze, freezeReasonInput)}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow"
+                >
+                  Kirim Pengajuan
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
