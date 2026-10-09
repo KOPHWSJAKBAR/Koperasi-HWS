@@ -1,0 +1,6 @@
+{
+  "name": "Koperasi Himpunan Wirausaha Sejahtera",
+  "description": "Aplikasi Resmi Koperasi HWS - Tabungan Pokok, Tabungan Umum Bebas, Zakat & Qurban, Buku Kas, Verifikasi Setoran, dan Mutasi Rekening Digital",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
