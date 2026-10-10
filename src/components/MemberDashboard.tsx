@@ -59,8 +59,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [showKtaModal, setShowKtaModal] = useState(false);
   const [copiedRekening, setCopiedRekening] = useState(false);
 
-  // Transfer Sesama Anggota State
+  // Transfer Sesama Anggota State (Req 3: Konfirmasi sebelum memasukkan PIN)
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [tfStep, setTfStep] = useState<'input' | 'confirm' | 'pin'>('input');
   const [tfTargetRek, setTfTargetRek] = useState('');
   const [tfNominal, setTfNominal] = useState('');
   const [tfCatatan, setTfCatatan] = useState('');
@@ -104,7 +105,30 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     setTimeout(() => setCopiedRekening(false), 2000);
   };
 
-  // Handle Transfer Sesama Anggota
+  // Step 1 -> Step 2: Konfirmasi Rincian Sebelum Masukkan PIN (Req 3)
+  const handleProceedToConfirm = (e: React.FormEvent) => {
+    e.preventDefault();
+    setTfError('');
+    if (!targetMemberRecipient) {
+      setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
+      return;
+    }
+
+    const amount = Number(tfNominal);
+    if (!amount || amount <= 0) {
+      setTfError('Nominal transfer harus lebih dari Rp 0.');
+      return;
+    }
+
+    if (amount > currentMember.saldoUmum) {
+      setTfError(`Saldo Tabungan Umum tidak mencukupi (Tersedia: ${formatRupiah(currentMember.saldoUmum)}).`);
+      return;
+    }
+
+    setTfStep('confirm');
+  };
+
+  // Handle Transfer Sesama Anggota (Step 3: Kirim setelah PIN diverifikasi)
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTfError('');
@@ -189,6 +213,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     setTfSuccess(`Transfer ${formatRupiah(amount)} ke ${targetMemberRecipient.nama} berhasil! Ref: ${refId}`);
     setTimeout(() => {
       setShowTransferModal(false);
+      setTfStep('input');
       setTfTargetRek('');
       setTfNominal('');
       setTfCatatan('');
@@ -682,7 +707,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleTransferSubmit} className="p-4 space-y-3.5 text-xs">
+            <div className="p-4 space-y-3.5 text-xs">
               {/* Sender Saldo Info */}
               <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 flex justify-between items-center">
                 <span className="text-slate-400">Saldo Tabungan Umum Anda:</span>
@@ -705,100 +730,224 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 </div>
               )}
 
-              {/* Target Member Input */}
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">
-                  Nomor Rekening / No. Anggota / HP Penerima *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={tfTargetRek}
-                  onChange={(e) => setTfTargetRek(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs focus:ring-2 focus:ring-amber-500"
-                />
+              {/* TAHAP 1: INPUT TUJUAN & NOMINAL */}
+              {tfStep === 'input' && (
+                <form onSubmit={handleProceedToConfirm} className="space-y-3.5">
+                  {/* Target Member Input */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">
+                      Nomor Rekening / No. Anggota / HP Penerima *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={tfTargetRek}
+                      onChange={(e) => setTfTargetRek(e.target.value)}
+                      placeholder="Masukkan No. Rekening / No. Anggota"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs focus:ring-2 focus:ring-amber-500"
+                    />
 
-                {/* Recipient Preview */}
-                {targetMemberRecipient ? (
-                  <div className="mt-2 p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl flex items-center gap-2.5">
-                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <div>
-                      <div className="font-extrabold text-white text-[11px]">
+                    {/* Recipient Preview */}
+                    {targetMemberRecipient ? (
+                      <div className="mt-2 p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl flex items-center gap-2.5">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div>
+                          <div className="font-extrabold text-white text-[11px]">
+                            {targetMemberRecipient.nama}
+                          </div>
+                          <div className="text-[10px] text-emerald-300 font-mono">
+                            {targetMemberRecipient.nomorRekening} • Wilayah {targetMemberRecipient.wilayah}
+                          </div>
+                        </div>
+                      </div>
+                    ) : cleanTargetQuery.length >= 4 ? (
+                      <div className="mt-1 text-[11px] text-amber-400">
+                        Mencari anggota penerima...
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Transfer Amount */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">
+                      Nominal Transfer (Rp) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      max={currentMember.saldoUmum}
+                      value={tfNominal}
+                      onChange={(e) => setTfNominal(e.target.value)}
+                      placeholder="Contoh: 50000"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  {/* Catatan / Berita */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">
+                      Catatan / Berita Transfer (Opsional)
+                    </label>
+                    <input
+                      type="text"
+                      value={tfCatatan}
+                      onChange={(e) => setTfCatatan(e.target.value)}
+                      placeholder="Keterangan pembayaran / kebutuhan"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowTransferModal(false)}
+                      className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!targetMemberRecipient || !tfNominal}
+                      className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5"
+                    >
+                      Lanjut ke Konfirmasi
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* TAHAP 2: KONFIRMASI RINCIAN TRANSFER SEBELUM PIN (REQ 3) */}
+              {tfStep === 'confirm' && targetMemberRecipient && (
+                <div className="space-y-3.5">
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-1 text-center">
+                    <div className="font-extrabold text-amber-300 text-xs flex items-center justify-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-amber-400" />
+                      Konfirmasi Transfer Dana
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      Periksa rincian transfer dengan teliti sebelum memasukkan PIN persetujuan.
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-3.5 space-y-2 text-xs">
+                    <div className="flex justify-between py-1 border-b border-slate-700/60">
+                      <span className="text-slate-400">Pengirim:</span>
+                      <span className="font-bold text-white text-right">
+                        {currentMember.nama} ({currentMember.nomorRekening})
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-700/60">
+                      <span className="text-slate-400">Penerima Tujuan:</span>
+                      <span className="font-extrabold text-amber-400 text-right">
                         {targetMemberRecipient.nama}
-                      </div>
-                      <div className="text-[10px] text-emerald-300 font-mono">
-                        {targetMemberRecipient.nomorRekening} • Wilayah {targetMemberRecipient.wilayah}
-                      </div>
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-700/60">
+                      <span className="text-slate-400">No. Rekening Tujuan:</span>
+                      <span className="font-mono font-bold text-sky-300">
+                        {targetMemberRecipient.nomorRekening} (KCP {targetMemberRecipient.wilayah})
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-700/60">
+                      <span className="text-slate-400">Nominal Transfer:</span>
+                      <span className="font-mono font-black text-white text-sm">
+                        {formatRupiah(Number(tfNominal))}
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-700/60">
+                      <span className="text-slate-400">Biaya Administrasi:</span>
+                      <span className="font-bold text-emerald-400">
+                        Rp 0 (Gratis Sesama Anggota)
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-700/60">
+                      <span className="text-slate-400">Catatan / Berita:</span>
+                      <span className="text-slate-200 text-right">
+                        {tfCatatan || '-'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between pt-1">
+                      <span className="font-bold text-slate-300">Total Pengurangan Saldo:</span>
+                      <span className="font-mono font-black text-amber-400 text-sm">
+                        {formatRupiah(Number(tfNominal))}
+                      </span>
                     </div>
                   </div>
-                ) : cleanTargetQuery.length >= 4 ? (
-                  <div className="mt-1 text-[11px] text-amber-400">
-                    Mencari anggota penerima...
+
+                  <div className="pt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTfStep('input')}
+                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-all"
+                    >
+                      Ubah Rincian
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTfStep('pin')}
+                      className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5"
+                    >
+                      Setuju & Masukkan PIN
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                ) : null}
-              </div>
+                </div>
+              )}
 
-              {/* Transfer Amount */}
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">
-                  Nominal Transfer (Rp) *
-                </label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={currentMember.saldoUmum}
-                  value={tfNominal}
-                  onChange={(e) => setTfNominal(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
+              {/* TAHAP 3: MASUKKAN PIN UNTUK PERSETUJUAN KIRIM (REQ 3) */}
+              {tfStep === 'pin' && targetMemberRecipient && (
+                <form onSubmit={handleTransferSubmit} className="space-y-3.5">
+                  <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 text-center space-y-1">
+                    <div className="text-[11px] text-slate-400">Mengirimkan sejumlah:</div>
+                    <div className="text-lg font-black font-mono text-amber-400">
+                      {formatRupiah(Number(tfNominal))}
+                    </div>
+                    <div className="text-[11px] text-slate-300">
+                      Kepada: <b className="text-white">{targetMemberRecipient.nama}</b> ({targetMemberRecipient.nomorRekening})
+                    </div>
+                  </div>
 
-              {/* Catatan / Berita */}
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">
-                  Catatan / Berita Transfer (Opsional)
-                </label>
-                <input
-                  type="text"
-                  value={tfCatatan}
-                  onChange={(e) => setTfCatatan(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs"
-                />
-              </div>
+                  {/* PIN Transaksi Input */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1 text-center">
+                      Masukkan PIN Transaksi Anda (6 Digit) *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      autoFocus
+                      maxLength={6}
+                      value={tfPin}
+                      onChange={(e) => setTfPin(e.target.value.replace(/\D/g, ''))}
+                      placeholder="••••••"
+                      className="w-full px-3 py-3 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-center tracking-[0.5em] text-lg focus:ring-2 focus:ring-amber-500"
+                    />
+                    <p className="text-[10px] text-slate-400 text-center mt-1">
+                      PIN default keamanan awal: 123456
+                    </p>
+                  </div>
 
-              {/* PIN Transaksi */}
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">
-                  PIN Transaksi (6 Digit) *
-                </label>
-                <input
-                  type="password"
-                  required
-                  maxLength={6}
-                  value={tfPin}
-                  onChange={(e) => setTfPin(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest text-sm focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowTransferModal(false)}
-                  className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  disabled={!targetMemberRecipient || !tfNominal || !tfPin}
-                  className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black rounded-xl shadow-lg transition-all"
-                >
-                  Kirim Transfer
-                </button>
-              </div>
-            </form>
+                  <div className="pt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTfStep('confirm')}
+                      className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold"
+                    >
+                      Kembali
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={tfPin.length !== 6}
+                      className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                    >
+                      Kirim Transfer Sekarang
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         </div>
       )}

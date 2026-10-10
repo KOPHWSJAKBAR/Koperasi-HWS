@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
 import { generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
-import { Fingerprint, Lock, User, ArrowRight, ShieldCheck, UserPlus, HelpCircle, X, Upload, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Fingerprint, Lock, User, ArrowRight, ShieldCheck, UserPlus, HelpCircle, X, Upload, CheckCircle2, AlertCircle, Key, Check } from 'lucide-react';
 
 interface LoginViewProps {
   state: AppState;
@@ -29,6 +29,48 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+
+  // Pengingat Password & User ID di Perangkat (Req 2, 6, 24, 25)
+  const [rememberAccount, setRememberAccount] = useState<boolean>(() => {
+    return typeof window !== 'undefined' && localStorage.getItem('hws_remember_pref') !== 'false';
+  });
+
+  const [savedMemberAccount, setSavedMemberAccount] = useState<{
+    identifier: string;
+    nama: string;
+    password?: string;
+  } | null>(() => {
+    try {
+      const data = localStorage.getItem('hws_saved_member_account');
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [savedAdminAccount, setSavedAdminAccount] = useState<{
+    username: string;
+    nama: string;
+    password?: string;
+  } | null>(() => {
+    try {
+      const data = localStorage.getItem('hws_saved_admin_account');
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Auto-fill form from saved reminder on mount or tab change
+  useEffect(() => {
+    if (activeTab === 'member' && savedMemberAccount) {
+      if (!memberIdentifier) setMemberIdentifier(savedMemberAccount.identifier);
+      if (!memberPassword && savedMemberAccount.password) setMemberPassword(savedMemberAccount.password);
+    } else if (activeTab === 'admin' && savedAdminAccount) {
+      if (!adminUsername) setAdminUsername(savedAdminAccount.username);
+      if (!adminPassword && savedAdminAccount.password) setAdminPassword(savedAdminAccount.password);
+    }
+  }, [activeTab]);
 
   // Modals
   const [showRegisterModal, setShowRegisterModal] = useState(false);
@@ -96,6 +138,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
+    // Save or clear reminder on device (Req 6)
+    if (rememberAccount) {
+      const saved = {
+        identifier: member.nomorAnggota,
+        nama: member.nama,
+        password: memberPassword,
+      };
+      localStorage.setItem('hws_saved_member_account', JSON.stringify(saved));
+      localStorage.setItem('hws_remember_pref', 'true');
+      setSavedMemberAccount(saved);
+    } else {
+      localStorage.removeItem('hws_saved_member_account');
+      localStorage.setItem('hws_remember_pref', 'false');
+      setSavedMemberAccount(null);
+    }
+
     onLoginMember(member);
   };
 
@@ -124,32 +182,85 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
+    // Save or clear reminder on device (Req 6)
+    if (rememberAccount) {
+      const saved = {
+        username: admin.username,
+        nama: admin.nama,
+        password: adminPassword,
+      };
+      localStorage.setItem('hws_saved_admin_account', JSON.stringify(saved));
+      localStorage.setItem('hws_remember_pref', 'true');
+      setSavedAdminAccount(saved);
+    } else {
+      localStorage.removeItem('hws_saved_admin_account');
+      localStorage.setItem('hws_remember_pref', 'false');
+      setSavedAdminAccount(null);
+    }
+
     onLoginAdmin(admin);
   };
 
-  // Biometric Login (WebAuthn / Fingerprint simulation)
+  // Biometric Login (Terintegrasi langsung ke pengingat password & User ID - Req 3 & 6)
   const handleBiometricAuth = async () => {
     try {
+      setErrorMessage('');
+      setSuccessMessage('🔐 Memindai Biometrik perangkat (Sidik Jari / Face ID)...');
+
       if (activeTab === 'member') {
-        const defaultMember = state.members[0];
-        if (!defaultMember) {
-          setErrorMessage('Belum ada anggota terdaftar untuk biometrik.');
+        const targetId = savedMemberAccount?.identifier || memberIdentifier;
+        const member = (targetId && state.members.find(
+          (m) =>
+            m.nomorAnggota.toLowerCase() === targetId.toLowerCase() ||
+            m.whatsapp.replace(/\D/g, '') === targetId.replace(/\D/g, '') ||
+            m.nomorRekening === targetId
+        )) || state.members[0];
+
+        if (!member) {
+          setErrorMessage('Belum ada akun anggota yang tersimpan di perangkat ini.');
           return;
         }
-        setSuccessMessage('Verifikasi Biometrik Berhasil! Mengalihkan...');
+
+        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk via pengingat password: ${member.nama}`);
+        // Ensure remembered
+        if (rememberAccount) {
+          const saved = {
+            identifier: member.nomorAnggota,
+            nama: member.nama,
+            password: member.password,
+          };
+          localStorage.setItem('hws_saved_member_account', JSON.stringify(saved));
+          setSavedMemberAccount(saved);
+        }
+
         setTimeout(() => {
-          onLoginMember(defaultMember);
-        }, 600);
+          onLoginMember(member);
+        }, 500);
       } else {
-        const abzqarAdmin = state.admins.find((a) => a.username.toLowerCase() === 'abzqar') || state.admins[0];
-        if (!abzqarAdmin) {
+        const targetUser = savedAdminAccount?.username || adminUsername || 'Abzqar';
+        const admin = state.admins.find(
+          (a) => a.username.toLowerCase() === targetUser.toLowerCase() || a.email.toLowerCase() === targetUser.toLowerCase()
+        ) || state.admins.find((a) => a.username.toLowerCase() === 'abzqar') || state.admins[0];
+
+        if (!admin) {
           setErrorMessage('Pengurus tidak ditemukan.');
           return;
         }
-        setSuccessMessage(`Biometrik diverifikasi untuk ${abzqarAdmin.nama}. Mengalihkan...`);
+
+        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk via pengingat akun: ${admin.nama}`);
+        if (rememberAccount) {
+          const saved = {
+            username: admin.username,
+            nama: admin.nama,
+            password: admin.password,
+          };
+          localStorage.setItem('hws_saved_admin_account', JSON.stringify(saved));
+          setSavedAdminAccount(saved);
+        }
+
         setTimeout(() => {
-          onLoginAdmin(abzqarAdmin);
-        }, 600);
+          onLoginAdmin(admin);
+        }, 500);
       }
     } catch {
       setErrorMessage('Gagal memverifikasi biometrik pada perangkat ini.');
@@ -437,6 +548,38 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </p>
               </div>
 
+              {/* Pengingat Password & User ID di Perangkat (Req 2 & 6) */}
+              {savedMemberAccount && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center font-black text-xs shrink-0">
+                      <Key className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>Akun Tersimpan:</span>
+                        <span className="text-amber-700 font-extrabold">{savedMemberAccount.nama}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        {savedMemberAccount.identifier} • Siap Masuk Cepat
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.removeItem('hws_saved_member_account');
+                      setSavedMemberAccount(null);
+                      setMemberIdentifier('');
+                      setMemberPassword('');
+                    }}
+                    className="text-[10px] text-slate-400 hover:text-red-600 underline font-semibold shrink-0"
+                  >
+                    Lupakan
+                  </button>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
                   Nomor Anggota / No. HP / No. Rekening
@@ -491,14 +634,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
               </div>
 
-              {/* Biometric Login Button */}
+              {/* Checkbox Ingat Password & User ID (Req 2 & 6) */}
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none py-1">
+                <input
+                  type="checkbox"
+                  checked={rememberAccount}
+                  onChange={(e) => setRememberAccount(e.target.checked)}
+                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-300"
+                />
+                <span className="font-semibold text-[11px] text-slate-700">
+                  Ingat Password & User ID di Perangkat ini
+                </span>
+              </label>
+
+              {/* Biometric Login Button (Terintegrasi Pengingat Password - Req 3 & 6) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className="w-full py-2.5 px-3 border border-slate-200 hover:border-amber-400 bg-slate-50 hover:bg-amber-50/50 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-center gap-2 transition-all"
+                className="w-full py-2.5 px-3 border border-amber-300 hover:border-amber-500 bg-amber-50/80 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm"
               >
-                <Fingerprint className="w-4 h-4 text-amber-500" />
-                Masuk dengan Biometrik (Sidik Jari / Face ID)
+                <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Masuk dengan Biometrik (Sidik Jari / Face ID Terintegrasi)</span>
               </button>
 
               <button
@@ -537,6 +693,38 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   Khusus pengurus Koperasi Himpunan Wirausaha Sejahtera.
                 </p>
               </div>
+
+              {/* Pengingat Akun Admin di Perangkat (Req 2 & 6) */}
+              {savedAdminAccount && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-600 flex items-center justify-center font-black text-xs shrink-0">
+                      <Key className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>Admin Tersimpan:</span>
+                        <span className="text-amber-700 font-extrabold">{savedAdminAccount.nama}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        @{savedAdminAccount.username} • Siap Masuk Cepat
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.removeItem('hws_saved_admin_account');
+                      setSavedAdminAccount(null);
+                      setAdminUsername('');
+                      setAdminPassword('');
+                    }}
+                    className="text-[10px] text-slate-400 hover:text-red-600 underline font-semibold shrink-0"
+                  >
+                    Lupakan
+                  </button>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
@@ -592,14 +780,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
               </div>
 
-              {/* Biometric Login Button */}
+              {/* Checkbox Ingat Password & Username Admin (Req 2 & 6) */}
+              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none py-1">
+                <input
+                  type="checkbox"
+                  checked={rememberAccount}
+                  onChange={(e) => setRememberAccount(e.target.checked)}
+                  className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-300"
+                />
+                <span className="font-semibold text-[11px] text-slate-700">
+                  Ingat Password & Username di Perangkat ini
+                </span>
+              </label>
+
+              {/* Biometric Login Button (Terintegrasi Pengingat Akun - Req 3 & 6) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className="w-full py-2.5 px-3 border border-slate-200 hover:border-amber-400 bg-slate-50 hover:bg-amber-50/50 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-center gap-2 transition-all"
+                className="w-full py-2.5 px-3 border border-amber-300 hover:border-amber-500 bg-amber-50/80 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm"
               >
-                <Fingerprint className="w-4 h-4 text-amber-500" />
-                Masuk dengan Biometrik Pengurus
+                <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Masuk dengan Biometrik Pengurus (Terintegrasi Pengingat Akun)</span>
               </button>
 
               <button

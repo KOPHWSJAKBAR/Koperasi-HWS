@@ -7,7 +7,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog } from '../lib/storage';
+import { formatRupiah, createAuditLog, fetchStateFromServer } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import {
@@ -24,6 +24,8 @@ import {
   CreditCard,
   Send,
   AlertTriangle,
+  RefreshCw,
+  Radio,
 } from 'lucide-react';
 
 interface MemberVerificationViewProps {
@@ -76,13 +78,48 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
   const nominalFinal = jenisSetoran === 'kewajiban' ? nominalKewajiban : Number(nominalUmum) || 0;
 
-  // Handle image upload for proof
+  // State Sinkronisasi Online Realtime
+  const [isSyncing, setIsSyncing] = useState(false);
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    await fetchStateFromServer();
+    setTimeout(() => setIsSyncing(false), 500);
+  };
+
+  // Handle image upload for proof (Kompresi otomatis agar upload online realtime lancar)
   const handleProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      setBuktiUrl(reader.result as string);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        setBuktiUrl(compressedDataUrl);
+      };
+      img.src = event.target?.result as string;
     };
     reader.readAsDataURL(file);
   };
@@ -118,6 +155,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       status: 'pending',
       createdAt: new Date().toISOString(),
     };
+
+    // Online submission to server (Req 2 & 4)
+    try {
+      await fetch('/api/setoran/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deposit: newDeposit }),
+      });
+    } catch {}
 
     await updateState((prev) => ({
       ...prev,
@@ -220,9 +266,30 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     alert(`Penarikan ${formatRupiah(amount)} berhasil diproses ke ${bankTujuanTarik}!`);
   };
 
-  // ADMIN: Approve Deposit
+  // ADMIN: Approve Deposit (Online Realtime Server Sync - Req 2 & 4)
   const handleApproveDeposit = async (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
+
+    // 1. Try online server endpoint for instant database commitment & SSE broadcast
+    try {
+      const res = await fetch('/api/setoran/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          depositId: dep.id,
+          isApproved: true,
+          adminName: currentAdmin.nama,
+        }),
+      });
+      if (res.ok) {
+        await fetchStateFromServer();
+        alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui secara online realtime!`);
+        return;
+      }
+    } catch (e) {
+      console.warn('Online endpoint error, falling back to local updateState', e);
+    }
+
     const now = new Date();
     const tgl = now.toISOString().split('T')[0];
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
@@ -910,17 +977,34 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-700/60">
           <div>
-            <h3 className="text-base sm:text-lg font-extrabold text-white">
-              {isMember ? 'Riwayat Pengajuan Setoran Saya' : 'Antrean Verifikasi Setoran Anggota'}
-            </h3>
-            <p className="text-xs text-slate-400">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-base sm:text-lg font-extrabold text-white">
+                {isMember ? 'Riwayat Pengajuan Setoran Saya' : 'Antrean Verifikasi Setoran Anggota'}
+              </h3>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5" title="Sistem tersinkronisasi online secara realtime">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                ONLINE REALTIME
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
               {isMember
-                ? 'Status verifikasi transfer simpanan oleh pengurus koperasi'
-                : 'Periksa foto bukti transfer dan konfirmasi penambahan saldo anggota'}
+                ? 'Status verifikasi transfer simpanan oleh pengurus koperasi realtime'
+                : 'Periksa foto bukti transfer dan konfirmasi penambahan saldo anggota secara online'}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-sky-400 border border-sky-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all"
+              title="Sinkronkan data verifikasi setoran terbaru dari server"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              {isSyncing ? 'Sinkron...' : 'Sinkronkan'}
+            </button>
+
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value as any)}

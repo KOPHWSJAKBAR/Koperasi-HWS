@@ -1,4 +1,4 @@
-import { MemberUser, MemberTransaction, KategoriTabunganMutasi } from '../types';
+import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry } from '../types';
 import { formatRupiah } from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
@@ -574,4 +574,157 @@ export function downloadExcelCsv(data: Record<string, any>[], filename: string) 
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+// Helper: Konversi Nominal ke Terbilang Bahasa Indonesia
+export function angkaTerbilang(n: number): string {
+  const bilangan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas'];
+  const bulat = Math.floor(Math.abs(n));
+  if (bulat < 12) return bilangan[bulat];
+  if (bulat < 20) return angkaTerbilang(bulat - 10) + ' Belas';
+  if (bulat < 100) return angkaTerbilang(Math.floor(bulat / 10)) + ' Puluh' + (bulat % 10 !== 0 ? ' ' + angkaTerbilang(bulat % 10) : '');
+  if (bulat < 200) return 'Seratus' + (bulat % 100 !== 0 ? ' ' + angkaTerbilang(bulat % 100) : '');
+  if (bulat < 1000) return angkaTerbilang(Math.floor(bulat / 100)) + ' Ratus' + (bulat % 100 !== 0 ? ' ' + angkaTerbilang(bulat % 100) : '');
+  if (bulat < 2000) return 'Seribu' + (bulat % 1000 !== 0 ? ' ' + angkaTerbilang(bulat % 1000) : '');
+  if (bulat < 1000000) return angkaTerbilang(Math.floor(bulat / 1000)) + ' Ribu' + (bulat % 1000 !== 0 ? ' ' + angkaTerbilang(bulat % 1000) : '');
+  if (bulat < 1000000000) return angkaTerbilang(Math.floor(bulat / 1000000)) + ' Juta' + (bulat % 1000000 !== 0 ? ' ' + angkaTerbilang(bulat % 1000000) : '');
+  if (bulat < 1000000000000) return angkaTerbilang(Math.floor(bulat / 1000000000)) + ' Miliar' + (bulat % 1000000000 !== 0 ? ' ' + angkaTerbilang(bulat % 1000000000) : '');
+  return `${bulat}`;
+}
+
+// Helper: Cetak Tanda Terima / Kuitansi Kas Koperasi Resmi (Req 1 & Req 15)
+export function printTandaTerimaKas(entry: KasEntry, profile: any) {
+  const isMasuk = entry.tipe === 'masuk';
+  const noKuitansi = `HWS/${isMasuk ? 'BKM' : 'BKK'}/${entry.tanggal.replace(/-/g, '')}/${entry.id.replace(/\D/g, '').slice(-4) || '001'}`;
+  const terbilangStr = `${angkaTerbilang(entry.nominal)} Rupiah`;
+  const namaPihak = entry.namaPenerima || (isMasuk ? 'Penyetor / Anggota' : 'Penerima Kas');
+
+  const html = `
+    <div class="watermark-container">
+      <!-- Watermark Logo Resmi Koperasi HWS -->
+      <svg class="watermark-bg" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="100" cy="100" r="98" fill="#FEE024" stroke="#000000" stroke-width="2" />
+        <rect x="42" y="58" width="18" height="30" fill="#2E9E44" />
+        <path d="M30 96 L100 28 L170 96 L154 96 L100 44 L46 96 Z" fill="#D62828" />
+        <polygon points="100,54 124,68 124,106 100,120 76,106 76,68" fill="#007ACC" />
+      </svg>
+      <div class="watermark-security-stamp">
+        BUKTI SAH KAS KOPERASI HWS • DIVERIFIKASI SISTEM
+      </div>
+
+      <div class="content-layer">
+        <!-- Header Kuitansi -->
+        <div style="border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <h2 style="font-size: 16px; font-weight: 900; color: #0f172a; margin: 0;">
+              ${profile?.nama || 'KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA (KOPERASI HWS)'}
+            </h2>
+            <div style="font-size: 11px; color: #475569; margin-top: 3px;">
+              Badan Hukum: ${profile?.badanHukum || 'AHU-0004921.AH.01.29.TAHUN 2024'} • NPWP: ${profile?.npwpKoperasi || '82.910.293.4-038.000'}
+            </div>
+            <div style="font-size: 10px; color: #64748b;">
+              ${profile?.alamat || 'Jl. Raya Daan Mogot KM 11 No. 8, Cengkareng, Jakarta Barat'} • Telp: ${profile?.telepon || '0858-1755-4296'}
+            </div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 14px; font-weight: 900; color: ${isMasuk ? '#047857' : '#b91c1c'}; border: 1.5px solid ${isMasuk ? '#047857' : '#b91c1c'}; padding: 4px 10px; border-radius: 6px; display: inline-block;">
+              ${isMasuk ? 'BUKTI KAS MASUK (BKM)' : 'BUKTI KAS KELUAR (BKK)'}
+            </div>
+            <div style="font-size: 10px; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #475569; margin-top: 4px;">
+              No: ${noKuitansi}
+            </div>
+          </div>
+        </div>
+
+        <!-- Detail Kuitansi -->
+        <div style="background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 10px; padding: 18px; margin-bottom: 20px;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <tbody>
+              <tr>
+                <td style="padding: 6px 0; width: 24%; color: #475569; font-weight: 600;">
+                  ${isMasuk ? 'Telah Diterima Dari' : 'Telah Diserahkan Kepada'}
+                </td>
+                <td style="padding: 6px 8px; width: 2%; font-weight: 700;">:</td>
+                <td style="padding: 6px 0; font-weight: 800; color: #0f172a; font-size: 13px;">
+                  ${namaPihak}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #475569; font-weight: 600;">Tanggal Transaksi</td>
+                <td style="padding: 6px 8px; font-weight: 700;">:</td>
+                <td style="padding: 6px 0; font-weight: 700; color: #0f172a;">
+                  ${new Date(entry.tanggal).toLocaleDateString('id-ID', { dateStyle: 'full' })}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #475569; font-weight: 600;">Kategori Buku Kas</td>
+                <td style="padding: 6px 8px; font-weight: 700;">:</td>
+                <td style="padding: 6px 0; font-weight: 700; color: #0284c7;">
+                  ${entry.kategori} (${entry.bukuKas === 'koperasi' ? 'Kas Koperasi' : 'Kas Anggota'})
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #475569; font-weight: 600; vertical-align: top;">Untuk Keperluan</td>
+                <td style="padding: 6px 8px; font-weight: 700; vertical-align: top;">:</td>
+                <td style="padding: 6px 0; font-weight: 600; color: #1e293b; line-height: 1.5;">
+                  ${entry.keterangan}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #475569; font-weight: 600;">Terbilang</td>
+                <td style="padding: 6px 8px; font-weight: 700;">:</td>
+                <td style="padding: 6px 0; font-style: italic; font-weight: 700; color: #334155; background: #e2e8f0; padding-left: 8px; border-radius: 4px;">
+                  # ${terbilangStr} #
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Kotak Jumlah Nominal Uang -->
+        <div style="display: flex; justify-content: space-between; align-items: center; background: #0f172a; color: #ffffff; padding: 14px 20px; border-radius: 10px; margin-bottom: 25px;">
+          <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+            JUMLAH PEMBAYARAN:
+          </div>
+          <div style="font-size: 20px; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #38bdf8;">
+            ${formatRupiah(entry.nominal)}
+          </div>
+        </div>
+
+        <!-- Kolom Pengesahan Tanda Tangan -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: center; font-size: 11px; margin-top: 30px;">
+          <div>
+            <div style="color: #64748b; margin-bottom: 50px;">
+              ${isMasuk ? 'Yang Menyetor,' : 'Yang Menerima,'}
+            </div>
+            <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 140px; padding-bottom: 2px;">
+              ( ${namaPihak} )
+            </div>
+          </div>
+          <div>
+            <div style="color: #64748b; margin-bottom: 50px;">
+              Petugas Kasir / Input,
+            </div>
+            <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 140px; padding-bottom: 2px;">
+              ( ${entry.inputBy || 'Petugas Koperasi'} )
+            </div>
+          </div>
+          <div>
+            <div style="color: #64748b; margin-bottom: 50px;">
+              Disetujui / Bendahara,
+            </div>
+            <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 140px; padding-bottom: 2px;">
+              ( ${entry.approvedBy || profile?.bendahara || 'Suryadi Pratama'} )
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 35px; text-align: center; font-size: 9px; color: #64748b; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+          Tanda terima pembayaran ini sah dan mengikat. Dicetak secara realtime dari Sistem Manajemen Koperasi HWS.
+        </div>
+      </div>
+    </div>
+  `;
+
+  printDocumentHtml(html, `Tanda_Terima_${isMasuk ? 'Masuk' : 'Keluar'}_${noKuitansi.replace(/\//g, '_')}`);
 }

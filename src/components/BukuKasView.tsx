@@ -5,7 +5,7 @@ import {
   KasEntry,
 } from '../types';
 import { formatRupiah, createAuditLog } from '../lib/storage';
-import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
+import { downloadExcelCsv, printDocumentHtml, printTandaTerimaKas } from '../lib/exportPdf';
 import {
   BookOpen,
   Building,
@@ -22,6 +22,8 @@ import {
   TrendingDown,
   Scale,
   ShieldAlert,
+  Receipt,
+  FileText,
   X,
 } from 'lucide-react';
 
@@ -41,13 +43,17 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterKategori, setFilterKategori] = useState('semua');
 
-  // Input Kas Koperasi Form State
+  // Input Kas Koperasi Form State (Req 1: Tanggal, Jumlah, Keterangan, Nama Penerima)
   const [isInputModalOpen, setIsInputModalOpen] = useState(false);
   const [formTipe, setFormTipe] = useState<'masuk' | 'keluar'>('keluar');
   const [formKategori, setFormKategori] = useState('');
   const [formNominal, setFormNominal] = useState('');
+  const [formNamaPenerima, setFormNamaPenerima] = useState('');
   const [formKeterangan, setFormKeterangan] = useState('');
   const [formTanggal, setFormTanggal] = useState(new Date().toISOString().split('T')[0]);
+
+  // Modal Detail & Cetak Tanda Terima Kas
+  const [selectedReceiptKas, setSelectedReceiptKas] = useState<KasEntry | null>(null);
 
   // Tambah Kategori Baru State
   const [isAddCatModalOpen, setIsAddCatModalOpen] = useState(false);
@@ -122,6 +128,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       tanggal: formTanggal,
       kategori: formKategori || (formTipe === 'masuk' ? 'Pemasukan Lainnya' : 'Pengeluaran Overhead'),
       keterangan: formKeterangan,
+      namaPenerima: formNamaPenerima.trim() || (formTipe === 'masuk' ? 'Kasir / Penyetor Koperasi' : 'Pihak Penerima Kas'),
       tipe: formTipe,
       nominal,
       saldoKasSetelah: formTipe === 'masuk' ? saldoKasKoperasi + nominal : saldoKasKoperasi - nominal,
@@ -133,7 +140,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     const audit = createAuditLog(
       currentAdmin,
       'Input Kas Koperasi',
-      `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)}: ${formKeterangan}`,
+      `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)}: ${formKeterangan} (${newKas.namaPenerima})`,
       newKas.id
     );
 
@@ -145,6 +152,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
     setIsInputModalOpen(false);
     setFormNominal('');
+    setFormNamaPenerima('');
     setFormKeterangan('');
     alert(isSuperAdmin ? 'Transaksi kas berhasil dicatat!' : 'Transaksi diajukan, menunggu persetujuan Super Admin / Pembukuan.');
   };
@@ -671,6 +679,13 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       ) : (
         /* Table of Cashbook Transactions */
         <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl">
+          <div className="flex items-center justify-between mb-3 text-xs text-slate-400">
+            <span>Klik baris mana saja pada riwayat untuk mencetak / melihat <b>Tanda Terima Pembayaran</b> resmi.</span>
+            <span className="text-[11px] text-amber-400 font-bold flex items-center gap-1">
+              <Receipt className="w-3.5 h-3.5" />
+              Terintegrasi Tanda Terima
+            </span>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
@@ -678,6 +693,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                   <th className="py-2.5 px-3">Tanggal</th>
                   {!isLaporan && <th className="py-2.5 px-3">Kategori</th>}
                   <th className="py-2.5 px-3">Keterangan</th>
+                  <th className="py-2.5 px-3">Penerima / Penyetor</th>
                   <th className="py-2.5 px-3 text-right">Mutasi Masuk (CR)</th>
                   <th className="py-2.5 px-3 text-right">Mutasi Keluar (DB)</th>
                   <th className="py-2.5 px-3">Petugas</th>
@@ -687,8 +703,14 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               <tbody className="divide-y divide-slate-800">
                 {currentList.map((entry) => {
                   const isMasuk = entry.tipe === 'masuk';
+                  const namaPihak = entry.namaPenerima || (isMasuk ? 'Kasir / Penyetor' : 'Pihak Penerima');
                   return (
-                    <tr key={entry.id} className="hover:bg-slate-800/30 transition-colors">
+                    <tr
+                      key={entry.id}
+                      onClick={() => setSelectedReceiptKas(entry)}
+                      className="hover:bg-slate-800/60 cursor-pointer transition-colors group"
+                      title="Klik untuk membuka & mencetak Tanda Terima Pembayaran"
+                    >
                       <td className="py-3 px-3 font-mono text-slate-300">{entry.tanggal}</td>
                       {!isLaporan && (
                         <td className="py-3 px-3">
@@ -698,12 +720,17 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                         </td>
                       )}
                       <td className="py-3 px-3">
-                        <div className="font-bold text-white">{entry.keterangan}</div>
+                        <div className="font-bold text-white group-hover:text-amber-300 transition-colors">
+                          {entry.keterangan}
+                        </div>
                         {entry.status === 'pending_approval' && (
                           <span className="text-[10px] text-amber-400 font-semibold">
                             ⏳ Menunggu Persetujuan ({entry.pendingAction || 'create'})
                           </span>
                         )}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-sky-300">
+                        {namaPihak}
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
                         {isMasuk ? formatRupiah(entry.nominal) : '-'}
@@ -712,33 +739,44 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                         {!isMasuk ? formatRupiah(entry.nominal) : '-'}
                       </td>
                       <td className="py-3 px-3 text-slate-400">{entry.inputBy}</td>
-                      <td className="py-3 px-3 text-right">
-                        {entry.status === 'pending_approval' && canDirectModify ? (
-                          <div className="flex justify-end gap-1">
-                            <button
-                              onClick={() => handleApproveKasAction(entry, true)}
-                              className="p-1 text-emerald-400 hover:text-emerald-300"
-                              title="Setujui"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleApproveKasAction(entry, false)}
-                              className="p-1 text-red-400 hover:text-red-300"
-                              title="Tolak"
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ) : canDirectModify || isWriter ? (
+                      <td className="py-3 px-3 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1.5">
                           <button
-                            onClick={() => handleDeleteKas(entry)}
-                            className="p-1 text-slate-400 hover:text-red-400 transition-colors"
-                            title="Hapus Transaksi"
+                            type="button"
+                            onClick={() => setSelectedReceiptKas(entry)}
+                            className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 border border-amber-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
+                            title="Buka & Cetak Tanda Terima Pembayaran"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Receipt className="w-3.5 h-3.5 text-amber-400" />
+                            Kuitansi
                           </button>
-                        ) : null}
+                          {entry.status === 'pending_approval' && canDirectModify ? (
+                            <>
+                              <button
+                                onClick={() => handleApproveKasAction(entry, true)}
+                                className="p-1 text-emerald-400 hover:text-emerald-300"
+                                title="Setujui"
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleApproveKasAction(entry, false)}
+                                className="p-1 text-red-400 hover:text-red-300"
+                                title="Tolak"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </button>
+                            </>
+                          ) : canDirectModify || isWriter ? (
+                            <button
+                              onClick={() => handleDeleteKas(entry)}
+                              className="p-1 text-slate-400 hover:text-red-400 transition-colors"
+                              title="Hapus Transaksi"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -818,34 +856,51 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 </select>
               </div>
 
+              {/* Input Tanggal & Jumlah (Req 1) */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">Tanggal Transaksi *</label>
+                  <input
+                    type="date"
+                    required
+                    value={formTanggal}
+                    onChange={(e) => setFormTanggal(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    Jumlah / Nominal (Rp) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={formNominal}
+                    onChange={(e) => setFormNominal(e.target.value)}
+                    placeholder="Nominal rupiah"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Input Nama Penerima / Penyetor (Req 1) */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Nominal Bebas (Ketik Langsung per req 3)
+                  Nama Penerima / Pihak Pembayar / Penyetor *
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   required
-                  min={1}
-                  value={formNominal}
-                  onChange={(e) => setFormNominal(e.target.value)}
-                  placeholder="Ketik nominal rupiah"
+                  value={formNamaPenerima}
+                  onChange={(e) => setFormNamaPenerima(e.target.value)}
+                  placeholder={formTipe === 'masuk' ? 'Nama pihak yang menyetor' : 'Nama pihak yang menerima kas'}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Tanggal</label>
-                <input
-                  type="date"
-                  required
-                  value={formTanggal}
-                  onChange={(e) => setFormTanggal(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Keterangan Lengkap</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1">Keterangan Lengkap *</label>
                 <textarea
                   required
                   rows={2}
@@ -977,6 +1032,116 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 + Simpan Kategori Baru
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL TANDA TERIMA PEMBAYARAN KAS (REQ 1 & REQ 15) ================= */}
+      {selectedReceiptKas && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-5 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">
+                    Tanda Terima Kas Koperasi Resmi
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Bukti transaksi sah terintegrasi otomatis dengan sistem pembukuan
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedReceiptKas(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Preview Kuitansi */}
+            <div className="bg-slate-900 border border-slate-700/80 rounded-2xl p-4 text-xs space-y-3">
+              <div className="flex justify-between items-start pb-2 border-b border-slate-800">
+                <div>
+                  <div className="font-extrabold text-white text-xs">
+                    {state.profile.nama}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {state.profile.badanHukum}
+                  </div>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    selectedReceiptKas.tipe === 'masuk'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                  }`}
+                >
+                  {selectedReceiptKas.tipe === 'masuk' ? 'Kas Masuk (BKM)' : 'Kas Keluar (BKK)'}
+                </span>
+              </div>
+
+              <div className="space-y-2 text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Nomor Transaksi:</span>
+                  <span className="font-mono font-bold text-white">{selectedReceiptKas.id}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Tanggal:</span>
+                  <span className="font-bold text-white">{selectedReceiptKas.tanggal}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">
+                    {selectedReceiptKas.tipe === 'masuk' ? 'Diterima Dari:' : 'Dibayarkan Kepada:'}
+                  </span>
+                  <span className="font-extrabold text-amber-400">
+                    {selectedReceiptKas.namaPenerima || (selectedReceiptKas.tipe === 'masuk' ? 'Penyetor / Anggota' : 'Pihak Penerima Kas')}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Kategori Kas:</span>
+                  <span className="text-sky-300 font-semibold">{selectedReceiptKas.kategori}</span>
+                </div>
+                <div className="flex justify-between items-start">
+                  <span className="text-slate-400">Keterangan:</span>
+                  <span className="font-semibold text-white text-right max-w-[65%]">
+                    {selectedReceiptKas.keterangan}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Petugas Input:</span>
+                  <span className="text-slate-200">{selectedReceiptKas.inputBy}</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-800 rounded-xl border border-slate-700 flex justify-between items-center">
+                <span className="font-bold text-slate-300">Total Nominal:</span>
+                <span className="text-base font-black font-mono text-emerald-400">
+                  {formatRupiah(selectedReceiptKas.nominal)}
+                </span>
+              </div>
+            </div>
+
+            <div className="pt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedReceiptKas(null)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs transition-all"
+              >
+                Tutup
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  printTandaTerimaKas(selectedReceiptKas, state.profile);
+                }}
+                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all"
+              >
+                <Printer className="w-4 h-4" />
+                Cetak / Unduh PDF Tanda Terima
+              </button>
+            </div>
           </div>
         </div>
       )}

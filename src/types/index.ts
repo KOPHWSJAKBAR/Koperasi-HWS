@@ -193,6 +193,7 @@ export interface KasEntry {
   tanggal: string;
   kategori: string;
   keterangan: string;
+  namaPenerima?: string; // Nama pihak penerima / penyetor (Req 1)
   tipe: 'masuk' | 'keluar';
   nominal: number;
   saldoKasSetelah: number;
