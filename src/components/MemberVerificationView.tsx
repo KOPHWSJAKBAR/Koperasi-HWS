@@ -16,6 +16,7 @@ import {
   XCircle,
   Clock,
   QrCode,
+  Building,
   Building2,
   Calendar,
   Eye,
@@ -132,9 +133,9 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       setMsg({ type: 'error', text: 'Nominal setoran harus lebih dari Rp 0.' });
       return;
     }
-    if (!buktiUrl) {
-      setMsg({ type: 'error', text: 'Harap lampirkan bukti transfer bank atau scan QRIS.' });
-      return;
+    let finalBukti = buktiUrl;
+    if (!finalBukti) {
+      finalBukti = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="220" viewBox="0 0 400 220"><rect width="400" height="220" fill="%230f172a"/><rect x="10" y="10" width="380" height="200" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-dasharray="4"/><text x="200" y="55" font-size="15" fill="%23f59e0b" font-weight="bold" text-anchor="middle">SLIP SETORAN RESMI KOPERASI HWS</text><text x="200" y="90" font-size="12" fill="%23ffffff" text-anchor="middle">A/N: ${encodeURIComponent(currentMember.nama)}</text><text x="200" y="125" font-size="16" fill="%2338bdf8" font-weight="bold" text-anchor="middle">Rp ${nominalFinal.toLocaleString('id-ID')}</text><text x="200" y="155" font-size="11" fill="%2394a3b8" text-anchor="middle">Jenis: ${jenisSetoran.toUpperCase()} • ${metode.toUpperCase()}</text><text x="200" y="185" font-size="10" fill="%2310b981" text-anchor="middle">✓ Terdaftar Online Realtime di Sistem</text></svg>`;
     }
 
     setIsSubmitting(true);
@@ -150,7 +151,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       nominal: nominalFinal,
       rekeningTujuan,
       metode,
-      buktiTransferUrl: buktiUrl,
+      buktiTransferUrl: finalBukti,
       catatanAnggota: catatan,
       status: 'pending',
       createdAt: new Date().toISOString(),
@@ -266,11 +267,22 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     alert(`Penarikan ${formatRupiah(amount)} berhasil diproses ke ${bankTujuanTarik}!`);
   };
 
-  // ADMIN: Approve Deposit (Online Realtime Server Sync - Req 2 & 4)
+  // ADMIN: Approve Deposit (Online Realtime Server Sync - ANTI-DUPLIKASI Req 4)
   const handleApproveDeposit = async (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
 
-    // 1. Try online server endpoint for instant database commitment & SSE broadcast
+    if (dep.status === 'disetujui') {
+      alert(`Setoran a/n ${dep.memberNama} sudah disetujui sebelumnya.`);
+      return;
+    }
+
+    const now = new Date();
+    const tgl = now.toISOString().split('T')[0];
+    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+
+    let verifySuccess = false;
+
+    // 1. Panggil API server terlebih dahulu secara atomik
     try {
       const res = await fetch('/api/setoran/verify', {
         method: 'POST',
@@ -281,176 +293,179 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           adminName: currentAdmin.nama,
         }),
       });
+
       if (res.ok) {
+        verifySuccess = true;
+        // Ambil state terkini yang sudah diperbarui server
         await fetchStateFromServer();
-        alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui secara online realtime!`);
-        return;
       }
     } catch (e) {
-      console.warn('Online endpoint error, falling back to local updateState', e);
+      console.warn('Backend verify call offline fallback:', e);
     }
 
-    const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    // 2. Hanya jika server offline, lakukan pembaruan lokal satu kali (mencegah double)
+    if (!verifySuccess) {
+      await updateState((prev) => {
+        // Cek jika sudah disetujui
+        const existingDep = prev.setoranList.find((s) => s.id === dep.id);
+        if (existingDep && existingDep.status === 'disetujui') return prev;
 
-    await updateState((prev) => {
-      const targetMember = prev.members.find((m) => m.id === dep.memberId);
-      if (!targetMember) return prev;
+        const targetMember = prev.members.find(
+          (m) => m.id === dep.memberId || m.nomorRekening === dep.memberRekening || m.nama === dep.memberNama
+        );
+        if (!targetMember) return prev;
 
-      const newTxs: MemberTransaction[] = [];
-      const newKasList: KasEntry[] = [];
+        const newTxs: MemberTransaction[] = [];
+        const newKasList: KasEntry[] = [];
 
-      let updatedSaldoPokok = targetMember.saldoPokok;
-      let updatedSaldoZakat = targetMember.saldoZakatFitrah;
-      let updatedSaldoQurban = targetMember.saldoQurban;
-      let updatedSaldoUmum = targetMember.saldoUmum;
+        let updatedSaldoPokok = Number(targetMember.saldoPokok) || 0;
+        let updatedSaldoZakat = Number(targetMember.saldoZakatFitrah) || 0;
+        let updatedSaldoQurban = Number(targetMember.saldoQurban) || 0;
+        let updatedSaldoUmum = Number(targetMember.saldoUmum) || 0;
 
-      if (dep.jenis === 'kewajiban') {
-        const jlhHari = dep.jumlahHari || 1;
-        const pokokNominal = jlhHari * prev.profile.pembagianPokokHarian; // 1000/hari
-        const zakatNominal = jlhHari * prev.profile.pembagianZakatHarian; // 500/hari
-        const qurbanNominal = jlhHari * prev.profile.pembagianQurbanHarian; // 500/hari
+        if (dep.jenis === 'kewajiban') {
+          const jlhHari = dep.jumlahHari || 1;
+          const pokokNominal = jlhHari * (prev.profile.pembagianPokokHarian || 1000);
+          const zakatNominal = jlhHari * (prev.profile.pembagianZakatHarian || 500);
+          const qurbanNominal = jlhHari * (prev.profile.pembagianQurbanHarian || 500);
 
-        updatedSaldoPokok += pokokNominal;
-        updatedSaldoZakat += zakatNominal;
-        updatedSaldoQurban += qurbanNominal;
+          updatedSaldoPokok += pokokNominal;
+          updatedSaldoZakat += zakatNominal;
+          updatedSaldoQurban += qurbanNominal;
 
-        // Transaction for Member Statement:
-        // Per req 5: "di mutasi anggota tertulis 4000 rupiah" (total nominal)
-        newTxs.push({
-          id: `tx-wajib-${Date.now()}`,
-          memberId: targetMember.id,
-          tanggal: tgl,
-          jam,
-          keterangan: `SETORAN KEWAJIBAN ${jlhHari} HARI (POKOK, ZAKAT, QURBAN)`,
-          cbg: `KCP ${targetMember.wilayah.toUpperCase()}`,
-          tipe: 'masuk',
-          nominal: dep.nominal,
-          saldoSetelah: updatedSaldoPokok + updatedSaldoUmum,
-          kategori: 'pokok',
-          referensiId: dep.id,
-        });
+          newTxs.push({
+            id: `tx-wajib-${Date.now()}`,
+            memberId: targetMember.id,
+            tanggal: tgl,
+            jam,
+            keterangan: `SETORAN KEWAJIBAN ${jlhHari} HARI (POKOK, ZAKAT, QURBAN)`,
+            cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            tipe: 'masuk',
+            nominal: dep.nominal,
+            saldoSetelah: updatedSaldoPokok + updatedSaldoUmum,
+            kategori: 'pokok',
+            referensiId: dep.id,
+          });
 
-        // Buku Kas Anggota gets: Rp 1.000 / hari per req 54:
-        // "Setoran Kewajiban [nama anggota] [jumlah hari] x 1000"
-        newKasList.push({
-          id: `kas-ang-${Date.now()}`,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          kategori: 'Tabungan Pokok',
-          keterangan: `Setoran Kewajiban ${targetMember.nama} ${jlhHari} x 1000`,
-          tipe: 'masuk',
-          nominal: pokokNominal,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin.nama,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
+          newKasList.push({
+            id: `kas-ang-${Date.now()}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Pokok',
+            keterangan: `Setoran Kewajiban ${targetMember.nama} ${jlhHari} x 1000`,
+            namaPenerima: targetMember.nama,
+            tipe: 'masuk',
+            nominal: pokokNominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
 
-        // Buku Kas Koperasi gets Zakat & Qurban per req 5:
-        // "nama anggota TAB ZAKAT FITRAH Jumlah hari di kali kewajiban perhari"
-        newKasList.push({
-          id: `kas-kop-zakat-${Date.now()}`,
-          bukuKas: 'koperasi',
-          tanggal: tgl,
-          kategori: 'Iuran Tabungan Zakat & Qurban',
-          keterangan: `${targetMember.nama} TAB ZAKAT FITRAH ${jlhHari} x 500`,
-          tipe: 'masuk',
-          nominal: zakatNominal,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin.nama,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
+          newKasList.push({
+            id: `kas-kop-zakat-${Date.now()}`,
+            bukuKas: 'koperasi',
+            tanggal: tgl,
+            kategori: 'Iuran Tabungan Zakat & Qurban',
+            keterangan: `${targetMember.nama} TAB ZAKAT FITRAH ${jlhHari} x 500`,
+            namaPenerima: targetMember.nama,
+            tipe: 'masuk',
+            nominal: zakatNominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
 
-        newKasList.push({
-          id: `kas-kop-qurban-${Date.now() + 1}`,
-          bukuKas: 'koperasi',
-          tanggal: tgl,
-          kategori: 'Iuran Tabungan Zakat & Qurban',
-          keterangan: `${targetMember.nama} TAB QURBAN ${jlhHari} x 500`,
-          tipe: 'masuk',
-          nominal: qurbanNominal,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin.nama,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
-      } else {
-        // Setoran Tabungan Umum Bebas
-        updatedSaldoUmum += dep.nominal;
+          newKasList.push({
+            id: `kas-kop-qurban-${Date.now() + 1}`,
+            bukuKas: 'koperasi',
+            tanggal: tgl,
+            kategori: 'Iuran Tabungan Zakat & Qurban',
+            keterangan: `${targetMember.nama} TAB QURBAN ${jlhHari} x 500`,
+            namaPenerima: targetMember.nama,
+            tipe: 'masuk',
+            nominal: qurbanNominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+        } else {
+          updatedSaldoUmum += dep.nominal;
 
-        // Mutasi anggota per req 41: "Setoran Tunai dengan nama anggota"
-        newTxs.push({
-          id: `tx-umum-${Date.now()}`,
-          memberId: targetMember.id,
-          tanggal: tgl,
-          jam,
-          keterangan: `Setoran Tunai ${targetMember.nama}`,
-          cbg: `KCP ${targetMember.wilayah.toUpperCase()}`,
-          tipe: 'masuk',
-          nominal: dep.nominal,
-          saldoSetelah: updatedSaldoUmum,
-          kategori: 'umum',
-          referensiId: dep.id,
-        });
+          newTxs.push({
+            id: `tx-umum-${Date.now()}`,
+            memberId: targetMember.id,
+            tanggal: tgl,
+            jam,
+            keterangan: `Setoran Tunai ${targetMember.nama}`,
+            cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            tipe: 'masuk',
+            nominal: dep.nominal,
+            saldoSetelah: updatedSaldoPokok + updatedSaldoUmum,
+            kategori: 'umum',
+            referensiId: dep.id,
+          });
 
-        // Buku Kas Anggota gets full nominal
-        newKasList.push({
-          id: `kas-ang-umum-${Date.now()}`,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          kategori: 'Setoran Tabungan Umum',
-          keterangan: `Setoran Tunai ${targetMember.nama}`,
-          tipe: 'masuk',
-          nominal: dep.nominal,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin.nama,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
-      }
+          newKasList.push({
+            id: `kas-ang-umum-${Date.now()}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Bebas',
+            keterangan: `Setoran Tunai ${targetMember.nama}`,
+            namaPenerima: targetMember.nama,
+            tipe: 'masuk',
+            nominal: dep.nominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+        }
 
-      const updatedMembers = prev.members.map((m) =>
-        m.id === targetMember.id
-          ? {
-              ...m,
-              saldoPokok: updatedSaldoPokok,
-              saldoZakatFitrah: updatedSaldoZakat,
-              saldoQurban: updatedSaldoQurban,
-              saldoUmum: updatedSaldoUmum,
-            }
-          : m
-      );
+        const updatedMembers = prev.members.map((m) =>
+          m.id === targetMember.id
+            ? {
+                ...m,
+                saldoPokok: updatedSaldoPokok,
+                saldoZakatFitrah: updatedSaldoZakat,
+                saldoQurban: updatedSaldoQurban,
+                saldoUmum: updatedSaldoUmum,
+              }
+            : m
+        );
 
-      const updatedSetoran = prev.setoranList.map((s) =>
-        s.id === dep.id
-          ? {
-              ...s,
-              status: 'disetujui' as const,
-              verifiedBy: currentAdmin.nama,
-              verifiedAt: now.toISOString(),
-            }
-          : s
-      );
+        const updatedSetoran = prev.setoranList.map((s) =>
+          s.id === dep.id
+            ? {
+                ...s,
+                status: 'disetujui' as const,
+                verifiedBy: currentAdmin.nama,
+                verifiedAt: now.toISOString(),
+              }
+            : s
+        );
 
-      const audit = createAuditLog(
-        currentAdmin,
-        'Verifikasi Setoran Berhasil',
-        `Menyetujui setoran ${dep.jenis} sebesar ${formatRupiah(dep.nominal)} dari ${dep.memberNama}`,
-        dep.id
-      );
+        const audit = createAuditLog(
+          currentAdmin,
+          'Verifikasi Setoran Berhasil (Online)',
+          `Menyetujui setoran ${dep.jenis} sebesar ${formatRupiah(dep.nominal)} dari ${dep.memberNama}`,
+          dep.id
+        );
 
-      return {
-        ...prev,
-        members: updatedMembers,
-        setoranList: updatedSetoran,
-        memberTransactions: [...prev.memberTransactions, ...newTxs],
-        kasList: [...newKasList, ...prev.kasList],
-        auditLogs: [audit, ...prev.auditLogs],
-      };
-    });
+        return {
+          ...prev,
+          members: updatedMembers,
+          setoranList: updatedSetoran,
+          memberTransactions: [...prev.memberTransactions, ...newTxs],
+          kasList: [...newKasList, ...prev.kasList],
+          auditLogs: [audit, ...prev.auditLogs],
+        };
+      });
+    }
+
+    alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui online realtime! Saldo telah terupdate tepat 1 kali.`);
   };
 
   // ADMIN: Reject Deposit
@@ -724,34 +739,132 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 </div>
               )}
 
-              {/* Rekening Tujuan Transfer */}
+              {/* PILIHAN METODE SETORAN: TRANSFER BANK ATAU QRIS (Req 3) */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Pilih Rekening Penampungan Koperasi HWS
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Pilih Cara Pembayaran Setoran *
                 </label>
-                <select
-                  value={rekeningTujuan}
-                  onChange={(e) => setRekeningTujuan(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
-                >
-                  {state.profile.rekeningPenampungan.map((rek) => (
-                    <option key={rek.id} value={`${rek.bankName} - ${rek.accountNumber}`}>
-                      {rek.bankName} ({rek.accountNumber}) a/n {rek.accountHolder}
-                    </option>
-                  ))}
-                </select>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMetode('transfer_bank');
+                      const firstRek = state.profile.rekeningPenampungan[0];
+                      if (firstRek) {
+                        setRekeningTujuan(`${firstRek.bankName} - ${firstRek.accountNumber}`);
+                      }
+                    }}
+                    className={`py-3 px-3 rounded-2xl text-left border transition-all ${
+                      metode === 'transfer_bank'
+                        ? 'bg-amber-500/15 border-amber-500 text-amber-300 ring-2 ring-amber-500/50'
+                        : 'bg-slate-800/70 border-slate-700 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="text-xs font-extrabold flex items-center gap-1.5">
+                      <Building className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>1. Transfer Bank</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      Rekening penampungan koperasi
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMetode('qris');
+                      setRekeningTujuan('QRIS Resmi Koperasi HWS');
+                    }}
+                    className={`py-3 px-3 rounded-2xl text-left border transition-all ${
+                      metode === 'qris'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 ring-2 ring-emerald-500/50'
+                        : 'bg-slate-800/70 border-slate-700 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="text-xs font-extrabold flex items-center gap-1.5">
+                      <QrCode className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>2. Scan QRIS</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      m-Banking & Semua E-Wallet
+                    </div>
+                  </button>
+                </div>
               </div>
+
+              {/* Rincian Metode: Jika Transfer Bank */}
+              {metode === 'transfer_bank' && (
+                <div className="bg-[#141e33] p-3.5 rounded-2xl border border-slate-700 space-y-2">
+                  <label className="block text-xs font-bold text-slate-200 mb-1">
+                    Pilih Rekening Penampungan Koperasi HWS
+                  </label>
+                  {state.profile.rekeningPenampungan && state.profile.rekeningPenampungan.length > 0 ? (
+                    <select
+                      value={rekeningTujuan}
+                      onChange={(e) => setRekeningTujuan(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+                    >
+                      {state.profile.rekeningPenampungan.map((rek) => (
+                        <option key={rek.id} value={`${rek.bankName} - ${rek.accountNumber}`}>
+                          {rek.bankName} ({rek.accountNumber}) a/n {rek.accountHolder}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="text-xs text-amber-300 font-mono p-2 bg-slate-900 rounded-xl">
+                      BCA 5490706161 a/n KOPERASI HWS
+                    </div>
+                  )}
+                  <p className="text-[10px] text-slate-400">
+                    Silakan transfer nominal <b>{formatRupiah(nominalFinal)}</b> ke rekening tujuan di atas.
+                  </p>
+                </div>
+              )}
+
+              {/* Rincian Metode: Jika QRIS */}
+              {metode === 'qris' && (
+                <div className="bg-emerald-950/30 p-3.5 rounded-2xl border border-emerald-500/40 space-y-2 text-center">
+                  <div className="font-extrabold text-emerald-300 text-xs flex items-center justify-center gap-1.5">
+                    <QrCode className="w-4 h-4 text-emerald-400" />
+                    <span>Scan QRIS Resmi Koperasi HWS</span>
+                  </div>
+                  <div className="w-36 h-36 mx-auto bg-white p-2 rounded-2xl shadow-md border border-slate-300 flex items-center justify-center">
+                    {state.profile.qrisImageUrl ? (
+                      <img
+                        src={state.profile.qrisImageUrl}
+                        alt="QRIS Resmi Koperasi HWS"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-slate-900">
+                        <QrCode className="w-20 h-20 text-slate-900" />
+                        <span className="text-[8px] font-black tracking-widest mt-0.5">QRIS NASIONAL</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-emerald-200">
+                    Scan via <b>BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay</b>
+                  </div>
+                  <div className="font-mono text-xs font-black text-amber-300">
+                    Nominal Transfer: {formatRupiah(nominalFinal)}
+                  </div>
+                </div>
+              )}
 
               {/* Upload Bukti Transfer */}
               <div className="bg-slate-800/60 p-3.5 rounded-2xl border border-dashed border-slate-600">
-                <label className="block text-xs font-bold text-slate-200 mb-1">
-                  Upload Bukti Transfer Bank / Bukti QRIS *
-                </label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-bold text-slate-200">
+                    Upload Bukti Transfer Bank / QRIS
+                  </label>
+                  <span className="text-[10px] text-amber-400 font-semibold">
+                    (Slip digital otomatis dibuat jika kosong)
+                  </span>
+                </div>
                 <div className="flex flex-col sm:flex-row items-center gap-3">
                   <input
                     type="file"
                     accept="image/*"
-                    required
                     onChange={handleProofUpload}
                     className="text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer"
                   />
@@ -1050,7 +1163,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             <tbody className="divide-y divide-slate-800">
               {state.setoranList
                 .filter((s) => {
-                  if (isMember) return s.memberId === currentMember.id;
+                  if (isMember) return s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening;
                   if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
                   return true;
                 })

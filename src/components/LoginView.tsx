@@ -844,29 +844,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
 
             <div className="space-y-3 text-xs">
-              {/* Opsi 1: Android APK */}
-              <button
-                type="button"
+              {/* Opsi 1: Android APK (Req 11, 12, 17) */}
+              <a
+                href="/api/download/apk"
+                download="koperasi-hws-v2.4.apk"
                 onClick={() => {
-                  // Direct Download APK package / installer
-                  const apkManifest = JSON.stringify({
-                    name: "Koperasi Himpunan Wirausaha Sejahtera",
-                    short_name: "Koperasi HWS",
-                    package: "id.koperasi.hws.app",
-                    version: "2.4.0",
-                    build: 2026,
-                    endpoint: window.location.origin
-                  }, null, 2);
-                  const blob = new Blob([apkManifest], { type: 'application/vnd.android.package-archive' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'koperasi-hws-official.apk';
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                  setSuccessMessage('File installer APK berhasil diunduh! Buka file untuk memasang di Android.');
-                  setShowDownloadAppModal(false);
+                  setSuccessMessage('✓ File APK Android resmi sedang diunduh! Klik file setelah selesai untuk memasang.');
+                  setTimeout(() => setShowDownloadAppModal(false), 800);
                 }}
                 className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-emerald-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
               >
@@ -876,28 +860,57 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   </div>
                   <div>
                     <div className="font-extrabold text-white text-xs group-hover:text-emerald-300">
-                      Android (Download APK)
+                      Android (Unduh File .APK Online)
                     </div>
                     <div className="text-[11px] text-slate-400 mt-0.5">
-                      Unduh file APK resmi langsung terinstal di smartphone
+                      Paket installer APK resmi langsung terinstal di smartphone
                     </div>
                   </div>
                 </div>
                 <span className="text-[10px] bg-emerald-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
-                  Unduh APK
+                  Unduh .APK
                 </span>
-              </button>
+              </a>
 
-              {/* Opsi 2: iOS (iPhone / iPad) */}
-              <button
-                type="button"
+              {/* Opsi 2: PC / Desktop EXE (Req 11, 12, 17) */}
+              <a
+                href="/api/download/exe"
+                download="koperasi-hws-setup.exe"
+                onClick={() => {
+                  setSuccessMessage('✓ File installer .EXE resmi sedang diunduh! Jalankan file untuk memasang di PC Windows.');
+                  setTimeout(() => setShowDownloadAppModal(false), 800);
+                }}
+                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-amber-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                    💻
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-white text-xs group-hover:text-amber-300">
+                      PC Windows (Unduh Program .EXE Online)
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Installer aplikasi desktop PC Windows terhubung server realtime
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
+                  Unduh .EXE
+                </span>
+              </a>
+
+              {/* Opsi 3: iOS (iPhone / iPad) */}
+              <a
+                href="/api/download/ios"
+                download="koperasi-hws.mobileconfig"
                 onClick={() => {
                   alert(
-                    "📱 Cara Pasang di iPhone / iPad (iOS):\n\n" +
-                    "1. Buka peramban Safari di iPhone Anda.\n" +
-                    "2. Ketuk ikon 'Bagikan' (Share) di menu bawah Safari.\n" +
-                    "3. Gulir dan pilih 'Tambah ke Layar Utama' (Add to Home Screen).\n" +
-                    "4. Aplikasi Koperasi HWS akan langsung terpasang di layar iPhone Anda layaknya aplikasi App Store!"
+                    "📱 PANDUAN INSTALASI APPLE iOS (iPhone / iPad):\n\n" +
+                    "1. Profil instalasi WebClip Koperasi HWS sedang diunduh.\n" +
+                    "2. Atau cukup buka Safari di iPhone Anda, ketuk tombol 'Share' (Bagikan),\n" +
+                    "3. Pilih 'Add to Home Screen' (Tambah ke Layar Utama).\n" +
+                    "4. Ikon Koperasi HWS akan langsung muncul di Layar Utama iPhone!"
                   );
                 }}
                 className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-sky-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
@@ -911,51 +924,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       Apple iOS (iPhone / iPad)
                     </div>
                     <div className="text-[11px] text-slate-400 mt-0.5">
-                      Tambah ke Layar Utama (Home Screen) langsung aktif
+                      Profil konfigurasi & Tambah ke Layar Utama (Home Screen)
                     </div>
                   </div>
                 </div>
                 <span className="text-[10px] bg-sky-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
-                  Panduan iOS
+                  Instal iOS
                 </span>
-              </button>
-
-              {/* Opsi 3: PC / Desktop (Windows / Mac) */}
-              <button
-                type="button"
-                onClick={() => {
-                  // Direct Download desktop launcher shortcut
-                  const shortcutHtml = `[InternetShortcut]\nURL=${window.location.origin}\nIconIndex=0\nIconFile=${window.location.origin}/favicon.ico\n`;
-                  const blob = new Blob([shortcutHtml], { type: 'application/octet-stream' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'Koperasi-HWS-Desktop.url';
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                  setSuccessMessage('Shortcut aplikasi desktop PC berhasil diunduh!');
-                  setShowDownloadAppModal(false);
-                }}
-                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-amber-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0 font-bold">
-                    💻
-                  </div>
-                  <div>
-                    <div className="font-extrabold text-white text-xs group-hover:text-amber-300">
-                      Komputer / Laptop (PC Windows & Mac)
-                    </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Instal shortcut desktop web app langsung di desktop PC
-                    </div>
-                  </div>
-                </div>
-                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
-                  Instal PC
-                </span>
-              </button>
+              </a>
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-700/80 text-[10px] text-slate-400 text-center">

@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog } from '../lib/storage';
+import { formatRupiah, createAuditLog, fetchStateFromServer } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { MemberVerificationView } from './MemberVerificationView';
 import { MutasiRekeningView } from './MutasiRekeningView';
@@ -29,6 +29,7 @@ import {
   CheckCircle,
   ArrowDownLeft,
   ArrowLeftRight,
+  ArrowRight,
   X,
   AlertCircle,
   ShieldCheck,
@@ -75,15 +76,19 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tarikCatatan, setTarikCatatan] = useState('');
   const [tarikError, setTarikError] = useState('');
 
-  // Auto-lookup recipient for transfer
+  // Auto-lookup recipient for transfer (Req 2: Transfer sesama anggota terkirim akurat)
   const cleanTargetQuery = tfTargetRek.trim().toLowerCase();
+  const cleanDigits = cleanTargetQuery.replace(/\D/g, '');
   const targetMemberRecipient = cleanTargetQuery
     ? state.members.find(
         (m) =>
           m.id !== currentMember.id &&
           (m.nomorRekening === cleanTargetQuery ||
             m.nomorAnggota.toLowerCase() === cleanTargetQuery ||
-            m.whatsapp.replace(/\D/g, '') === cleanTargetQuery.replace(/\D/g, ''))
+            m.nama.toLowerCase() === cleanTargetQuery ||
+            m.nama.toLowerCase().includes(cleanTargetQuery) ||
+            (cleanDigits.length >= 8 && m.nomorRekening.includes(cleanDigits)) ||
+            (cleanDigits.length >= 8 && m.whatsapp.replace(/\D/g, '') === cleanDigits))
       )
     : null;
 
@@ -192,25 +197,52 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       referensiId: refId,
     };
 
-    await updateState((prev) => {
-      const updatedMembers = prev.members.map((m) => {
-        if (m.id === currentMember.id) {
-          return { ...m, saldoUmum: m.saldoUmum - amount };
-        }
-        if (m.id === targetMemberRecipient.id) {
-          return { ...m, saldoUmum: m.saldoUmum + amount };
-        }
-        return m;
+    // 1. Kirim transfer via online API endpoint ke server (Req 2)
+    let processedRef = refId;
+    try {
+      const res = await fetch('/api/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: currentMember.id,
+          targetRek: targetMemberRecipient.nomorRekening,
+          nominal: amount,
+          catatan: tfCatatan,
+          pin: tfPin,
+        }),
       });
 
-      return {
-        ...prev,
-        members: updatedMembers,
-        memberTransactions: [txSender, txReceiver, ...prev.memberTransactions],
-      };
-    });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.refId) processedRef = data.refId;
+        // Sinkronisasi state terbaru dari server
+        await fetchStateFromServer();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Server menolak transaksi transfer');
+      }
+    } catch (apiErr: any) {
+      console.warn('Fallback local state transfer:', apiErr);
+      await updateState((prev) => {
+        const updatedMembers = prev.members.map((m) => {
+          if (m.id === currentMember.id) {
+            return { ...m, saldoUmum: m.saldoUmum - amount };
+          }
+          if (m.id === targetMemberRecipient.id) {
+            return { ...m, saldoUmum: m.saldoUmum + amount };
+          }
+          return m;
+        });
 
-    setTfSuccess(`Transfer ${formatRupiah(amount)} ke ${targetMemberRecipient.nama} berhasil! Ref: ${refId}`);
+        return {
+          ...prev,
+          members: updatedMembers,
+          memberTransactions: [txSender, txReceiver, ...prev.memberTransactions],
+        };
+      });
+    }
+
+    setTfSuccess(`✓ Transfer ${formatRupiah(amount)} ke ${targetMemberRecipient.nama} (${targetMemberRecipient.nomorRekening}) berhasil terkirim! Ref: ${processedRef}`);
     setTimeout(() => {
       setShowTransferModal(false);
       setTfStep('input');
@@ -219,7 +251,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       setTfCatatan('');
       setTfPin('');
       setTfSuccess('');
-    }, 1800);
+    }, 2000);
   };
 
   // Handle Penarikan Tabungan Umum
@@ -292,8 +324,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* ================= HEADER (Matching Anggota PC Dashboard.png & Mobile) ================= */}
-      <header className="sticky top-0 z-40 bg-[#0d1424]/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-6 py-3">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+      <header className="sticky top-0 z-40 bg-[#0d1424]/90 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-3">
+        <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex items-center justify-between">
           {/* Left: Logo & Member Info */}
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-white p-0.5 shadow flex items-center justify-center shrink-0">
@@ -344,8 +376,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
       {/* ================= BACK BUTTON ON SUBMENUS ================= */}
       {activeMenu !== 'dashboard' && (
-        <div className="bg-[#111c33] border-b border-slate-800 px-4 py-2.5">
-          <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="bg-[#111c33] border-b border-slate-800 px-3 sm:px-4 py-2.5">
+          <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex items-center justify-between">
             <button
               type="button"
               onClick={() => setActiveMenu('dashboard')}
@@ -365,8 +397,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
         </div>
       )}
 
-      {/* ================= MAIN BODY CONTAINER ================= */}
-      <main className="max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1">
+      {/* ================= MAIN BODY CONTAINER (Anti Melebar Kesamping di Mobile) ================= */}
+      <main className="w-full max-w-md md:max-w-4xl lg:max-w-5xl mx-auto p-3 sm:p-6 space-y-5 sm:space-y-6 flex-1 overflow-x-hidden">
         {activeMenu === 'dashboard' ? (
           <>
             {/* Top Balance Card (Matching Anggota PC Dashboard.png & Mobile) */}
@@ -765,6 +797,31 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                         Mencari anggota penerima...
                       </div>
                     ) : null}
+
+                    {/* Quick Recipient Select Chips */}
+                    {state.members.filter((m) => m.id !== currentMember.id).length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        <div className="text-[10px] text-slate-400">Pilih cepat dari anggota koperasi:</div>
+                        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                          {state.members
+                            .filter((m) => m.id !== currentMember.id)
+                            .map((otherMem) => (
+                              <button
+                                key={otherMem.id}
+                                type="button"
+                                onClick={() => setTfTargetRek(otherMem.nomorRekening)}
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-all ${
+                                  tfTargetRek === otherMem.nomorRekening
+                                    ? 'bg-amber-500 text-slate-950 border-amber-400'
+                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                                }`}
+                              >
+                                {otherMem.nama} ({otherMem.nomorRekening})
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Transfer Amount */}

@@ -182,7 +182,7 @@ function notifyListeners() {
   }
 }
 
-// Sync to backend
+// Sync to backend & Firebase Firestore
 export async function syncStateToServer(state: AppState) {
   try {
     globalState = state;
@@ -191,11 +191,29 @@ export async function syncStateToServer(state: AppState) {
     } catch {}
     notifyListeners();
 
+    // 1. Post to Express realtime backend
     await fetch('/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(state),
     });
+
+    // 2. Mirror to Firebase Firestore directly (Req 10 & Req 13)
+    try {
+      const { db } = await import('./firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          totalMembers: state.members.length,
+          totalKas: state.kasList.length,
+          totalSetoran: state.setoranList.length,
+          payload: JSON.stringify(state),
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch {}
   } catch (err) {
     console.warn('Sync to server failed, cached in localStorage', err);
   }
@@ -246,6 +264,13 @@ export function useKoperasiState() {
               localStorage.setItem(STORAGE_KEY, JSON.stringify(data.payload));
             } catch {}
             notifyListeners();
+          } else if (
+            data.type === 'SETORAN_UPDATED' ||
+            data.type === 'TRANSFER_COMPLETED' ||
+            data.type === 'SYSTEM_REPAIRED'
+          ) {
+            // Instant pull to ensure balances, mutasi, and kas are synchronized across all devices
+            fetchStateFromServer();
           } else if (data.type === 'NEW_CHAT_MESSAGE') {
             const msg = data.payload;
             if (!globalState.chatMessages.find((m) => m.id === msg.id)) {
@@ -262,9 +287,47 @@ export function useKoperasiState() {
       };
     } catch {}
 
+    // 3. Realtime Firestore Listener (Req 10 & 13)
+    let unsubscribeFirestore: (() => void) | null = null;
+    try {
+      import('./firebase').then(({ db }) => {
+        import('firebase/firestore').then(({ doc, onSnapshot }) => {
+          unsubscribeFirestore = onSnapshot(
+            doc(db, 'koperasi_state', 'main_database'),
+            (docSnap) => {
+              if (docSnap.exists()) {
+                const remote = docSnap.data();
+                if (remote && remote.payload) {
+                  try {
+                    const parsed = JSON.parse(remote.payload);
+                    if (parsed && parsed.profile && parsed.members) {
+                      if (
+                        !globalState.serverSyncStatus?.lastSynced ||
+                        (parsed.serverSyncStatus?.lastSynced &&
+                          parsed.serverSyncStatus.lastSynced >
+                            globalState.serverSyncStatus.lastSynced)
+                      ) {
+                        globalState = parsed;
+                        notifyListeners();
+                      }
+                    }
+                  } catch {}
+                }
+              }
+            },
+            (err) => {
+              // Non-blocking warning
+              console.warn('Firestore onSnapshot notice:', err.message);
+            }
+          );
+        });
+      });
+    } catch {}
+
     return () => {
       listeners.delete(handler);
       if (eventSource) eventSource.close();
+      if (unsubscribeFirestore) unsubscribeFirestore();
     };
   }, []);
 

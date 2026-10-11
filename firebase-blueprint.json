@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "koperasi_state": {
+      "title": "Koperasi State",
+      "description": "Full cooperative data state synchronized with Firebase Firestore",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "payload": { "type": "string" },
+        "lastSynced": { "type": "string" }
+      },
+      "required": ["id", "payload", "lastSynced"]
+    },
+    "members": {
+      "title": "Anggota Koperasi",
+      "description": "Data anggota koperasi dan saldo rekening simpanan",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nomorAnggota": { "type": "string" },
+        "nomorRekening": { "type": "string" },
+        "nama": { "type": "string" },
+        "saldoPokok": { "type": "number" },
+        "saldoUmum": { "type": "number" }
+      },
+      "required": ["id", "nomorAnggota", "nama"]
+    },
+    "setoran": {
+      "title": "Setoran Verifikasi",
+      "description": "Antrean pengajuan dan verifikasi setoran online",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "memberId": { "type": "string" },
+        "nominal": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "memberId", "nominal", "status"]
+    },
+    "chats": {
+      "title": "Pesan Chat Realtime",
+      "description": "Pesan komunikasi anggota dan admin koperasi",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "memberId": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "memberId", "text", "timestamp"]
+    }
+  },
+  "firestore": {
+    "koperasi_state": {
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "members": {
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "setoran": {
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    },
+    "chats": {
+      "rules": {
+        "read": "true",
+        "write": "true"
+      }
+    }
+  }
+}

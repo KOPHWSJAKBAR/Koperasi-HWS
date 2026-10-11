@@ -600,19 +600,32 @@ export function printTandaTerimaKas(entry: KasEntry, profile: any) {
   const namaPihak = entry.namaPenerima || (isMasuk ? 'Penyetor / Anggota' : 'Penerima Kas');
 
   const html = `
-    <div class="watermark-container">
-      <!-- Watermark Logo Resmi Koperasi HWS -->
-      <svg class="watermark-bg" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <div class="watermark-container" style="position: relative; min-height: 100%;">
+      <!-- Repeating Watermark Grid Pattern (Req 1) -->
+      <div style="position: absolute; inset: 0; pointer-events: none; opacity: 0.08; display: grid; grid-template-columns: repeat(3, 1fr); gap: 80px 40px; align-items: center; justify-items: center; z-index: 1; overflow: hidden;">
+        ${Array.from({ length: 15 })
+          .map(
+            () => `
+          <div style="text-align: center; font-weight: 900; font-size: 15px; transform: rotate(-25deg); color: #000; letter-spacing: 2px;">
+            KOPERASI HWS • RESMI & SAH
+          </div>
+        `
+          )
+          .join('')}
+      </div>
+
+      <!-- Watermark Logo Besar di Tengah -->
+      <svg class="watermark-bg" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" style="position: absolute; top: 46%; left: 50%; transform: translate(-50%, -50%); opacity: 0.12; width: 380px; height: 380px; pointer-events: none; z-index: 2;">
         <circle cx="100" cy="100" r="98" fill="#FEE024" stroke="#000000" stroke-width="2" />
         <rect x="42" y="58" width="18" height="30" fill="#2E9E44" />
         <path d="M30 96 L100 28 L170 96 L154 96 L100 44 L46 96 Z" fill="#D62828" />
         <polygon points="100,54 124,68 124,106 100,120 76,106 76,68" fill="#007ACC" />
       </svg>
-      <div class="watermark-security-stamp">
-        BUKTI SAH KAS KOPERASI HWS • DIVERIFIKASI SISTEM
+      <div class="watermark-security-stamp" style="position: absolute; top: 48%; left: 50%; transform: translate(-50%, -50%) rotate(-25deg); border: 3px dashed rgba(180, 83, 9, 0.28); padding: 12px 30px; border-radius: 12px; font-size: 18px; font-weight: 900; letter-spacing: 3px; color: rgba(180, 83, 9, 0.25); text-transform: uppercase; pointer-events: none; z-index: 3; white-space: nowrap;">
+        WATERMARK RESMI KOPERASI HWS • DIVERIFIKASI SAH
       </div>
 
-      <div class="content-layer">
+      <div class="content-layer" style="position: relative; z-index: 10;">
         <!-- Header Kuitansi -->
         <div style="border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: flex-start;">
           <div>

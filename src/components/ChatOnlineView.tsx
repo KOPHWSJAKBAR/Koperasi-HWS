@@ -6,6 +6,7 @@ import {
   ChatMessage,
 } from '../types';
 import { downloadExcelCsv } from '../lib/exportPdf';
+import { fetchStateFromServer } from '../lib/storage';
 import {
   MessageSquare,
   Send,
@@ -18,6 +19,7 @@ import {
   Video,
   Smile,
   Paperclip,
+  Wifi,
 } from 'lucide-react';
 
 interface ChatOnlineViewProps {
@@ -39,6 +41,14 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   );
   const [inputPesan, setInputPesan] = useState('');
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Realtime Polling Fallback (ensures live chat across all devices & mobile)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchStateFromServer();
+    }, 2500);
+    return () => clearInterval(interval);
+  }, []);
 
   // Group messages by member
   // Sort members for admin: requirement "tampilkan chat diatas pada orang terakhir pesan masuk pada chat pilihan menu chat pada admin seperti pada whatsaap aplikasi"
