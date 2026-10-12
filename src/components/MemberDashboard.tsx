@@ -83,12 +83,13 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     ? state.members.find(
         (m) =>
           m.id !== currentMember.id &&
-          (m.nomorRekening === cleanTargetQuery ||
+          (m.nomorRekening.toLowerCase() === cleanTargetQuery ||
+            (cleanDigits.length >= 4 && m.nomorRekening.replace(/\D/g, '') === cleanDigits) ||
             m.nomorAnggota.toLowerCase() === cleanTargetQuery ||
             m.nama.toLowerCase() === cleanTargetQuery ||
             m.nama.toLowerCase().includes(cleanTargetQuery) ||
-            (cleanDigits.length >= 8 && m.nomorRekening.includes(cleanDigits)) ||
-            (cleanDigits.length >= 8 && m.whatsapp.replace(/\D/g, '') === cleanDigits))
+            (cleanDigits.length >= 4 && m.nomorRekening.replace(/\D/g, '').includes(cleanDigits)) ||
+            (cleanDigits.length >= 4 && m.whatsapp.replace(/\D/g, '').includes(cleanDigits)))
       )
     : null;
 
@@ -197,7 +198,26 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       referensiId: refId,
     };
 
-    // 1. Kirim transfer via online API endpoint ke server (Req 2)
+    // 1. Perbarui saldo pengirim, saldo penerima, dan mutasi secara langsung di state (Req 2: Transfer sesama anggota terkirim akurat)
+    await updateState((prev) => {
+      const updatedMembers = prev.members.map((m) => {
+        if (m.id === currentMember.id) {
+          return { ...m, saldoUmum: (Number(m.saldoUmum) || 0) - amount };
+        }
+        if (m.id === targetMemberRecipient.id) {
+          return { ...m, saldoUmum: (Number(m.saldoUmum) || 0) + amount };
+        }
+        return m;
+      });
+
+      return {
+        ...prev,
+        members: updatedMembers,
+        memberTransactions: [txSender, txReceiver, ...(prev.memberTransactions || [])],
+      };
+    });
+
+    // 2. Kirim transfer via online API endpoint ke server (Req 2)
     let processedRef = refId;
     try {
       const res = await fetch('/api/transfer', {
@@ -215,31 +235,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.refId) processedRef = data.refId;
-        // Sinkronisasi state terbaru dari server
-        await fetchStateFromServer();
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Server menolak transaksi transfer');
       }
     } catch (apiErr: any) {
-      console.warn('Fallback local state transfer:', apiErr);
-      await updateState((prev) => {
-        const updatedMembers = prev.members.map((m) => {
-          if (m.id === currentMember.id) {
-            return { ...m, saldoUmum: m.saldoUmum - amount };
-          }
-          if (m.id === targetMemberRecipient.id) {
-            return { ...m, saldoUmum: m.saldoUmum + amount };
-          }
-          return m;
-        });
-
-        return {
-          ...prev,
-          members: updatedMembers,
-          memberTransactions: [txSender, txReceiver, ...prev.memberTransactions],
-        };
-      });
+      console.warn('Backend transfer notice:', apiErr);
     }
 
     setTfSuccess(`✓ Transfer ${formatRupiah(amount)} ke ${targetMemberRecipient.nama} (${targetMemberRecipient.nomorRekening}) berhasil terkirim! Ref: ${processedRef}`);

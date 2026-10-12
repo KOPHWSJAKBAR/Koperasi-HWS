@@ -63,13 +63,23 @@ export default function App() {
       ? state.admins.find((a) => a.id === activeSession.id) || state.admins[0]
       : null;
 
-  // Request browser notification permission once for mobile & PC notification requirement
+  // Capture PWA install prompt and notification permission
   useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      (window as any).deferredPrompt = e;
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
     if ('Notification' in window && Notification.permission === 'default') {
       try {
         Notification.requestPermission();
       } catch {}
     }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
   }, []);
 
   if (currentMember) {

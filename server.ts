@@ -287,7 +287,8 @@ async function startServer() {
     }
     currentState = newState;
     saveDatabase(currentState);
-    res.json({ success: true, timestamp: currentState.serverSyncStatus.lastSynced });
+    broadcastEvent('STATE_UPDATED', currentState);
+    res.json({ success: true, timestamp: currentState.serverSyncStatus?.lastSynced || new Date().toISOString() });
   });
 
   // Send Chat message
@@ -529,6 +530,20 @@ async function startServer() {
         targetId: dep.id,
       });
 
+      if (isApproved && targetMember) {
+        currentState.members = (currentState.members || []).map((m: any) =>
+          m.id === targetMember.id
+            ? {
+                ...m,
+                saldoPokok: targetMember.saldoPokok,
+                saldoZakatFitrah: targetMember.saldoZakatFitrah,
+                saldoQurban: targetMember.saldoQurban,
+                saldoUmum: targetMember.saldoUmum,
+              }
+            : m
+        );
+      }
+
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
       broadcastEvent('SETORAN_UPDATED', { action: 'verify', deposit: dep });
@@ -536,7 +551,8 @@ async function startServer() {
         success: true,
         message: `Setoran a/n ${targetMember.nama} berhasil di-${isApproved ? 'setujui' : 'tolak'} secara online realtime!`,
         deposit: dep,
-        member: targetMember
+        member: targetMember,
+        state: currentState
       });
     } catch (err: any) {
       console.error('Error in /api/setoran/verify:', err);
@@ -1064,7 +1080,15 @@ async function startServer() {
     res.send(Buffer.from(mobileConfig, 'utf-8'));
   });
 
-  // Download PC Desktop Installer (Windows .bat launcher / macOS shortcut)
+  // Download PC Desktop Shortcut (.url - Buka Langsung Tanpa Install)
+  app.get('/api/download/pc-shortcut', (req: Request, res: Response) => {
+    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    res.setHeader('Content-Disposition', 'attachment; filename="Koperasi-HWS.url"');
+    res.setHeader('Content-Type', 'application/internet-shortcut');
+    res.send(`[InternetShortcut]\nURL=${hostUrl}\nIconIndex=0\n`);
+  });
+
+  // Download PC Desktop Installer (Windows .bat launcher / PowerShell desktop shortcut)
   app.get('/api/download/pc-installer', (req: Request, res: Response) => {
     const hostUrl = `${req.protocol}://${req.get('host')}`;
     res.setHeader('Content-Disposition', 'attachment; filename="Install-Koperasi-HWS.bat"');
@@ -1125,7 +1149,10 @@ exit
     });
   } else {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

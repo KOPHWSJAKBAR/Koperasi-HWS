@@ -69,6 +69,7 @@ export interface KoperasiProfile {
 
 export type AdminRole = 
   | 'super_admin'       // Akses penuh, kelola admin, hapus anggota, approval kas, lihat audit log
+  | 'sekretaris'        // Sekretaris / Super Admin Koperasi
   | 'admin_kelola'      // Admin kelola: tidak bisa masuk ke server, tidak bisa tambah admin, bisa approval
   | 'admin_pembukuan'   // Alias kompatibilitas untuk admin_kelola
   | 'admin_write'       // Admin write: input dan download laporan, semua inputan perlu approval super admin dan admin kelola. Verifikasi setoran.

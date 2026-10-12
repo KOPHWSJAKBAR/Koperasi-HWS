@@ -70,6 +70,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [previewBukti, setPreviewBukti] = useState<string | null>(null);
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   // Calculations for setoran kewajiban
   const nominalKewajiban = (jumlahHari || 1) * state.profile.biayaWajibHarian; // 2.000 / hari
@@ -270,12 +271,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   // ADMIN: Approve Deposit (Online Realtime Server Sync - ANTI-DUPLIKASI Req 4)
   const handleApproveDeposit = async (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
+    if (approvingId) return; // Mencegah double click secara bersamaan
 
     if (dep.status === 'disetujui') {
       alert(`Setoran a/n ${dep.memberNama} sudah disetujui sebelumnya.`);
       return;
     }
 
+    setApprovingId(dep.id);
     const now = new Date();
     const tgl = now.toISOString().split('T')[0];
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
@@ -296,11 +299,20 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
       if (res.ok) {
         verifySuccess = true;
-        // Ambil state terkini yang sudah diperbarui server
-        await fetchStateFromServer();
+        const data = await res.json();
+        if (data.state) {
+          await updateState(() => data.state);
+        } else {
+          await fetchStateFromServer();
+        }
+        alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui! Saldo tepat terupdate 1 kali.`);
+        setApprovingId(null);
+        return;
       }
     } catch (e) {
       console.warn('Backend verify call offline fallback:', e);
+    } finally {
+      setApprovingId(null);
     }
 
     // 2. Hanya jika server offline, lakukan pembaruan lokal satu kali (mencegah double)
@@ -1229,10 +1241,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                           <div className="flex justify-end gap-1.5">
                             <button
                               type="button"
+                              disabled={approvingId === dep.id}
                               onClick={() => handleApproveDeposit(dep)}
-                              className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-bold shadow transition-all"
+                              className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1"
                             >
-                              ✓ Setujui
+                              {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
                             </button>
                             <button
                               type="button"

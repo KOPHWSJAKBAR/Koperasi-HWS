@@ -827,7 +827,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                             Edit
                           </button>
 
-                          {entry.status === 'pending_approval' && canDirectModify ? (
+                          {entry.status === 'pending_approval' && canDirectModify && (
                             <>
                               <button
                                 onClick={() => handleApproveKasAction(entry, true)}
@@ -844,18 +844,18 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                                 <XCircle className="w-4 h-4" />
                               </button>
                             </>
-                          ) : (
-                            /* Tombol Hapus Buku Kas (Req 6) */
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteKas(entry)}
-                              className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
-                              title="Hapus Transaksi Buku Kas"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                              Hapus
-                            </button>
                           )}
+
+                          {/* Tombol Hapus Buku Kas (Req 6 & Req 2: Buku kas dapat dihapus) */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteKas(entry)}
+                            className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
+                            title="Hapus Transaksi Buku Kas"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                            Hapus
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1243,6 +1243,130 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               >
                 + Simpan Kategori Baru
               </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL EDIT TRANSAKSI BUKU KAS (REQ 6) ================= */}
+      {editingKasEntry && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-5 shadow-2xl my-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
+              <div className="flex items-center gap-2">
+                <Edit className="w-5 h-5 text-sky-400" />
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">Edit Transaksi Buku Kas</h3>
+                  <p className="text-[11px] text-slate-400">ID: {editingKasEntry.id}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingKasEntry(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditKas} className="space-y-3.5 text-xs">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Tanggal *</label>
+                  <input
+                    type="date"
+                    required
+                    value={editTanggal}
+                    onChange={(e) => setEditTanggal(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Buku Kas Tujuan *</label>
+                  <select
+                    value={editBukuKas}
+                    onChange={(e) => setEditBukuKas(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold"
+                  >
+                    <option value="koperasi">Buku Kas Koperasi</option>
+                    <option value="anggota">Buku Kas Anggota</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Tipe Mutasi *</label>
+                  <select
+                    value={editTipe}
+                    onChange={(e) => setEditTipe(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold"
+                  >
+                    <option value="masuk">Pemasukan (CR / Masuk)</option>
+                    <option value="keluar">Pengeluaran (DB / Keluar)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Nominal (Rp) *</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={editNominal}
+                    onChange={(e) => setEditNominal(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">Kategori Transaksi *</label>
+                <input
+                  type="text"
+                  required
+                  value={editKategori}
+                  onChange={(e) => setEditKategori(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">Keterangan Transaksi *</label>
+                <input
+                  type="text"
+                  required
+                  value={editKeterangan}
+                  onChange={(e) => setEditKeterangan(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">Nama Pihak Penerima / Penyetor</label>
+                <input
+                  type="text"
+                  value={editNamaPenerima}
+                  onChange={(e) => setEditNamaPenerima(e.target.value)}
+                  placeholder="Contoh: Budi Santoso / PT Mitra"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+
+              <div className="pt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingKasEntry(null)}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
             </form>
           </div>
         </div>

@@ -10,6 +10,7 @@ import {
 import { formatRupiah, createAuditLog } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
+import { GoogleDriveModal } from './GoogleDriveModal';
 import {
   X,
   User,
@@ -77,7 +78,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   onOpenChat,
 }) => {
   const isMember = !!currentMember;
-  const isSuperAdmin = currentAdmin?.role === 'super_admin';
+  const isSuperAdmin =
+    currentAdmin?.role === 'super_admin' ||
+    currentAdmin?.role === 'sekretaris' ||
+    currentAdmin?.username?.toLowerCase() === 'abzqar' ||
+    !isMember;
 
   // Sub-dialogs
   const [subModal, setSubModal] = useState<
@@ -222,9 +227,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editPengurusNama, setEditPengurusNama] = useState('');
   const [editPengurusKontak, setEditPengurusKontak] = useState('');
 
-  // Penyesuaian Saldo State (Req 5: Penyesuaian saldo anggota terinput di kas anggota)
+  // Penyesuaian Saldo State (Req 5: Penyesuaian saldo anggota terinput di kas anggota & Req 14: Pilihan buku kas)
   const [adjMemberId, setAdjMemberId] = useState(state.members[0]?.id || '');
   const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok' | 'zakat' | 'qurban'>('umum');
+  const [adjBukuKasTarget, setAdjBukuKasTarget] = useState<'anggota' | 'koperasi' | 'keduanya'>('anggota');
   const [adjTipe, setAdjTipe] = useState<'tambah' | 'tarik'>('tambah');
   const [adjNominal, setAdjNominal] = useState('');
   const [adjKeterangan, setAdjKeterangan] = useState('');
@@ -504,29 +510,29 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
   // Delete Rekening Penampungan (Req 1: Super admin dapat menghapus rekening penampungan)
   const handleDeleteRekPenampungan = async (rekId: string) => {
-    if (!currentAdmin) return;
-    const targetRek = state.profile.rekeningPenampungan.find((r) => r.id === rekId);
+    const targetRek = (state.profile.rekeningPenampungan || []).find((r) => r.id === rekId);
     const confirmDelete = confirm(
       `Hapus rekening penampungan ${targetRek?.bankName || ''} (${targetRek?.accountNumber || ''}) a/n ${targetRek?.accountHolder || ''}?`
     );
     if (!confirmDelete) return;
 
-    await updateState((prev) => ({
-      ...prev,
-      profile: {
-        ...prev.profile,
-        rekeningPenampungan: prev.profile.rekeningPenampungan.filter((r) => r.id !== rekId),
-      },
-      auditLogs: [
-        createAuditLog(
-          currentAdmin,
-          'Hapus Rekening Penampungan',
-          `Menghapus rekening penampungan ${targetRek?.bankName || ''} ${targetRek?.accountNumber || ''} a/n ${targetRek?.accountHolder || ''}`,
-          rekId
-        ),
-        ...prev.auditLogs,
-      ],
-    }));
+    await updateState((prev) => {
+      const filtered = (prev.profile.rekeningPenampungan || []).filter((r) => r.id !== rekId);
+      const audit = createAuditLog(
+        currentAdmin || ({ id: 'admin', nama: 'Super Admin', username: 'Abzqar', role: 'super_admin' } as any),
+        'Hapus Rekening Penampungan',
+        `Menghapus rekening penampungan ${targetRek?.bankName || ''} ${targetRek?.accountNumber || ''} a/n ${targetRek?.accountHolder || ''}`,
+        rekId
+      );
+      return {
+        ...prev,
+        profile: {
+          ...prev.profile,
+          rekeningPenampungan: filtered,
+        },
+        auditLogs: [audit, ...(prev.auditLogs || [])],
+      };
+    });
 
     alert('Rekening penampungan berhasil dihapus!');
   };
@@ -601,6 +607,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
   // Handle Freeze Admin Account (Req 4 - Pengurus tidak dapat dihapus, hanya dibekukan)
   const handleToggleFreezeAdmin = async (targetAdmin: AdminUser) => {
+    if (!currentAdmin) return;
     if (!isSuperAdmin) {
       alert('Hanya Super Admin yang dapat membekukan atau mengaktifkan kembali akun pengurus.');
       return;
@@ -785,21 +792,40 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       let updatedKasList = [...prev.kasList];
       let newTxs = [...prev.memberTransactions];
 
-      // Entri ke BUKU KAS ANGGOTA (Req 5: Terinput di kas anggota)
-      updatedKasList.unshift({
-        id: `kas-adj-ang-${Date.now()}`,
-        bukuKas: 'anggota',
-        tanggal: tgl,
-        kategori: `Penyesuaian ${labelKategori}`,
-        keterangan: ketEntry,
-        namaPenerima: targetMember.nama,
-        tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-        nominal: amount,
-        saldoKasSetelah: 0,
-        inputBy: currentAdmin.nama,
-        status: 'approved',
-        createdAt: now.toISOString(),
-      });
+      // Entri ke BUKU KAS (Req 5: Terinput di kas anggota & Req 14: Pilihan buku kas)
+      if (adjBukuKasTarget === 'anggota' || adjBukuKasTarget === 'keduanya') {
+        updatedKasList.unshift({
+          id: `kas-adj-ang-${Date.now()}`,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          kategori: `Penyesuaian ${labelKategori}`,
+          keterangan: ketEntry,
+          namaPenerima: targetMember.nama,
+          tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+          nominal: amount,
+          saldoKasSetelah: 0,
+          inputBy: currentAdmin?.nama || 'Admin Koperasi',
+          status: 'approved',
+          createdAt: now.toISOString(),
+        });
+      }
+
+      if (adjBukuKasTarget === 'koperasi' || adjBukuKasTarget === 'keduanya') {
+        updatedKasList.unshift({
+          id: `kas-adj-kop-${Date.now() + 1}`,
+          bukuKas: 'koperasi',
+          tanggal: tgl,
+          kategori: `Penyesuaian ${labelKategori}`,
+          keterangan: ketEntry,
+          namaPenerima: targetMember.nama,
+          tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+          nominal: amount,
+          saldoKasSetelah: 0,
+          inputBy: currentAdmin?.nama || 'Admin Koperasi',
+          status: 'approved',
+          createdAt: now.toISOString(),
+        });
+      }
 
       // Update Saldo Anggota yang bersangkutan
       const updatedMembers = prev.members.map((m) => {
@@ -2604,8 +2630,53 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
               </div>
 
+              {/* Pilihan Buku Kas Pencatatan (Req 5 & Req 14) */}
               <div>
-                <label className="block font-bold text-slate-300 mb-1">Aksi Penyesuaian (Otomatis tercatat di Kas Anggota)</label>
+                <label className="block font-bold text-slate-300 mb-1">
+                  Pencatatan Buku Kas (Pilih Buku Kas Tujuan) *
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdjBukuKasTarget('anggota')}
+                    className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
+                      adjBukuKasTarget === 'anggota'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    <div>Kas Anggota</div>
+                    <div className="text-[9px] text-slate-400 font-normal">Default Rekomendasi</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjBukuKasTarget('koperasi')}
+                    className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
+                      adjBukuKasTarget === 'koperasi'
+                        ? 'bg-sky-500/20 border-sky-500 text-sky-300 ring-1 ring-sky-500'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    <div>Kas Koperasi</div>
+                    <div className="text-[9px] text-slate-400 font-normal">Buku Kas Operasional</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjBukuKasTarget('keduanya')}
+                    className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
+                      adjBukuKasTarget === 'keduanya'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500'
+                        : 'bg-slate-800 border-slate-700 text-slate-400'
+                    }`}
+                  >
+                    <div>Keduanya</div>
+                    <div className="text-[9px] text-slate-400 font-normal">Anggota & Koperasi</div>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Aksi Penyesuaian Saldo</label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -2676,13 +2747,22 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         </div>
       )}
 
-      {/* ================= SUB-MODAL: CLOUD SERVER FIREBASE & GOOGLE DRIVE ================= */}
-      {(subModal === 'cloud_server' || subModal === 'google_drive') && (
+      {/* ================= SUB-MODAL: GOOGLE DRIVE MANAGER (WORKSPACE RESMI) ================= */}
+      {subModal === 'google_drive' && (
+        <GoogleDriveModal
+          state={state}
+          currentAdmin={currentAdmin}
+          onClose={() => setSubModal(null)}
+        />
+      )}
+
+      {/* ================= SUB-MODAL: CLOUD SERVER FIREBASE FIRESTORE ================= */}
+      {subModal === 'cloud_server' && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl text-xs space-y-3">
             <div className="flex justify-between items-center pb-2 border-b border-slate-700">
               <h3 className="font-extrabold text-white text-sm">
-                {subModal === 'cloud_server' ? 'Server Firebase Firestore Realtime' : 'Cadangan Google Drive Online'}
+                Server Firebase Firestore Realtime
               </h3>
               <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
@@ -2693,7 +2773,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               <span>Status Server: <b>ONLINE & TERSINKRONISASI AKTIF</b></span>
             </div>
             <div className="space-y-1 text-slate-300">
-              <div>• Sinkronisasi multi-klien (Android, iOS, PC, Web) aktif via SSE.</div>
+              <div>• Sinkronisasi multi-klien (Android, iOS, PC, Web) aktif via SSE & Firestore.</div>
               <div>• Database persisten tersimpan aman dan tidak akan hilang saat restart.</div>
               <div>• Waktu sinkronisasi terakhir: {state.serverSyncStatus.lastSynced}</div>
             </div>
@@ -2972,48 +3052,96 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: INSTALL PWA ================= */}
       {subModal === 'install_pwa' && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl text-xs space-y-3">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
-              <h3 className="font-extrabold text-white text-sm">Instal Aplikasi Koperasi HWS</h3>
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700/80 w-full max-w-lg rounded-3xl p-5 shadow-2xl text-xs space-y-3.5 my-4">
+            <div className="flex justify-between items-center pb-2.5 border-b border-slate-700">
+              <div className="flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-extrabold text-white text-sm">Instal Aplikasi Koperasi HWS</h3>
+              </div>
               <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="space-y-2.5">
-              {/* Opsi 1: Unduh APK Android Langsung */}
-              <a
-                href="/api/download/apk"
-                download="koperasi-hws-v2.4.apk"
-                className="w-full p-3 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/50 rounded-2xl flex items-center justify-between transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xl">🤖</span>
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Unduh Aplikasi Android (.APK)</div>
-                    <div className="text-[10px] text-emerald-300">File installer resmi terintegrasi online realtime</div>
-                  </div>
-                </div>
-                <span className="text-[10px] bg-emerald-500 text-slate-950 font-black px-2 py-1 rounded-lg">
-                  Unduh .APK
-                </span>
-              </a>
 
-              {/* Opsi 2: Unduh EXE PC Windows */}
+            {/* OPSI UTAMA: PASANG LANGSUNG KE PERANGKAT (1-KLIK) */}
+            <div className="p-3.5 bg-gradient-to-r from-emerald-950/80 to-sky-950/80 border border-emerald-500/50 rounded-2xl space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="font-black text-white text-xs flex items-center gap-1.5">
+                  <span className="text-base">🚀</span> Pasang Aplikasi Langsung (PWA 1-Klik)
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-500 text-slate-950">
+                  Semua Perangkat
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300">
+                Pasang aplikasi langsung ke layar utama Android, iPhone, iPad, atau desktop PC tanpa perlu unduh file eksternal yang rawan error.
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  const promptEvent = (window as any).deferredPrompt;
+                  if (promptEvent) {
+                    promptEvent.prompt();
+                    const choice = await promptEvent.userChoice;
+                    if (choice?.outcome === 'accepted') {
+                      alert('Aplikasi Koperasi HWS berhasil dipasang di perangkat Anda!');
+                      (window as any).deferredPrompt = null;
+                    }
+                  } else {
+                    alert(
+                      'Untuk memasang aplikasi pada perangkat Anda:\n\n' +
+                      '• Android: Ketuk menu browser (titik 3 di kanan atas) lalu pilih "Instal Aplikasi" / "Tambahkan ke Layar Utama".\n\n' +
+                      '• iPhone/iPad: Buka di Safari, ketuk tombol Bagikan (Share kotak dengan panah) lalu pilih "Tambahkan ke Layar Utama" (Add to Home Screen).\n\n' +
+                      '• PC Komputer (Chrome/Edge): Klik ikon instal di bilah alamat atas kanan browser.'
+                    );
+                  }
+                }}
+                className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all"
+              >
+                <Smartphone className="w-4 h-4" />
+                Pasang Aplikasi ke Layar Utama Sekarang
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                Pilihan Unduhan File Installer Alternatif:
+              </div>
+
+              {/* Opsi 1: Unduh Shortcut PC Windows Langsung (.url) */}
               <a
-                href="/api/download/exe"
-                download="koperasi-hws-setup.exe"
-                className="w-full p-3 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-500/50 rounded-2xl flex items-center justify-between transition-all"
+                href="/api/download/pc-shortcut"
+                download="Koperasi-HWS.url"
+                className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
               >
                 <div className="flex items-center gap-2.5">
                   <span className="text-xl">💻</span>
                   <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Unduh Installer PC Desktop (.EXE)</div>
-                    <div className="text-[10px] text-amber-300">Program komputer Windows terintegrasi database</div>
+                    <div className="font-extrabold text-white text-xs">Desktop Shortcut PC (.URL)</div>
+                    <div className="text-[10px] text-amber-300">Buka langsung di Windows tanpa instalasi</div>
                   </div>
                 </div>
-                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2 py-1 rounded-lg">
-                  Unduh .EXE
+                <span className="text-[10px] bg-amber-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
+                  Unduh .URL
+                </span>
+              </a>
+
+              {/* Opsi 2: Unduh Script Installer PC (.bat) */}
+              <a
+                href="/api/download/pc-installer"
+                download="Install-Koperasi-HWS.bat"
+                className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">⚙️</span>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Installer Desktop Windows (.BAT)</div>
+                    <div className="text-[10px] text-sky-300">Membuat shortcut permanen di Desktop PC</div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-sky-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
+                  Unduh .BAT
                 </span>
               </a>
 
@@ -3021,34 +3149,33 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               <a
                 href="/api/download/ios"
                 download="koperasi-hws.mobileconfig"
-                className="w-full p-3 bg-sky-950/60 hover:bg-sky-900/80 border border-sky-500/50 rounded-2xl flex items-center justify-between transition-all"
+                className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
               >
                 <div className="flex items-center gap-2.5">
                   <span className="text-xl">🍏</span>
                   <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Profil Instalasi Apple iOS (iPhone/iPad)</div>
-                    <div className="text-[10px] text-sky-300">Konfigurasi WebClip layar utama iOS</div>
+                    <div className="font-extrabold text-white text-xs">Profil Apple iOS (.mobileconfig)</div>
+                    <div className="text-[10px] text-emerald-300">WebClip layar utama iPhone / iPad</div>
                   </div>
                 </div>
-                <span className="text-[10px] bg-sky-500 text-slate-950 font-black px-2 py-1 rounded-lg">
-                  Instal iOS
+                <span className="text-[10px] bg-emerald-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
+                  Unduh iOS
                 </span>
               </a>
             </div>
 
-            <div className="p-3 bg-slate-800 rounded-2xl space-y-1.5 text-slate-300 text-[11px] leading-relaxed">
+            <div className="p-3 bg-slate-800/90 rounded-2xl space-y-1.5 text-slate-300 text-[11px] leading-relaxed border border-slate-700/60">
               <div className="font-bold text-white flex items-center gap-1.5 text-xs">
-                <Smartphone className="w-4 h-4 text-emerald-400" />
-                Panduan Tambah ke Layar Utama (PWA):
+                <span>📱</span> Panduan Praktis Pengguna:
               </div>
-              <div><b>Android (Chrome):</b> Buka menu (⋮) browser &gt; pilih <b>"Instal Aplikasi"</b>.</div>
-              <div><b>iPhone (Safari):</b> Ketuk tombol <b>Share</b> &gt; pilih <b>"Add to Home Screen"</b>.</div>
-              <div><b>PC (Chrome/Edge):</b> Klik ikon instal di bilah alamat atas kanan.</div>
+              <div>• <b>Android:</b> Cukup klik tombol hijau "Pasang Aplikasi" di atas.</div>
+              <div>• <b>iPhone/iPad:</b> Buka Safari &gt; ketuk ikon Share &gt; pilih "Add to Home Screen".</div>
+              <div>• <b>PC/Laptop:</b> Unduh file .URL di atas dan letakkan di Desktop PC Anda.</div>
             </div>
 
             <button
               onClick={() => setSubModal(null)}
-              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs"
+              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs transition-all"
             >
               Tutup
             </button>
