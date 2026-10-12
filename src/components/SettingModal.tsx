@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   AppState,
   AdminUser,
+  AdminRole,
   MemberUser,
   WilayahKoperasi,
   BankAccount,
@@ -51,6 +52,7 @@ interface SettingModalProps {
     | 'edit_profile'
     | 'tambah_admin'
     | 'daftar_admin'
+    | 'edit_admin'
     | 'profil_koperasi'
     | 'cloud_server'
     | 'google_drive'
@@ -90,6 +92,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     | 'edit_profile'
     | 'tambah_admin'
     | 'daftar_admin'
+    | 'edit_admin'
     | 'profil_koperasi'
     | 'cloud_server'
     | 'google_drive'
@@ -182,6 +185,31 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [newAdminSecurityAnswer, setNewAdminSecurityAnswer] = useState('jakarta');
   const [newAdminRole, setNewAdminRole] = useState<'super_admin' | 'admin_kelola' | 'admin_write' | 'admin_laporan'>('admin_write');
   const [newAdminPassword, setNewAdminPassword] = useState('admin123');
+
+  // Edit Existing Admin Account State (Super Admin Management: Edit, Tambah, Hapus)
+  const [selectedAdminToEdit, setSelectedAdminToEdit] = useState<AdminUser | null>(null);
+  const [editAdminAccUsername, setEditAdminAccUsername] = useState('');
+  const [editAdminAccNama, setEditAdminAccNama] = useState('');
+  const [editAdminAccEmail, setEditAdminAccEmail] = useState('');
+  const [editAdminAccWa, setEditAdminAccWa] = useState('');
+  const [editAdminAccNik, setEditAdminAccNik] = useState('');
+  const [editAdminAccWilayah, setEditAdminAccWilayah] = useState<WilayahKoperasi>('Cengkareng');
+  const [editAdminAccRole, setEditAdminAccRole] = useState<AdminRole>('admin_write');
+  const [editAdminAccStatus, setEditAdminAccStatus] = useState<'aktif' | 'nonaktif' | 'dibekukan'>('aktif');
+  const [editAdminAccNewPassword, setEditAdminAccNewPassword] = useState('');
+  const [editAdminAccAlamat, setEditAdminAccAlamat] = useState('');
+  const [editAdminAccRt, setEditAdminAccRt] = useState('001');
+  const [editAdminAccRw, setEditAdminAccRw] = useState('001');
+  const [editAdminAccKelurahan, setEditAdminAccKelurahan] = useState('');
+  const [editAdminAccKecamatan, setEditAdminAccKecamatan] = useState('Cengkareng');
+  const [editAdminAccKota, setEditAdminAccKota] = useState('Jakarta Barat');
+  const [editAdminAccProvinsi, setEditAdminAccProvinsi] = useState('DKI Jakarta');
+  const [editAdminAccKodePos, setEditAdminAccKodePos] = useState('11740');
+  const [editAdminAccBank, setEditAdminAccBank] = useState('Bank Central Asia (BCA)');
+  const [editAdminAccBankRek, setEditAdminAccBankRek] = useState('');
+  const [editAdminAccBankHolder, setEditAdminAccBankHolder] = useState('');
+  const [editAdminAccSecurityQuestion, setEditAdminAccSecurityQuestion] = useState('Nama kota kelahiran Anda?');
+  const [editAdminAccSecurityAnswer, setEditAdminAccSecurityAnswer] = useState('');
 
   // Profil Koperasi Biodata State (Susunan Pengurus Ketua, Wakil, Sekretaris, Bendahara - Req 11)
   const [bioNama, setBioNama] = useState(state.profile.nama || 'Koperasi Himpunan Wirausaha Sejahtera');
@@ -649,6 +677,233 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     alert(`Status akun pengurus ${targetAdmin.nama} berhasil diubah.`);
   };
 
+  // Open Tambah Admin with reset fields
+  const handleOpenTambahAdmin = () => {
+    setNewAdminUsername('');
+    setNewAdminNama('');
+    setNewAdminEmail('');
+    setNewAdminWa('');
+    setNewAdminNik('');
+    setNewAdminWilayah('Cengkareng');
+    setNewAdminRole('admin_write');
+    setNewAdminPassword('admin123');
+    setNewAdminAlamat('Jl. Raya Daan Mogot KM 11');
+    setNewAdminRt('001');
+    setNewAdminRw('001');
+    setNewAdminKelurahan('Cengkareng Barat');
+    setNewAdminKecamatan('Cengkareng');
+    setNewAdminKota('Jakarta Barat');
+    setNewAdminProvinsi('DKI Jakarta');
+    setNewAdminKodePos('11740');
+    setNewAdminBank('Bank Central Asia (BCA)');
+    setNewAdminBankRek('');
+    setNewAdminBankHolder('');
+    setNewAdminSecurityQuestion('Nama kota kelahiran Anda?');
+    setNewAdminSecurityAnswer('jakarta');
+    setSubModal('tambah_admin');
+  };
+
+  // Open Edit Admin Modal with target admin's data prefilled
+  const handleOpenEditAdmin = (targetAdmin: AdminUser) => {
+    setSelectedAdminToEdit(targetAdmin);
+    setEditAdminAccUsername(targetAdmin.username || '');
+    setEditAdminAccNama(targetAdmin.nama || '');
+    setEditAdminAccEmail(targetAdmin.email || '');
+    setEditAdminAccWa(targetAdmin.whatsapp || '');
+    setEditAdminAccNik(targetAdmin.nik || '');
+    setEditAdminAccWilayah(targetAdmin.wilayahKantor || 'Cengkareng');
+    setEditAdminAccRole((targetAdmin.role as AdminRole) || 'admin_write');
+    setEditAdminAccStatus(
+      targetAdmin.status === 'dibekukan'
+        ? 'dibekukan'
+        : targetAdmin.status === 'nonaktif'
+        ? 'nonaktif'
+        : 'aktif'
+    );
+    setEditAdminAccNewPassword('');
+    setEditAdminAccAlamat(targetAdmin.alamatLengkap || '');
+    setEditAdminAccRt(targetAdmin.rt || '001');
+    setEditAdminAccRw(targetAdmin.rw || '001');
+    setEditAdminAccKelurahan(targetAdmin.kelurahan || '');
+    setEditAdminAccKecamatan(targetAdmin.kecamatan || 'Cengkareng');
+    setEditAdminAccKota(targetAdmin.kota || 'Jakarta Barat');
+    setEditAdminAccProvinsi(targetAdmin.provinsi || 'DKI Jakarta');
+    setEditAdminAccKodePos(targetAdmin.kodePos || '11740');
+    setEditAdminAccBank(targetAdmin.bankPribadi?.namaBank || 'Bank Central Asia (BCA)');
+    setEditAdminAccBankRek(targetAdmin.bankPribadi?.nomorRekening || '');
+    setEditAdminAccBankHolder(targetAdmin.bankPribadi?.atasNama || targetAdmin.nama || '');
+    setEditAdminAccSecurityQuestion(targetAdmin.securityQuestion || 'Nama kota kelahiran Anda?');
+    setEditAdminAccSecurityAnswer(targetAdmin.securityAnswer || '');
+    setSubModal('edit_admin');
+  };
+
+  // Save Edit Admin Submit (Req: Akun admin terdaftar dapat diedit oleh super admin)
+  const handleSaveEditAdminSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentAdmin || !isSuperAdmin) {
+      alert('Hanya Super Admin yang berwenang mengubah akun admin.');
+      return;
+    }
+    if (!selectedAdminToEdit) return;
+
+    const cleanUsername = editAdminAccUsername.trim();
+    if (!cleanUsername) {
+      alert('Username admin wajib diisi.');
+      return;
+    }
+
+    if (editAdminAccNik.trim().length !== 16) {
+      alert('NIK Pengurus harus 16 digit sesuai KTP.');
+      return;
+    }
+
+    // Check duplicate username if changed
+    const usernameTaken = state.admins.find(
+      (a) =>
+        a.id !== selectedAdminToEdit.id &&
+        a.username.toLowerCase() === cleanUsername.toLowerCase()
+    );
+    if (usernameTaken) {
+      alert(`Username "@${cleanUsername}" sudah digunakan oleh pengurus lain.`);
+      return;
+    }
+
+    // Check duplicate email if changed
+    const emailTaken = state.admins.find(
+      (a) =>
+        a.id !== selectedAdminToEdit.id &&
+        a.email.toLowerCase() === editAdminAccEmail.trim().toLowerCase()
+    );
+    if (emailTaken) {
+      alert('Email ini sudah terdaftar pada akun pengurus lain.');
+      return;
+    }
+
+    // Check duplicate NIK if changed
+    const nikTaken = state.admins.find(
+      (a) => a.id !== selectedAdminToEdit.id && a.nik === editAdminAccNik.trim()
+    );
+    if (nikTaken) {
+      alert('NIK ini sudah digunakan oleh pengurus lain.');
+      return;
+    }
+
+    // Ensure we don't demote the last super admin
+    if (
+      selectedAdminToEdit.role === 'super_admin' &&
+      editAdminAccRole !== 'super_admin'
+    ) {
+      const superAdminCount = state.admins.filter((a) => a.role === 'super_admin').length;
+      if (superAdminCount <= 1) {
+        alert('Tidak dapat mengubah peran Super Admin terakhir. Harus ada minimal satu Super Admin.');
+        return;
+      }
+    }
+
+    const updatedAdmin: AdminUser = {
+      ...selectedAdminToEdit,
+      username: cleanUsername,
+      nama: editAdminAccNama.trim(),
+      email: editAdminAccEmail.trim(),
+      whatsapp: editAdminAccWa.trim(),
+      nik: editAdminAccNik.trim(),
+      wilayahKantor: editAdminAccWilayah,
+      role: editAdminAccRole,
+      status: editAdminAccStatus,
+      // If new password provided, update it; otherwise preserve old password
+      password: editAdminAccNewPassword.trim()
+        ? editAdminAccNewPassword.trim()
+        : selectedAdminToEdit.password || 'admin123',
+      alamatLengkap: editAdminAccAlamat.trim() || selectedAdminToEdit.alamatLengkap,
+      rt: editAdminAccRt.trim() || '001',
+      rw: editAdminAccRw.trim() || '001',
+      kelurahan: editAdminAccKelurahan.trim() || selectedAdminToEdit.kelurahan,
+      kecamatan: editAdminAccKecamatan.trim() || selectedAdminToEdit.kecamatan,
+      kota: editAdminAccKota.trim() || selectedAdminToEdit.kota,
+      provinsi: editAdminAccProvinsi.trim() || selectedAdminToEdit.provinsi,
+      kodePos: editAdminAccKodePos.trim() || selectedAdminToEdit.kodePos,
+      bankPribadi: {
+        namaBank: editAdminAccBank,
+        nomorRekening:
+          editAdminAccBankRek.trim() ||
+          selectedAdminToEdit.bankPribadi?.nomorRekening ||
+          '0000000000',
+        atasNama: editAdminAccBankHolder.trim() || editAdminAccNama.trim(),
+      },
+      securityQuestion: editAdminAccSecurityQuestion,
+      securityAnswer:
+        editAdminAccSecurityAnswer.trim().toLowerCase() ||
+        selectedAdminToEdit.securityAnswer ||
+        '',
+    };
+
+    await updateState((prev) => ({
+      ...prev,
+      admins: prev.admins.map((a) => (a.id === selectedAdminToEdit.id ? updatedAdmin : a)),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          'Edit Akun Admin',
+          `Super Admin ${currentAdmin.nama} memperbarui data akun admin ${updatedAdmin.nama} (@${updatedAdmin.username}) dengan role ${updatedAdmin.role}`,
+          updatedAdmin.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    alert(`Data akun pengurus ${updatedAdmin.nama} (@${updatedAdmin.username}) berhasil diperbarui!`);
+    setSelectedAdminToEdit(null);
+    setSubModal('daftar_admin');
+  };
+
+  // Handle Delete Admin (Req: Akun admin terdaftar dapat dihapus oleh super admin)
+  const handleDeleteAdmin = async (targetAdmin: AdminUser) => {
+    if (!currentAdmin || !isSuperAdmin) {
+      alert('Hanya Super Admin yang berwenang menghapus akun admin.');
+      return;
+    }
+
+    if (targetAdmin.id === currentAdmin.id) {
+      alert('Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif digunakan.');
+      return;
+    }
+
+    if (targetAdmin.role === 'super_admin') {
+      const superAdminCount = state.admins.filter((a) => a.role === 'super_admin').length;
+      if (superAdminCount <= 1) {
+        alert('Tidak dapat menghapus Super Admin terakhir dalam sistem.');
+        return;
+      }
+    }
+
+    const confirmed = window.confirm(
+      `YAKIN INGIN MENGHAPUS AKUN ADMIN?\n\n` +
+      `Nama: ${targetAdmin.nama}\n` +
+      `Username: @${targetAdmin.username}\n` +
+      `Role: ${targetAdmin.role.replace('_', ' ').toUpperCase()}\n` +
+      `Email: ${targetAdmin.email}\n` +
+      `Wilayah: ${targetAdmin.wilayahKantor}\n\n` +
+      `Tindakan ini permanen. Akun ini tidak akan dapat login lagi.`
+    );
+    if (!confirmed) return;
+
+    await updateState((prev) => ({
+      ...prev,
+      admins: prev.admins.filter((a) => a.id !== targetAdmin.id),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          'Hapus Akun Admin',
+          `Super Admin ${currentAdmin.nama} menghapus akun admin ${targetAdmin.nama} (@${targetAdmin.username}) dengan role ${targetAdmin.role}`,
+          targetAdmin.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    alert(`Akun pengurus ${targetAdmin.nama} (@${targetAdmin.username}) telah berhasil dihapus dari sistem.`);
+  };
+
   // Handle Add New Admin (Req 1: Wajib mengisi data diri sesuai dengan pendaftaran anggota, Req 2: Username bebas diinginkan admin)
   const handleAddAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -735,7 +990,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }));
 
     alert(`Pengurus baru ${newAdminUser.nama} (@${newAdminUser.username}) berhasil ditambahkan dengan data diri lengkap!`);
-    setSubModal(null);
+    setSubModal('daftar_admin');
   };
 
   // Handle QRIS Upload
@@ -1205,22 +1460,34 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
               {isSuperAdmin && (
                 <button
-                  onClick={() => setSubModal('tambah_admin')}
+                  type="button"
+                  onClick={handleOpenTambahAdmin}
                   className="w-full p-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-black text-xs flex items-center justify-between shadow-lg transition-all"
                 >
-                  <span>+ Tambah Admin / Pengurus Baru</span>
+                  <div className="flex items-center gap-2">
+                    <Plus className="w-4 h-4" />
+                    <span>+ Tambah Admin / Pengurus Baru</span>
+                  </div>
                   <span>›</span>
                 </button>
               )}
 
-              {/* Clickable Daftar Pengurus Koperasi per User Instruction 4 & 2 */}
+              {/* Clickable Daftar & Kelola Administrator Koperasi */}
               <button
+                type="button"
                 onClick={() => setSubModal('daftar_admin')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
+                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all text-left"
               >
                 <div className="flex items-center gap-2.5">
-                  <Shield className="w-4 h-4 text-sky-400" />
-                  <span>Daftar Pengurus Koperasi ({state.admins.length} Admin)</span>
+                  <Shield className="w-4 h-4 text-sky-400 shrink-0" />
+                  <div>
+                    <div className="font-extrabold text-white">
+                      Kelola Administrator Koperasi ({state.admins.length} Admin)
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-normal">
+                      Super Admin: Edit, tambah, atau hapus akun pengurus
+                    </div>
+                  </div>
                 </div>
                 <span>›</span>
               </button>
@@ -1602,48 +1869,170 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             </div>
 
             <div className="space-y-5 text-xs">
-              {/* SECTION 1: ADMINISTRATOR APLIKASI */}
+              {/* SECTION 1: ADMINISTRATOR APLIKASI (Req: Akun admin terdaftar dapat di-edit, di-tambah, atau di-hapus oleh super admin) */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-bold text-amber-400 text-xs">
-                    Akun Administrator Aplikasi ({state.admins.length})
+                <div className="flex items-center justify-between mb-2.5">
+                  <div>
+                    <div className="font-black text-amber-400 text-xs">
+                      Akun Administrator Aplikasi ({state.admins.length})
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Super Admin dapat mengedit data diri/akses, menambah, atau menghapus admin.
+                    </div>
                   </div>
                   {isSuperAdmin && (
                     <button
                       type="button"
-                      onClick={() => setSubModal('tambah_admin')}
-                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-[10px]"
+                      onClick={handleOpenTambahAdmin}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-[11px] shadow-md flex items-center gap-1 transition-all"
                     >
-                      + Tambah Admin
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Tambah Admin</span>
                     </button>
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  {state.admins.map((adm) => (
-                    <div
-                      key={adm.id}
-                      className="p-3 bg-slate-800/90 rounded-2xl border border-slate-700 flex items-center justify-between"
-                    >
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-white">{adm.nama}</span>
-                          <span className="text-[9px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase font-black">
-                            {adm.role.replace('_', ' ')}
-                          </span>
+                <div className="space-y-2.5">
+                  {state.admins.map((adm) => {
+                    const isSelf = adm.id === currentAdmin?.id;
+                    const isFrozen = adm.status === 'dibekukan';
+                    return (
+                      <div
+                        key={adm.id}
+                        className={`p-3.5 rounded-2xl border transition-all ${
+                          isFrozen
+                            ? 'bg-red-950/20 border-red-500/40'
+                            : 'bg-slate-800/90 border-slate-700/80 hover:border-slate-600'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-slate-700/50">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-black text-white text-xs">{adm.nama}</span>
+                              <span
+                                className={`text-[9px] px-2 py-0.5 rounded-full uppercase font-black tracking-wider ${
+                                  adm.role === 'super_admin'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                    : adm.role === 'admin_kelola' || adm.role === 'admin_pembukuan'
+                                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                                    : adm.role === 'admin_write'
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                    : 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                                }`}
+                              >
+                                {adm.role.replace('_', ' ')}
+                              </span>
+                              {isFrozen ? (
+                                <span className="text-[9px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40 font-bold">
+                                  DIBEKUKAN
+                                </span>
+                              ) : (
+                                <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold">
+                                  AKTIF
+                                </span>
+                              )}
+                              {isSelf && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-amber-500 text-slate-950 font-black">
+                                  Akun Anda
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-400 font-mono mt-1">
+                              @{adm.username} • WA: {adm.whatsapp} • Kantor: {adm.wilayahKantor}
+                            </div>
+                          </div>
+
+                          {/* ACTION BUTTONS: EDIT, BEKUKAN, HAPUS */}
+                          {isSuperAdmin ? (
+                            <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                              {/* EDIT BUTTON */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditAdmin(adm)}
+                                className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg flex items-center gap-1 font-bold text-[11px] transition-all"
+                                title="Edit Akun Admin"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>Edit</span>
+                              </button>
+
+                              {/* TOGGLE FREEZE BUTTON */}
+                              {!isSelf && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleFreezeAdmin(adm)}
+                                  className={`px-2 py-1 rounded-lg flex items-center gap-1 font-bold text-[11px] border transition-all ${
+                                    isFrozen
+                                      ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
+                                      : 'bg-slate-700/60 hover:bg-slate-700 text-slate-300 border-slate-600/40'
+                                  }`}
+                                  title={isFrozen ? 'Buka Pembekuan Akun' : 'Bekukan Akun'}
+                                >
+                                  {isFrozen ? (
+                                    <>
+                                      <CheckCircle className="w-3 h-3 text-emerald-400" />
+                                      <span>Aktifkan</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Lock className="w-3 h-3 text-slate-400" />
+                                      <span>Bekukan</span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+
+                              {/* DELETE BUTTON */}
+                              {isSelf ? (
+                                <span
+                                  className="text-[10px] px-2 py-1 rounded-lg bg-slate-800 text-slate-500 border border-slate-700 flex items-center gap-1 font-semibold"
+                                  title="Anda tidak dapat menghapus akun Anda sendiri"
+                                >
+                                  <Lock className="w-3 h-3" />
+                                  Aktif
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteAdmin(adm)}
+                                  className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-400 hover:text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 font-bold text-[11px] transition-all"
+                                  title="Hapus Akun Pengurus"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Hapus</span>
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[10px] px-2 py-1 rounded-lg bg-slate-700/60 text-slate-400 border border-slate-600/40 flex items-center gap-1 font-semibold">
+                              <Lock className="w-3 h-3 text-amber-400" />
+                              Terdaftar
+                            </span>
+                          )}
                         </div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                          @{adm.username} • {adm.whatsapp} • Wilayah {adm.wilayahKantor}
+
+                        {/* DETAIL EKSTRA: NIK, EMAIL, BANK */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 pt-2 text-[10px] text-slate-400">
+                          <div>
+                            <span className="text-slate-500">Email: </span>
+                            <span className="text-slate-300 font-mono">{adm.email}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">NIK: </span>
+                            <span className="text-slate-300 font-mono">{adm.nik || '-'}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500">Rekening: </span>
+                            <span className="text-slate-300">
+                              {adm.bankPribadi?.namaBank
+                                ? `${adm.bankPribadi.namaBank.split(' ')[0]} - ${adm.bankPribadi.nomorRekening}`
+                                : '-'}
+                            </span>
+                          </div>
                         </div>
                       </div>
-
-                      {/* Req 1: Admin tidak dapat dihapus - dilindungi sistem */}
-                      <span className="text-[10px] px-2 py-1 rounded-lg bg-slate-700/60 text-slate-400 border border-slate-600/40 flex items-center gap-1 font-semibold" title="Akun Pengurus Terdaftar (Tidak dapat dihapus)">
-                        <Lock className="w-3 h-3 text-amber-400" />
-                        Terdaftar
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -3109,25 +3498,43 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 Pilihan Unduhan File Installer Alternatif:
               </div>
 
-              {/* Opsi 1: Unduh Shortcut PC Windows Langsung (.url) */}
+              {/* Opsi 1: Android APK */}
               <a
-                href="/api/download/pc-shortcut"
-                download="Koperasi-HWS.url"
+                href="/api/download/apk"
+                download="koperasi-hws-v2.4.apk"
+                className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🤖</span>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Paket Installer Android (.APK)</div>
+                    <div className="text-[10px] text-emerald-400">Paket resmi siap pasang di smartphone Android</div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-emerald-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
+                  Unduh .APK
+                </span>
+              </a>
+
+              {/* Opsi 2: PC Windows Executable (.exe) */}
+              <a
+                href="/api/download/exe"
+                download="koperasi-hws-setup.exe"
                 className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
               >
                 <div className="flex items-center gap-2.5">
                   <span className="text-xl">💻</span>
                   <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Desktop Shortcut PC (.URL)</div>
-                    <div className="text-[10px] text-amber-300">Buka langsung di Windows tanpa instalasi</div>
+                    <div className="font-extrabold text-white text-xs">Aplikasi Desktop Windows (.EXE)</div>
+                    <div className="text-[10px] text-amber-300">Launcher desktop mandiri untuk PC Windows</div>
                   </div>
                 </div>
                 <span className="text-[10px] bg-amber-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
-                  Unduh .URL
+                  Unduh .EXE
                 </span>
               </a>
 
-              {/* Opsi 2: Unduh Script Installer PC (.bat) */}
+              {/* Opsi 3: Unduh Script Installer PC (.bat) */}
               <a
                 href="/api/download/pc-installer"
                 download="Install-Koperasi-HWS.bat"
@@ -3145,7 +3552,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </span>
               </a>
 
-              {/* Opsi 3: Profil Apple iOS */}
+              {/* Opsi 4: Shortcut Desktop PC (.url) */}
+              <a
+                href="/api/download/pc-shortcut"
+                download="Koperasi-HWS.url"
+                className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🔗</span>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Desktop Shortcut PC (.URL)</div>
+                    <div className="text-[10px] text-slate-300">Buka langsung di Windows tanpa instalasi</div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-slate-700 text-white font-bold px-2 py-1 rounded-lg">
+                  Unduh .URL
+                </span>
+              </a>
+
+              {/* Opsi 5: Profil Apple iOS */}
               <a
                 href="/api/download/ios"
                 download="koperasi-hws.mobileconfig"
@@ -3155,10 +3580,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <span className="text-xl">🍏</span>
                   <div className="text-left">
                     <div className="font-extrabold text-white text-xs">Profil Apple iOS (.mobileconfig)</div>
-                    <div className="text-[10px] text-emerald-300">WebClip layar utama iPhone / iPad</div>
+                    <div className="text-[10px] text-purple-300">WebClip layar utama iPhone / iPad</div>
                   </div>
                 </div>
-                <span className="text-[10px] bg-emerald-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
+                <span className="text-[10px] bg-purple-500 text-white font-bold px-2 py-1 rounded-lg">
                   Unduh iOS
                 </span>
               </a>

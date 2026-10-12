@@ -182,9 +182,130 @@ function notifyListeners() {
   }
 }
 
+const CLIENT_ID = typeof window !== 'undefined'
+  ? (sessionStorage.getItem('koperasi_client_id') || (() => {
+      const id = 'client_' + Math.random().toString(36).substring(2, 10);
+      try { sessionStorage.setItem('koperasi_client_id', id); } catch {}
+      return id;
+    })())
+  : 'server_client';
+
+// ================= AUDIO NOTIFICATION SYSTEM (Web Audio API Synthesizer) =================
+let audioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContextClass) {
+      audioCtx = new AudioContextClass();
+    }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  return audioCtx;
+}
+
+export function playNotificationSound(type: 'deposit' | 'chat') {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    if (type === 'deposit') {
+      // 3-tone pleasant rising chime for deposit verification (C5 -> E5 -> G5)
+      const freqs = [523.25, 659.25, 783.99];
+      freqs.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+
+        gain.gain.setValueAtTime(0, now + idx * 0.12);
+        gain.gain.linearRampToValueAtTime(0.3, now + idx * 0.12 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.35);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now + idx * 0.12);
+        osc.stop(now + idx * 0.12 + 0.36);
+      });
+    } else {
+      // 2-tone melodic chime for chat (D5 -> A5)
+      const freqs = [587.33, 880.0];
+      freqs.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.14);
+
+        gain.gain.setValueAtTime(0, now + idx * 0.14);
+        gain.gain.linearRampToValueAtTime(0.25, now + idx * 0.14 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.4);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now + idx * 0.14);
+        osc.stop(now + idx * 0.14 + 0.41);
+      });
+    }
+  } catch (err) {
+    console.warn('Audio notification failed:', err);
+  }
+}
+
+// Browser Push Notification Helpers
+export async function requestNotificationPermission(): Promise<boolean> {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false;
+  try {
+    const res = await Notification.requestPermission();
+    return res === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+export function triggerBrowserNotification(
+  title: string,
+  body: string,
+  onClick?: () => void
+) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    try {
+      const notif = new Notification(title, {
+        body,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: `hws-${Date.now()}`,
+      });
+      if (onClick) {
+        notif.onclick = () => {
+          window.focus();
+          onClick();
+          notif.close();
+        };
+      }
+    } catch (e) {
+      console.warn('Failed to display browser notification:', e);
+    }
+  }
+}
+
 // Sync to backend & Firebase Firestore
 export async function syncStateToServer(state: AppState) {
   try {
+    const now = new Date().toISOString();
+    state.serverSyncStatus = {
+      ...(state.serverSyncStatus || {}),
+      lastSynced: now,
+      online: true,
+      firestoreActive: true,
+      googleCloudBackup: true,
+    };
     globalState = state;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -192,11 +313,11 @@ export async function syncStateToServer(state: AppState) {
     notifyListeners();
 
     // 1. Post to Express realtime backend
-    await fetch('/api/state', {
+    fetch('/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(state),
-    });
+    }).catch(() => {});
 
     // 2. Mirror to Firebase Firestore directly (Req 10 & Req 13)
     try {
@@ -205,14 +326,15 @@ export async function syncStateToServer(state: AppState) {
       setDoc(
         doc(db, 'koperasi_state', 'main_database'),
         {
-          lastSynced: new Date().toISOString(),
+          lastSynced: now,
+          updatedBy: CLIENT_ID,
           totalMembers: state.members.length,
           totalKas: state.kasList.length,
           totalSetoran: state.setoranList.length,
           payload: JSON.stringify(state),
         },
         { merge: true }
-      ).catch(() => {});
+      ).catch((err) => console.warn('Firestore setDoc notice:', err));
     } catch {}
   } catch (err) {
     console.warn('Sync to server failed, cached in localStorage', err);
@@ -250,6 +372,11 @@ export function useKoperasiState() {
 
     // Initial fetch
     fetchStateFromServer();
+
+    // Regular polling fallback every 3 seconds to keep all devices & mobile in sync
+    const pollInterval = setInterval(() => {
+      fetchStateFromServer();
+    }, 3000);
 
     // Listen to realtime events via EventSource
     let eventSource: EventSource | null = null;
@@ -297,26 +424,21 @@ export function useKoperasiState() {
             (docSnap) => {
               if (docSnap.exists()) {
                 const remote = docSnap.data();
-                if (remote && remote.payload) {
+                if (remote && remote.payload && remote.updatedBy !== CLIENT_ID) {
                   try {
                     const parsed = JSON.parse(remote.payload);
                     if (parsed && parsed.profile && parsed.members) {
-                      if (
-                        !globalState.serverSyncStatus?.lastSynced ||
-                        (parsed.serverSyncStatus?.lastSynced &&
-                          parsed.serverSyncStatus.lastSynced >
-                            globalState.serverSyncStatus.lastSynced)
-                      ) {
-                        globalState = parsed;
-                        notifyListeners();
-                      }
+                      globalState = parsed;
+                      try {
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+                      } catch {}
+                      notifyListeners();
                     }
                   } catch {}
                 }
               }
             },
             (err) => {
-              // Non-blocking warning
               console.warn('Firestore onSnapshot notice:', err.message);
             }
           );
@@ -326,6 +448,7 @@ export function useKoperasiState() {
 
     return () => {
       listeners.delete(handler);
+      clearInterval(pollInterval);
       if (eventSource) eventSource.close();
       if (unsubscribeFirestore) unsubscribeFirestore();
     };

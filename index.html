@@ -15,6 +15,33 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Koperasi HWS" />
     <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="shortcut icon" href="/icon-192.png" />
+    <script>
+      (function() {
+        const origWarn = console.warn;
+        const origError = console.error;
+        console.warn = function(...args) {
+          if (typeof args[0] === 'string' && (args[0].includes('[vite]') || args[0].includes('websocket'))) return;
+          origWarn.apply(console, args);
+        };
+        console.error = function(...args) {
+          if (typeof args[0] === 'string' && (args[0].includes('[vite]') || args[0].includes('websocket') || args[0].includes('WebSocket') || args[0].includes('createWebSocketModuleRunnerTransport'))) return;
+          origError.apply(console, args);
+        };
+        window.addEventListener('unhandledrejection', function(event) {
+          if (event && event.reason && String(event.reason).includes('WebSocket')) {
+            event.preventDefault();
+          }
+        });
+      })();
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">

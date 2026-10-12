@@ -1,9 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AppState,
   AdminUser,
 } from '../types';
-import { formatRupiah } from '../lib/storage';
+import {
+  formatRupiah,
+  playNotificationSound,
+  requestNotificationPermission,
+  triggerBrowserNotification,
+} from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { MemberVerificationView } from './MemberVerificationView';
 import { MemberListView } from './MemberListView';
@@ -31,7 +36,21 @@ import {
   Building,
   Shield,
   Layers,
+  Bell,
+  Volume2,
+  VolumeX,
+  X,
+  Sparkles,
 } from 'lucide-react';
+
+interface AdminToast {
+  id: string;
+  type: 'deposit' | 'chat' | 'test';
+  title: string;
+  message: string;
+  timestamp: string;
+  targetId?: string;
+}
 
 interface AdminDashboardProps {
   state: AppState;
@@ -55,6 +74,144 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [showSettings, setShowSettings] = useState(false);
   const [settingSubModal, setSettingSubModal] = useState<any>(null);
+
+  // Notification state
+  const [toasts, setToasts] = useState<AdminToast[]>([]);
+  const [showNotifCenter, setShowNotifCenter] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('koperasi_admin_sound') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const prevPendingIdsRef = useRef<Set<string>>(
+    new Set(state.setoranList.filter((s) => s.status === 'pending').map((s) => s.id))
+  );
+  const prevChatIdsRef = useRef<Set<string>>(
+    new Set(state.chatMessages.map((m) => m.id))
+  );
+  const isInitialMountRef = useRef<boolean>(true);
+
+  // Request browser notification permission once on admin dashboard mount
+  useEffect(() => {
+    requestNotificationPermission().catch(() => {});
+  }, []);
+
+  // Save sound setting
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    try {
+      localStorage.setItem('koperasi_admin_sound', String(next));
+    } catch {}
+  };
+
+  // Test notification helper
+  const handleTestNotification = () => {
+    playNotificationSound('deposit');
+    setTimeout(() => playNotificationSound('chat'), 500);
+    triggerBrowserNotification(
+      '🔔 Tes Notifikasi Koperasi HWS',
+      'Sistem notifikasi suara dan push notifikasi admin aktif dengan normal!'
+    );
+    setToasts((prev) => [
+      {
+        id: `toast-test-${Date.now()}`,
+        type: 'test',
+        title: 'Tes Notifikasi Berhasil!',
+        message: 'Perangkat admin kini siap menerima notifikasi setoran masuk dan chat secara realtime.',
+        timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      },
+      ...prev,
+    ]);
+  };
+
+  // Detection effect for incoming deposits and chats
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+
+    // 1. Check newly added pending deposits
+    const currentPending = state.setoranList.filter((s) => s.status === 'pending');
+    const newPendingDeposits = currentPending.filter(
+      (s) => !prevPendingIdsRef.current.has(s.id)
+    );
+
+    if (newPendingDeposits.length > 0) {
+      if (soundEnabled) {
+        playNotificationSound('deposit');
+      }
+
+      newPendingDeposits.forEach((dep) => {
+        triggerBrowserNotification(
+          '🔔 Setoran Masuk Baru - Koperasi HWS',
+          `${dep.memberNama} mengajukan setoran ${dep.jenis} sebesar Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.metode})`,
+          () => setActiveTab('verifikasi')
+        );
+
+        setToasts((prev) => [
+          {
+            id: `toast-dep-${dep.id}-${Date.now()}`,
+            type: 'deposit',
+            title: 'Setoran Masuk Baru!',
+            message: `${dep.memberNama} • Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.jenis})`,
+            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+            targetId: dep.id,
+          },
+          ...prev.slice(0, 4),
+        ]);
+      });
+    }
+    prevPendingIdsRef.current = new Set(currentPending.map((s) => s.id));
+
+    // 2. Check new incoming chat messages from members
+    const newChatMessages = state.chatMessages.filter(
+      (m) =>
+        !prevChatIdsRef.current.has(m.id) &&
+        m.senderType === 'member' &&
+        !m.isReadByAdmin
+    );
+
+    if (newChatMessages.length > 0) {
+      if (soundEnabled) {
+        playNotificationSound('chat');
+      }
+
+      newChatMessages.forEach((msg) => {
+        triggerBrowserNotification(
+          `💬 Pesan Chat dari ${msg.senderNama}`,
+          msg.pesan,
+          () => setActiveTab('chat')
+        );
+
+        setToasts((prev) => [
+          {
+            id: `toast-chat-${msg.id}-${Date.now()}`,
+            type: 'chat',
+            title: `Pesan Chat: ${msg.senderNama}`,
+            message: msg.pesan,
+            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+            targetId: msg.memberId,
+          },
+          ...prev.slice(0, 4),
+        ]);
+      });
+    }
+    prevChatIdsRef.current = new Set(state.chatMessages.map((m) => m.id));
+  }, [state.setoranList, state.chatMessages, soundEnabled]);
+
+  // Auto-dismiss toasts after 9s
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const timer = setTimeout(() => {
+      setToasts((prev) => prev.slice(0, -1));
+    }, 9000);
+    return () => clearTimeout(timer);
+  }, [toasts]);
 
   // Role permissions
   const isSuperAdmin = currentAdmin.role === 'super_admin';
@@ -92,6 +249,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const unreadChatCount = state.chatMessages.filter(
     (m) => m.senderType === 'member' && !m.isReadByAdmin
   ).length;
+
+  const totalNotifCount = pendingDepositsCount + unreadChatCount;
 
   // Print summary report
   const handlePrintSummary = () => {
@@ -148,6 +307,169 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {/* Right Action Buttons: Only Setting per User Req 9 ("Menu setting pada dashboard hilangkan hanya ada setting") */}
           <div className="flex items-center gap-2">
+            {/* Realtime Notification Center Bell */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowNotifCenter(!showNotifCenter)}
+                className="relative py-1.5 px-2.5 rounded-xl bg-[#162035] hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 transition-all shadow-sm flex items-center justify-center gap-1.5"
+                title="Pusat Notifikasi Realtime"
+              >
+                <Bell className="w-4 h-4 text-amber-400" />
+                {totalNotifCount > 0 ? (
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center animate-bounce shadow">
+                    {totalNotifCount}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 font-semibold hidden sm:inline">Notif</span>
+                )}
+              </button>
+
+              {/* Notification Center Popover */}
+              {showNotifCenter && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
+                  <div className="p-3 bg-[#162035] border-b border-slate-700 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-amber-400" />
+                      <span className="font-extrabold text-white text-xs">Pusat Notifikasi Realtime</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={toggleSound}
+                        className={`p-1 rounded-lg text-xs font-bold flex items-center gap-1 px-2 border transition-all ${
+                          soundEnabled
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}
+                        title={soundEnabled ? 'Matikan Suara Notifikasi' : 'Aktifkan Suara Notifikasi'}
+                      >
+                        {soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5" />}
+                        <span className="text-[10px]">{soundEnabled ? 'Suara ON' : 'MUTE'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowNotifCenter(false)}
+                        className="w-6 h-6 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Actions & Test bar */}
+                  <div className="p-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTestNotification}
+                      className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-[10px] flex items-center gap-1 transition-all"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      Tes Suara & Notif
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => requestNotificationPermission()}
+                      className="px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-bold text-[10px] flex items-center gap-1 transition-all"
+                    >
+                      Izin Push HP/Browser
+                    </button>
+                  </div>
+
+                  {/* Notification List */}
+                  <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80 p-2 space-y-1">
+                    {/* Pending Setoran Section */}
+                    {pendingDepositsCount > 0 && (
+                      <div className="p-2 bg-amber-500/10 rounded-xl border border-amber-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-amber-300">
+                          <span>🔔 {pendingDepositsCount} Setoran Menunggu Verifikasi</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('verifikasi');
+                              setShowNotifCenter(false);
+                            }}
+                            className="text-[10px] text-amber-400 underline font-extrabold"
+                          >
+                            Buka Semua
+                          </button>
+                        </div>
+                        {state.setoranList
+                          .filter((s) => s.status === 'pending')
+                          .slice(0, 3)
+                          .map((dep) => (
+                            <div
+                              key={dep.id}
+                              onClick={() => {
+                                setActiveTab('verifikasi');
+                                setShowNotifCenter(false);
+                              }}
+                              className="p-1.5 bg-slate-900/80 hover:bg-slate-800 rounded-lg cursor-pointer transition-colors text-[10px]"
+                            >
+                              <div className="font-bold text-white flex justify-between">
+                                <span>{dep.memberNama}</span>
+                                <span className="text-emerald-400 font-black">
+                                  Rp {Number(dep.nominal).toLocaleString('id-ID')}
+                                </span>
+                              </div>
+                              <div className="text-slate-400 text-[9px]">
+                                {dep.jenis.toUpperCase()} • {dep.metode}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
+                    {/* Unread Chat Section */}
+                    {unreadChatCount > 0 && (
+                      <div className="p-2 bg-sky-500/10 rounded-xl border border-sky-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-sky-300">
+                          <span>💬 {unreadChatCount} Pesan Chat Baru</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('chat');
+                              setShowNotifCenter(false);
+                            }}
+                            className="text-[10px] text-sky-400 underline font-extrabold"
+                          >
+                            Buka Chat
+                          </button>
+                        </div>
+                        {state.chatMessages
+                          .filter((m) => m.senderType === 'member' && !m.isReadByAdmin)
+                          .slice(0, 3)
+                          .map((msg) => (
+                            <div
+                              key={msg.id}
+                              onClick={() => {
+                                setActiveTab('chat');
+                                setShowNotifCenter(false);
+                              }}
+                              className="p-1.5 bg-slate-900/80 hover:bg-slate-800 rounded-lg cursor-pointer transition-colors text-[10px]"
+                            >
+                              <div className="font-bold text-white flex justify-between">
+                                <span>{msg.senderNama}</span>
+                                <span className="text-slate-400 text-[9px]">
+                                  {new Date(msg.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              <div className="text-slate-300 text-[10px] truncate">{msg.pesan}</div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
+                    {totalNotifCount === 0 && (
+                      <div className="py-6 text-center text-slate-400 text-[11px]">
+                        ✓ Semua notifikasi telah ditinjau! Tidak ada setoran atau chat baru saat ini.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={() => {
@@ -255,7 +577,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              Chat Anggota (20 Hari)
+              Chat Anggota
+              {unreadChatCount > 0 && (
+                <span className="w-4 h-4 rounded-full bg-sky-500 text-slate-950 text-[10px] font-black flex items-center justify-center ml-1 animate-pulse">
+                  {unreadChatCount}
+                </span>
+              )}
             </button>
           )}
         </div>
@@ -658,6 +985,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           />
         ) : null}
       </main>
+
+      {/* ================= FLOATING NOTIFICATION TOASTS ================= */}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className={`p-3.5 rounded-2xl shadow-2xl border pointer-events-auto transition-all transform animate-in slide-in-from-bottom-3 duration-300 ${
+                toast.type === 'deposit'
+                  ? 'bg-[#0f172a] border-emerald-500/60 shadow-emerald-500/20'
+                  : toast.type === 'chat'
+                  ? 'bg-[#0f172a] border-sky-500/60 shadow-sky-500/20'
+                  : 'bg-[#0f172a] border-amber-500/60 shadow-amber-500/20'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-bold ${
+                      toast.type === 'deposit'
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : toast.type === 'chat'
+                        ? 'bg-sky-500/20 text-sky-400'
+                        : 'bg-amber-500/20 text-amber-400'
+                    }`}
+                  >
+                    {toast.type === 'deposit' ? '💵' : toast.type === 'chat' ? '💬' : '🔔'}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-white text-xs">{toast.title}</span>
+                      <span className="text-[10px] text-slate-400">{toast.timestamp}</span>
+                    </div>
+                    <p className="text-slate-300 text-[11px] mt-0.5 line-clamp-2">
+                      {toast.message}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-end gap-2">
+                {toast.type === 'deposit' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('verifikasi');
+                      setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+                    }}
+                    className="px-3 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[10px] rounded-lg transition-colors"
+                  >
+                    Buka Verifikasi →
+                  </button>
+                )}
+                {toast.type === 'chat' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('chat');
+                      setToasts((prev) => prev.filter((t) => t.id !== toast.id));
+                    }}
+                    className="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-[10px] rounded-lg transition-colors"
+                  >
+                    Buka Chat →
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ================= SETTING MODAL ================= */}
       {showSettings && (

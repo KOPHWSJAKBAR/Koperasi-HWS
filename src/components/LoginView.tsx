@@ -76,6 +76,31 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState<'id' | 'password' | null>(null);
   const [showDownloadAppModal, setShowDownloadAppModal] = useState(false);
+  const [showIosGuide, setShowIosGuide] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handlePwaInstall = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice?.outcome === 'accepted') {
+        setSuccessMessage('✓ Koperasi HWS berhasil dipasang di perangkat Anda!');
+        setShowDownloadAppModal(false);
+      }
+      setDeferredPrompt(null);
+    } else {
+      setSuccessMessage('Untuk memasang di Android: Buka menu Chrome (titik tiga) lalu pilih "Instal Aplikasi" atau "Tambahkan ke Layar Utama".');
+    }
+  };
 
   // Register Form State
   const [regForm, setRegForm] = useState({
@@ -844,94 +869,144 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
 
             <div className="space-y-3 text-xs">
-              {/* Opsi 1: Android APK (Req 11, 12, 17) */}
-              <a
-                href="/api/download/apk"
-                download="koperasi-hws-v2.4.apk"
-                onClick={() => {
-                  setSuccessMessage('✓ File APK Android resmi sedang diunduh! Klik file setelah selesai untuk memasang.');
-                  setTimeout(() => setShowDownloadAppModal(false), 800);
-                }}
-                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-emerald-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl shrink-0 font-bold">
-                    🤖
-                  </div>
-                  <div>
-                    <div className="font-extrabold text-white text-xs group-hover:text-emerald-300">
-                      Android (Unduh File .APK Online)
+              {/* Opsi 1: Android APK & PWA */}
+              <div className="p-3.5 bg-slate-800/90 border border-slate-750 hover:border-emerald-500/50 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                      🤖
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Paket installer APK resmi langsung terinstal di smartphone
+                    <div>
+                      <div className="font-extrabold text-white text-xs">
+                        Android (Smartphone & Tablet)
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        File installer .APK resmi & Pasang langsung WebAPK
+                      </div>
                     </div>
                   </div>
                 </div>
-                <span className="text-[10px] bg-emerald-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
-                  Unduh .APK
-                </span>
-              </a>
+                <div className="flex items-center gap-2 pt-1 border-t border-slate-750">
+                  <a
+                    href="/api/download/apk"
+                    download="koperasi-hws-v2.4.apk"
+                    onClick={() => {
+                      setSuccessMessage('✓ File installer .APK resmi sedang diunduh! Buka file setelah selesai untuk memasang.');
+                    }}
+                    className="flex-1 text-center py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] rounded-xl transition-all shadow"
+                  >
+                    Unduh File .APK
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handlePwaInstall}
+                    className="flex-1 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-[11px] rounded-xl transition-all"
+                  >
+                    Pasang di HP
+                  </button>
+                </div>
+              </div>
 
-              {/* Opsi 2: PC / Desktop EXE (Req 11, 12, 17) */}
-              <a
-                href="/api/download/exe"
-                download="koperasi-hws-setup.exe"
-                onClick={() => {
-                  setSuccessMessage('✓ File installer .EXE resmi sedang diunduh! Jalankan file untuk memasang di PC Windows.');
-                  setTimeout(() => setShowDownloadAppModal(false), 800);
-                }}
-                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-amber-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0 font-bold">
-                    💻
-                  </div>
-                  <div>
-                    <div className="font-extrabold text-white text-xs group-hover:text-amber-300">
-                      PC Windows (Unduh Program .EXE Online)
+              {/* Opsi 2: PC Windows (EXE & Installer) */}
+              <div className="p-3.5 bg-slate-800/90 border border-slate-750 hover:border-amber-500/50 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                      💻
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Installer aplikasi desktop PC Windows terhubung server realtime
+                    <div>
+                      <div className="font-extrabold text-white text-xs">
+                        PC Windows (Desktop Client)
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        Aplikasi .EXE, Installer Desktop & Shortcut
+                      </div>
                     </div>
                   </div>
                 </div>
-                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
-                  Unduh .EXE
-                </span>
-              </a>
+                <div className="grid grid-cols-3 gap-1.5 pt-1 border-t border-slate-750">
+                  <a
+                    href="/api/download/exe"
+                    download="koperasi-hws-setup.exe"
+                    onClick={() => {
+                      setSuccessMessage('✓ File aplikasi desktop .EXE sedang diunduh! Jalankan file untuk membuka Koperasi HWS di PC.');
+                    }}
+                    className="text-center py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] rounded-xl transition-all"
+                  >
+                    Unduh .EXE
+                  </a>
+                  <a
+                    href="/api/download/pc-installer"
+                    download="Install-Koperasi-HWS.bat"
+                    onClick={() => {
+                      setSuccessMessage('✓ Script installer .BAT sedang diunduh! Jalankan file untuk membuat shortcut di Desktop PC.');
+                    }}
+                    className="text-center py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-[10px] rounded-xl transition-all"
+                  >
+                    Installer .BAT
+                  </a>
+                  <a
+                    href="/api/download/pc-shortcut"
+                    download="Koperasi-HWS.url"
+                    onClick={() => {
+                      setSuccessMessage('✓ Shortcut Desktop .URL berhasil diunduh!');
+                    }}
+                    className="text-center py-1.5 bg-slate-700 hover:bg-slate-650 text-slate-200 font-bold text-[10px] rounded-xl transition-all"
+                  >
+                    Shortcut .URL
+                  </a>
+                </div>
+              </div>
 
-              {/* Opsi 3: iOS (iPhone / iPad) */}
-              <a
-                href="/api/download/ios"
-                download="koperasi-hws.mobileconfig"
-                onClick={() => {
-                  alert(
-                    "📱 PANDUAN INSTALASI APPLE iOS (iPhone / iPad):\n\n" +
-                    "1. Profil instalasi WebClip Koperasi HWS sedang diunduh.\n" +
-                    "2. Atau cukup buka Safari di iPhone Anda, ketuk tombol 'Share' (Bagikan),\n" +
-                    "3. Pilih 'Add to Home Screen' (Tambah ke Layar Utama).\n" +
-                    "4. Ikon Koperasi HWS akan langsung muncul di Layar Utama iPhone!"
-                  );
-                }}
-                className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-750 hover:border-sky-500/50 rounded-2xl flex items-center justify-between text-left transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center text-xl shrink-0 font-bold">
-                    🍏
-                  </div>
-                  <div>
-                    <div className="font-extrabold text-white text-xs group-hover:text-sky-300">
-                      Apple iOS (iPhone / iPad)
+              {/* Opsi 3: Apple iOS (iPhone / iPad) */}
+              <div className="p-3.5 bg-slate-800/90 border border-slate-750 hover:border-sky-500/50 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center text-xl shrink-0 font-bold">
+                      🍏
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Profil konfigurasi & Tambah ke Layar Utama (Home Screen)
+                    <div>
+                      <div className="font-extrabold text-white text-xs">
+                        Apple iOS (iPhone / iPad)
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        WebClip Layar Utama Safari & Profil .mobileconfig
+                      </div>
                     </div>
                   </div>
                 </div>
-                <span className="text-[10px] bg-sky-500 text-slate-950 font-black px-2.5 py-1 rounded-lg shrink-0">
-                  Instal iOS
-                </span>
-              </a>
+                <div className="flex items-center gap-2 pt-1 border-t border-slate-750">
+                  <button
+                    type="button"
+                    onClick={() => setShowIosGuide(!showIosGuide)}
+                    className="flex-1 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-[11px] rounded-xl transition-all shadow"
+                  >
+                    {showIosGuide ? 'Tutup Petunjuk' : '📱 Cara Pasang di iPhone'}
+                  </button>
+                  <a
+                    href="/api/download/ios"
+                    download="koperasi-hws.mobileconfig"
+                    onClick={() => {
+                      setSuccessMessage('✓ Profil WebClip Koperasi HWS iOS sedang diunduh!');
+                    }}
+                    className="py-2 px-3 bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 font-bold text-[11px] rounded-xl transition-all shrink-0"
+                  >
+                    Profil .mobileconfig
+                  </a>
+                </div>
+
+                {showIosGuide && (
+                  <div className="p-3 bg-slate-900/90 rounded-xl border border-sky-500/30 text-slate-300 space-y-1.5 text-[11px]">
+                    <div className="font-bold text-sky-300">Panduan Pemasangan iPhone & iPad:</div>
+                    <div className="space-y-1 pl-1">
+                      <div>1. Buka situs ini melalui browser <b>Safari</b> di iPhone Anda.</div>
+                      <div>2. Ketuk tombol <b>Bagikan (Share)</b> di bilah bawah Safari.</div>
+                      <div>3. Gulir ke bawah dan ketuk <b>Tambah ke Layar Utama (Add to Home Screen)</b>.</div>
+                      <div>4. Ikon Koperasi HWS akan langsung muncul di Layar Utama iPhone Anda!</div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-700/80 text-[10px] text-slate-400 text-center">

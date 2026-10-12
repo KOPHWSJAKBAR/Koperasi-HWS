@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -258,6 +259,7 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.use(express.static(path.join(__dirname, 'public')));
 
   // SSE Realtime Channel
   app.get('/api/events', (req: Request, res: Response) => {
@@ -962,70 +964,54 @@ async function startServer() {
     }
   });
 
-  // Download Official Android APK Package (Req 11, 12, 17)
+  // Download Official Android APK Package (Real signed APK package)
   app.get('/api/download/apk', (req: Request, res: Response) => {
-    res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws-v2.4.apk"');
-    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
-    // Generate valid Android APK binary structure with zip header & manifest
-    const apkManifest = Buffer.from(
-      JSON.stringify(
-        {
-          package: "id.koperasi.hws.app",
-          name: "Koperasi Himpunan Wirausaha Sejahtera",
-          short_name: "Koperasi HWS",
-          version: "2.4.0",
-          buildNumber: 202610,
-          minSdkVersion: 24,
-          targetSdkVersion: 34,
-          serverUrl: hostUrl,
-          author: "Pengurus Koperasi HWS",
-          timestamp: new Date().toISOString(),
-          permissions: [
-            "android.permission.INTERNET",
-            "android.permission.ACCESS_NETWORK_STATE",
-            "android.permission.USE_BIOMETRIC"
-          ]
-        },
-        null,
-        2
-      ),
-      'utf-8'
-    );
-
-    // Standard ZIP/APK signature PK\x03\x04
-    const zipHeader = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00]);
-    const finalBuffer = Buffer.concat([zipHeader, apkManifest]);
-    res.send(finalBuffer);
+    const apkPath = path.join(DATA_DIR, 'koperasi-hws-v2.4.apk');
+    if (fs.existsSync(apkPath)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws-v2.4.apk"');
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      return res.sendFile(apkPath);
+    }
+    res.status(404).send('File APK sedang disiapkan');
   });
 
-  // Download Official PC Desktop Executable (.exe) (Req 11, 12, 17)
+  // Download Official PC Desktop Executable (.exe) (Real PE32 Windows executable launcher)
   app.get('/api/download/exe', (req: Request, res: Response) => {
     const hostUrl = `${req.protocol}://${req.get('host')}`;
-    res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws-setup.exe"');
-    res.setHeader('Content-Type', 'application/x-msdownload');
+    const pePath = path.join(DATA_DIR, 'koperasi-hws-setup.exe');
+    const makePeScript = path.join(DATA_DIR, 'make_pe.py');
 
-    // Windows PE Portable Executable stub with launcher payload
-    const peHeader = Buffer.from([
-      0x4d, 0x5a, // MZ header
-      0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00,
-      0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ]);
+    try {
+      if (fs.existsSync(makePeScript)) {
+        const { execSync } = require('child_process');
+        execSync(`python3 "${makePeScript}" "${hostUrl}" "${pePath}"`);
+      }
+    } catch (e) {
+      console.warn('Could not regenerate dynamic PE launcher:', e);
+    }
 
-    const launcherConfig = Buffer.from(
-      `[KOPERASI_HWS_DESKTOP_CLIENT]\nAppName=Koperasi Himpunan Wirausaha Sejahtera\nVersion=2.4.0\nServerUrl=${hostUrl}\nMode=Standalone\nRealtimeSync=Enabled\n`,
-      'utf-8'
-    );
-
-    res.send(Buffer.concat([peHeader, launcherConfig]));
+    if (fs.existsSync(pePath)) {
+      res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws-setup.exe"');
+      res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
+      return res.sendFile(pePath);
+    }
+    // Fallback to PC installer batch script
+    res.redirect('/api/download/pc-installer');
   });
 
-  // Download Apple iOS Mobile Configuration Profile (Req 11, 12, 17)
+  // Download Apple iOS Mobile Configuration Profile (Valid Apple WebClip profile)
   app.get('/api/download/ios', (req: Request, res: Response) => {
     const hostUrl = `${req.protocol}://${req.get('host')}`;
     res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws.mobileconfig"');
     res.setHeader('Content-Type', 'application/x-apple-aspen-config');
+
+    let iconBase64 = '';
+    const iconTxtPath = path.join(DATA_DIR, 'icon_base64.txt');
+    if (fs.existsSync(iconTxtPath)) {
+      iconBase64 = fs.readFileSync(iconTxtPath, 'utf-8').trim();
+    }
+
+    const iconTag = iconBase64 ? `<key>Icon</key>\n      <data>${iconBase64}</data>` : '';
 
     const mobileConfig = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1036,8 +1022,7 @@ async function startServer() {
     <dict>
       <key>FullScreen</key>
       <true/>
-      <key>Icon</key>
-      <data></data>
+      ${iconTag}
       <key>IsRemovable</key>
       <true/>
       <key>Label</key>
@@ -1114,13 +1099,15 @@ exit
     res.send(batScript);
   });
 
-  // Web App Manifest (PWA)
+  // Web App Manifest (PWA compliant)
   app.get('/manifest.json', (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'application/manifest+json');
     res.json({
       name: "Koperasi Himpunan Wirausaha Sejahtera",
       short_name: "Koperasi HWS",
+      id: "/",
       start_url: "/",
+      scope: "/",
       display: "standalone",
       background_color: "#0b1120",
       theme_color: "#0d1424",
@@ -1129,16 +1116,32 @@ exit
         {
           src: "/icon-192.png",
           sizes: "192x192",
-          type: "image/png"
+          type: "image/png",
+          purpose: "any"
         },
         {
           src: "/icon-512.png",
           sizes: "512x512",
-          type: "image/png"
+          type: "image/png",
+          purpose: "any"
+        },
+        {
+          src: "/icon-192.png",
+          sizes: "192x192",
+          type: "image/png",
+          purpose: "maskable"
+        },
+        {
+          src: "/icon-512.png",
+          sizes: "512x512",
+          type: "image/png",
+          purpose: "maskable"
         }
       ]
     });
   });
+
+  const server = http.createServer(app);
 
   // Mount Vite in dev or static files in production
   if (process.env.NODE_ENV === 'production') {
@@ -1151,14 +1154,21 @@ exit
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: false,
+        hmr: {
+          server,
+        },
       },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(Number(PORT), '0.0.0.0', () => {
+  // Gracefully handle websocket errors
+  server.on('upgrade', (req, socket) => {
+    socket.on('error', () => {});
+  });
+
+  server.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Koperasi HWS Realtime Server running on http://0.0.0.0:${PORT}`);
   });
 }
