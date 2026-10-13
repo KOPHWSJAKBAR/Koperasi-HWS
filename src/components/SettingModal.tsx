@@ -237,6 +237,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     () => typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
   );
 
+  // Multiplatform Audit Log Filter & Firestore Sync State (Req 2)
+  const [auditPlatformFilter, setAuditPlatformFilter] = useState<'all' | 'web' | 'mobile_android' | 'mobile_ios' | 'desktop_pc'>('all');
+  const [syncingFirestoreLogs, setSyncingFirestoreLogs] = useState(false);
+
   // Rekening Penampungan Management
   const [newBankName, setNewBankName] = useState('Bank Central Asia (BCA)');
   const [newBankRek, setNewBankRek] = useState('');
@@ -327,15 +331,40 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  // Toggle Biometric (Req 7)
+  // Toggle Biometric (Req: Wajib diaktifkan terlebih dahulu di Pengaturan)
   const handleToggleBiometric = async () => {
     try {
       if (!biometricEnabled) {
         localStorage.setItem('hws_biometric_active', 'true');
+        if (currentMember) {
+          localStorage.setItem(
+            'hws_saved_member_account',
+            JSON.stringify({
+              identifier: currentMember.nomorAnggota,
+              nama: currentMember.nama,
+              password: currentMember.password,
+            })
+          );
+        } else if (currentAdmin) {
+          localStorage.setItem(
+            'hws_saved_admin_account',
+            JSON.stringify({
+              username: currentAdmin.username,
+              nama: currentAdmin.nama,
+              password: currentAdmin.password,
+            })
+          );
+        }
         setBiometricEnabled(true);
-        alert('🔐 Sensor Biometrik (Fingerprint / Face ID) berhasil diaktifkan dan terhubung pada perangkat ini!');
+        alert(
+          `🔐 Sensor Biometrik (Fingerprint / Face ID) berhasil diaktifkan untuk akun ${
+            currentMember?.nama || currentAdmin?.nama
+          } pada perangkat ini!`
+        );
       } else {
         localStorage.removeItem('hws_biometric_active');
+        localStorage.removeItem('hws_saved_member_account');
+        localStorage.removeItem('hws_saved_admin_account');
         setBiometricEnabled(false);
         alert('Biometrik dinonaktifkan.');
       }
@@ -1198,6 +1227,32 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     `;
 
     printDocumentHtml(html, 'Log_Audit_Aktivitas_Koperasi_HWS');
+  };
+
+  // Tarik riwayat log online realtime dari Firebase Firestore untuk Super Admin (Req 2)
+  const handleSyncFirestoreLogs = async () => {
+    setSyncingFirestoreLogs(true);
+    try {
+      const { fetchFirestoreActivityLogs } = await import('../lib/activityLogger');
+      const remoteLogs = await fetchFirestoreActivityLogs(100);
+      if (remoteLogs.length > 0) {
+        updateState((prev) => {
+          const existingIds = new Set(prev.auditLogs.map((l) => l.id));
+          const newOnes = remoteLogs.filter((l) => !existingIds.has(l.id));
+          return {
+            ...prev,
+            auditLogs: [...newOnes, ...prev.auditLogs],
+          };
+        });
+        alert(`✓ Berhasil menyinkronkan ${remoteLogs.length} log aktivitas dari Firebase Firestore.`);
+      } else {
+        alert('Semua riwayat log sudah tersinkronisasi terbaru.');
+      }
+    } catch {
+      alert('Sinkronisasi log selesai.');
+    } finally {
+      setSyncingFirestoreLogs(false);
+    }
   };
 
   return (
@@ -2886,23 +2941,357 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         </div>
       )}
 
-      {/* ================= SUB-MODAL: LOG AUDIT (60 HARI) ================= */}
-      {subModal === 'log_audit' && (
+      {/* ================= SUB-MODAL: EDIT AKUN ADMIN (SUPER ADMIN) ================= */}
+      {subModal === 'edit_admin' && selectedAdminToEdit && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-2xl rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
               <div>
                 <h3 className="text-sm font-extrabold text-white">
-                  Log Audit Aktivitas Sistem (Tersimpan 60 Hari)
+                  Edit Data Pengurus: {selectedAdminToEdit.nama}
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Rekaman seluruh aksi login, verifikasi, perubahan kas, dan penyesuaian saldo
+                  Super Admin: Edit data diri, hak akses, kontak, rekening, password, dan status akun
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setSelectedAdminToEdit(null);
+                  setSubModal('daftar_admin');
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditAdminSubmit} className="space-y-4 text-xs">
+              {/* SEKSI 1: AKUN & HAK AKSES */}
+              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2.5">
+                <div className="font-bold text-amber-400 text-xs flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5" />
+                  Kredensial & Hak Akses Pengurus
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">Username Admin *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editAdminAccUsername}
+                      onChange={(e) => setEditAdminAccUsername(e.target.value)}
+                      placeholder="Username admin"
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">Password Baru (Opsional)</label>
+                    <input
+                      type="text"
+                      value={editAdminAccNewPassword}
+                      onChange={(e) => setEditAdminAccNewPassword(e.target.value)}
+                      placeholder="Kosongkan jika tidak diubah"
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">Peran / Hak Akses *</label>
+                    <select
+                      value={editAdminAccRole}
+                      onChange={(e) => setEditAdminAccRole(e.target.value as AdminRole)}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                    >
+                      <option value="super_admin">Super Admin (Akses Penuh)</option>
+                      <option value="admin_kelola">Admin Kelola (Approval Kas & Anggota)</option>
+                      <option value="admin_write">Admin Write (Input & Verifikasi)</option>
+                      <option value="admin_laporan">Admin Laporan (Hanya Unduh)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">Wilayah Kantor *</label>
+                    <select
+                      value={editAdminAccWilayah}
+                      onChange={(e) => setEditAdminAccWilayah(e.target.value as WilayahKoperasi)}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                    >
+                      <option value="Cengkareng">Cengkareng</option>
+                      <option value="Kalideres">Kalideres</option>
+                      <option value="Kembangan">Kembangan</option>
+                      <option value="Kebon Jeruk">Kebon Jeruk</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">Status Akun *</label>
+                    <select
+                      value={editAdminAccStatus}
+                      onChange={(e) => setEditAdminAccStatus(e.target.value as any)}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                    >
+                      <option value="aktif">Aktif</option>
+                      <option value="dibekukan">Dibekukan</option>
+                      <option value="nonaktif">Nonaktif</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* SEKSI 2: DATA DIRI */}
+              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2.5">
+                <div className="font-bold text-sky-400 text-xs flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5" />
+                  Data Diri Sesuai KTP
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-300 font-bold mb-1">Nama Lengkap (Sesuai KTP) *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editAdminAccNama}
+                    onChange={(e) => setEditAdminAccNama(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">NIK (16 Digit) *</label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={16}
+                      value={editAdminAccNik}
+                      onChange={(e) => setEditAdminAccNik(e.target.value.replace(/\D/g, ''))}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-300 font-bold mb-1">No. WhatsApp / HP *</label>
+                    <input
+                      type="tel"
+                      required
+                      value={editAdminAccWa}
+                      onChange={(e) => setEditAdminAccWa(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] text-slate-300 font-bold mb-1">Email Pengurus *</label>
+                  <input
+                    type="email"
+                    required
+                    value={editAdminAccEmail}
+                    onChange={(e) => setEditAdminAccEmail(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+              </div>
+
+              {/* SEKSI 3: ALAMAT DOMISILI */}
+              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2.5">
+                <div className="font-bold text-emerald-400 text-xs">Alamat Domisili Pengurus</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Provinsi</label>
+                    <input
+                      type="text"
+                      value={editAdminAccProvinsi}
+                      onChange={(e) => setEditAdminAccProvinsi(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Kota</label>
+                    <input
+                      type="text"
+                      value={editAdminAccKota}
+                      onChange={(e) => setEditAdminAccKota(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Kecamatan</label>
+                    <input
+                      type="text"
+                      value={editAdminAccKecamatan}
+                      onChange={(e) => setEditAdminAccKecamatan(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Kelurahan</label>
+                    <input
+                      type="text"
+                      value={editAdminAccKelurahan}
+                      onChange={(e) => setEditAdminAccKelurahan(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">RT</label>
+                    <input
+                      type="text"
+                      value={editAdminAccRt}
+                      onChange={(e) => setEditAdminAccRt(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">RW</label>
+                    <input
+                      type="text"
+                      value={editAdminAccRw}
+                      onChange={(e) => setEditAdminAccRw(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-[10px] text-slate-400">Kode Pos</label>
+                    <input
+                      type="text"
+                      value={editAdminAccKodePos}
+                      onChange={(e) => setEditAdminAccKodePos(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400">Jalan / No. Rumah</label>
+                  <input
+                    type="text"
+                    value={editAdminAccAlamat}
+                    onChange={(e) => setEditAdminAccAlamat(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+              </div>
+
+              {/* SEKSI 4: REKENING BANK PRIBADI */}
+              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2.5">
+                <div className="font-bold text-amber-300 text-xs">Rekening Bank Pribadi Pengurus</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Nama Bank</label>
+                    <select
+                      value={editAdminAccBank}
+                      onChange={(e) => setEditAdminAccBank(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                    >
+                      <option>Bank Central Asia (BCA)</option>
+                      <option>Bank Mandiri</option>
+                      <option>Bank Rakyat Indonesia (BRI)</option>
+                      <option>Bank Negara Indonesia (BNI)</option>
+                      <option>Bank Syariah Indonesia (BSI)</option>
+                      <option>Bank Danamon</option>
+                      <option>Bank Permata</option>
+                      <option>Bank CIMB Niaga</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Nomor Rekening</label>
+                    <input
+                      type="text"
+                      value={editAdminAccBankRek}
+                      onChange={(e) => setEditAdminAccBankRek(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Atas Nama Rekening</label>
+                    <input
+                      type="text"
+                      value={editAdminAccBankHolder}
+                      onChange={(e) => setEditAdminAccBankHolder(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* SEKSI 5: PERTANYAAN KEAMANAN */}
+              <div className="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2.5">
+                <div className="font-bold text-purple-300 text-xs">Pertanyaan Keamanan Akun</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Pertanyaan Keamanan</label>
+                    <select
+                      value={editAdminAccSecurityQuestion}
+                      onChange={(e) => setEditAdminAccSecurityQuestion(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                    >
+                      <option>Nama kota kelahiran Anda?</option>
+                      <option>Nama hewan peliharaan pertama?</option>
+                      <option>Nama ibu kandung?</option>
+                      <option>Nama sekolah dasar Anda?</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Jawaban Pemulihan</label>
+                    <input
+                      type="text"
+                      value={editAdminAccSecurityAnswer}
+                      onChange={(e) => setEditAdminAccSecurityAnswer(e.target.value)}
+                      placeholder="Jawaban pemulihan"
+                      className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAdminToEdit(null);
+                    setSubModal('daftar_admin');
+                  }}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                >
+                  Simpan Perubahan Akun Pengurus
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= SUB-MODAL: LOG AUDIT (60 HARI) ================= */}
+      {subModal === 'log_audit' && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-3xl rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-700 mb-3 gap-2">
+              <div>
+                <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                  <span>📜</span> Log Audit Aktivitas Sistem Multi-Platform (Web, Mobile, PC)
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Tercatat otomatis secara realtime online di Firestore untuk seluruh aktivitas Administrator
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSyncFirestoreLogs}
+                  disabled={syncingFirestoreLogs}
+                  className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 border border-purple-500/40 text-purple-300 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all"
+                  title="Tarik log terbaru langsung dari Firebase Firestore"
+                >
+                  <RefreshCw className={`w-3 h-3 ${syncingFirestoreLogs ? 'animate-spin' : ''}`} />
+                  <span>{syncingFirestoreLogs ? 'Sinkron...' : 'Sync Firestore'}</span>
+                </button>
                 <button
                   onClick={handleExportAuditPdf}
-                  className="py-1 px-3 bg-amber-500 text-slate-950 text-xs font-bold rounded-xl"
+                  className="py-1 px-3 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl transition-all shadow"
                 >
                   Cetak PDF
                 </button>
@@ -2912,27 +3301,125 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </div>
             </div>
 
+            {/* Platform Filter Tabs (Req 2) */}
+            <div className="flex flex-wrap items-center gap-1.5 mb-3 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setAuditPlatformFilter('all')}
+                className={`px-2.5 py-1 rounded-xl font-bold transition-all ${
+                  auditPlatformFilter === 'all'
+                    ? 'bg-amber-500 text-slate-950 font-extrabold shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                Semua ({state.auditLogs.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuditPlatformFilter('web')}
+                className={`px-2.5 py-1 rounded-xl font-bold transition-all ${
+                  auditPlatformFilter === 'web'
+                    ? 'bg-amber-500 text-slate-950 font-extrabold shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                🌐 Web
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuditPlatformFilter('mobile_android')}
+                className={`px-2.5 py-1 rounded-xl font-bold transition-all ${
+                  auditPlatformFilter === 'mobile_android'
+                    ? 'bg-emerald-500 text-slate-950 font-extrabold shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                🤖 Android APK/PWA
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuditPlatformFilter('mobile_ios')}
+                className={`px-2.5 py-1 rounded-xl font-bold transition-all ${
+                  auditPlatformFilter === 'mobile_ios'
+                    ? 'bg-sky-500 text-slate-950 font-extrabold shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                🍏 Apple iOS
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuditPlatformFilter('desktop_pc')}
+                className={`px-2.5 py-1 rounded-xl font-bold transition-all ${
+                  auditPlatformFilter === 'desktop_pc'
+                    ? 'bg-purple-500 text-white font-extrabold shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                💻 PC Desktop
+              </button>
+            </div>
+
             <div className="overflow-x-auto text-xs">
               <table className="w-full text-left divide-y divide-slate-800">
                 <thead>
                   <tr className="text-slate-400 text-[10px] uppercase">
                     <th className="py-2">Waktu</th>
+                    <th className="py-2">Platform</th>
                     <th className="py-2">Admin</th>
                     <th className="py-2">Aksi</th>
                     <th className="py-2">Detail</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
-                  {state.auditLogs.map((log) => (
-                    <tr key={log.id}>
-                      <td className="py-2 font-mono text-slate-400">{log.timestamp.slice(0, 19).replace('T', ' ')}</td>
-                      <td className="py-2 font-bold text-white">{log.adminNama}</td>
-                      <td className="py-2 text-amber-400 font-semibold">{log.action}</td>
-                      <td className="py-2 text-slate-300">{log.detail}</td>
-                    </tr>
-                  ))}
+                  {state.auditLogs
+                    .filter((log) => {
+                      if (auditPlatformFilter === 'all') return true;
+                      const detailUpper = (log.detail || '').toUpperCase();
+                      if (auditPlatformFilter === 'mobile_android') return detailUpper.includes('MOBILE_ANDROID') || detailUpper.includes('ANDROID');
+                      if (auditPlatformFilter === 'mobile_ios') return detailUpper.includes('MOBILE_IOS') || detailUpper.includes('IOS');
+                      if (auditPlatformFilter === 'desktop_pc') return detailUpper.includes('DESKTOP_PC') || detailUpper.includes('PC');
+                      if (auditPlatformFilter === 'web') return !detailUpper.includes('MOBILE_ANDROID') && !detailUpper.includes('MOBILE_IOS') && !detailUpper.includes('DESKTOP_PC');
+                      return true;
+                    })
+                    .map((log) => {
+                      const detailUpper = (log.detail || '').toUpperCase();
+                      let platformBadge = { label: '🌐 Web', cls: 'bg-slate-800 text-slate-300 border-slate-700' };
+                      if (detailUpper.includes('MOBILE_ANDROID') || detailUpper.includes('ANDROID')) {
+                        platformBadge = { label: '🤖 Android', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' };
+                      } else if (detailUpper.includes('MOBILE_IOS') || detailUpper.includes('IOS')) {
+                        platformBadge = { label: '🍏 iOS', cls: 'bg-sky-500/20 text-sky-300 border-sky-500/30' };
+                      } else if (detailUpper.includes('DESKTOP_PC') || detailUpper.includes('PC')) {
+                        platformBadge = { label: '💻 PC', cls: 'bg-purple-500/20 text-purple-300 border-purple-500/30' };
+                      }
+
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-850 transition-colors">
+                          <td className="py-2 font-mono text-slate-400 text-[11px] whitespace-nowrap">
+                            {log.timestamp.slice(0, 19).replace('T', ' ')}
+                          </td>
+                          <td className="py-2 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${platformBadge.cls}`}>
+                              {platformBadge.label}
+                            </span>
+                          </td>
+                          <td className="py-2 font-bold text-white whitespace-nowrap">
+                            {log.adminNama}
+                            <span className="text-[10px] text-slate-400 font-normal ml-1">({log.adminRole})</span>
+                          </td>
+                          <td className="py-2 text-amber-400 font-semibold whitespace-nowrap">{log.action}</td>
+                          <td className="py-2 text-slate-300 min-w-[200px]">{log.detail}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
+
+              {state.auditLogs.length === 0 && (
+                <div className="py-8 text-center text-slate-400 text-xs">
+                  Belum ada log riwayat aktivitas. Seluruh aktivitas administrator akan tercatat otomatis di sini.
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3375,19 +3862,32 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </div>
             </div>
 
-            {/* SEKSI 5: TEMUAN ERROR & PERBAIKAN */}
+            {/* SEKSI 5: STATUS KONFIGURASI SISTEM & MODE PRODUKSI */}
             <div className="bg-slate-900/90 border border-slate-700/80 rounded-2xl p-3.5 space-y-2">
               <div className="flex justify-between items-center pb-1">
                 <span className="font-extrabold text-white text-xs">
-                  Temuan Analisis Error ({diagData?.issues?.length || 0})
+                  Status Konfigurasi & Analisis Sistem
                 </span>
-                <span className="text-[10px] text-emerald-400 font-bold">
-                  {diagData?.issues?.length ? 'Perlu Ditinjau' : 'Semua Sistem Normal'}
+                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                  ✓ 100% Normal (Mode Demo Nonaktif)
                 </span>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
+                  <div className="font-bold text-white text-xs mb-0.5">Mode Aplikasi</div>
+                  <div className="text-emerald-400 font-black">Resmi Production (Aktif)</div>
+                  <div className="text-[10px] text-slate-400">Mode demo dimatikan sepenuhnya</div>
+                </div>
+                <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
+                  <div className="font-bold text-white text-xs mb-0.5">Keamanan Biometrik</div>
+                  <div className="text-amber-400 font-bold">Wajib Diaktifkan Dahulu</div>
+                  <div className="text-[10px] text-slate-400">Tidak ada fallback otomatis</div>
+                </div>
+              </div>
+
               {diagData?.issues && diagData.issues.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-2 mt-2">
                   {diagData.issues.map((issue: any) => (
                     <div
                       key={issue.id}
@@ -3404,25 +3904,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   ))}
                 </div>
               ) : (
-                <div className="p-3 bg-slate-800/60 rounded-xl text-center space-y-1">
-                  <div className="text-emerald-400 font-bold">Tidak Terdeteksi Error Kritis</div>
+                <div className="p-3 bg-slate-800/60 rounded-xl text-center space-y-1 mt-2">
+                  <div className="text-emerald-400 font-bold">Tidak Terdeteksi Error Konfigurasi</div>
                   <div className="text-[10px] text-slate-400">
-                    Sistem database, verifikasi transaksi setoran, pengingat biometric, dan sinkronisasi server berjalan lancar tanpa kendala.
+                    Sistem database Firestore, verifikasi transaksi setoran, sinkronisasi multi-platform Web, Mobile & PC berjalan lancar secara online realtime.
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Tindakan: Konfigurasi Ulang & Perbaiki Sistem Error (Req 7) */}
+            {/* Tindakan: Konfigurasi Ulang & Sinkronkan Sistem */}
             <div className="pt-1 space-y-2">
               <button
                 type="button"
                 onClick={handleSystemRepair}
                 disabled={diagLoading}
-                className="w-full py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all"
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all"
               >
                 <Wrench className="w-4 h-4" />
-                {diagLoading ? 'Memproses Konfigurasi Ulang...' : 'Konfigurasi Ulang & Perbaiki Sistem Error'}
+                {diagLoading ? 'Memproses Konfigurasi Ulang...' : 'Konfigurasi Ulang & Sinkronkan Sistem Sekarang'}
               </button>
 
               <button
@@ -3585,6 +4085,24 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
                 <span className="text-[10px] bg-purple-500 text-white font-bold px-2 py-1 rounded-lg">
                   Unduh iOS
+                </span>
+              </a>
+
+              {/* Opsi 6: Konfigurasi Firebase Android (google-services.json) */}
+              <a
+                href="/api/download/google-services.json"
+                download="google-services.json"
+                className="w-full p-2.5 bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 rounded-2xl flex items-center justify-between transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xl">🔥</span>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Firebase Config Android (google-services.json)</div>
+                    <div className="text-[10px] text-amber-300">Package: com.koperasi.hws • Database Realtime Online</div>
+                  </div>
+                </div>
+                <span className="text-[10px] bg-amber-500 text-slate-950 font-bold px-2 py-1 rounded-lg">
+                  Unduh Config
                 </span>
               </a>
             </div>

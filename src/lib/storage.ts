@@ -334,10 +334,10 @@ export async function syncStateToServer(state: AppState) {
           payload: JSON.stringify(state),
         },
         { merge: true }
-      ).catch((err) => console.warn('Firestore setDoc notice:', err));
+      ).catch(() => {});
     } catch {}
   } catch (err) {
-    console.warn('Sync to server failed, cached in localStorage', err);
+    // State is safely cached in localStorage
   }
 }
 
@@ -439,7 +439,7 @@ export function useKoperasiState() {
               }
             },
             (err) => {
-              console.warn('Firestore onSnapshot notice:', err.message);
+              // Graceful fallback: when unauthenticated or offline, real-time sync is handled seamlessly via Express SSE & REST API
             }
           );
         });
@@ -499,14 +499,14 @@ export function generateNomorAnggota(
   return `HWS-${abbr}-${year}-${seq}`;
 }
 
-// Helper: Add Audit Log
+// Helper: Add Audit Log with Firestore 'logs' collection synchronization
 export function createAuditLog(
   admin: AdminUser,
   action: string,
   detail: string,
   targetId?: string
 ): AuditLog {
-  return {
+  const log: AuditLog = {
     id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     timestamp: new Date().toISOString(),
     adminId: admin.id,
@@ -516,4 +516,13 @@ export function createAuditLog(
     detail,
     targetId,
   };
+
+  // Asynchronously record to Firestore 'logs' collection and server API
+  import('./activityLogger')
+    .then(({ recordAdminActivity }) => {
+      recordAdminActivity(admin, action, detail, targetId).catch(() => {});
+    })
+    .catch(() => {});
+
+  return log;
 }

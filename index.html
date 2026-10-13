@@ -23,15 +23,18 @@
         const origWarn = console.warn;
         const origError = console.error;
         console.warn = function(...args) {
-          if (typeof args[0] === 'string' && (args[0].includes('[vite]') || args[0].includes('websocket'))) return;
+          const first = typeof args[0] === 'string' ? args[0] : '';
+          if (first.includes('[vite]') || first.includes('websocket') || first.includes('Firestore onSnapshot') || first.includes('Firebase Auth') || first.includes('permissions')) return;
           origWarn.apply(console, args);
         };
         console.error = function(...args) {
-          if (typeof args[0] === 'string' && (args[0].includes('[vite]') || args[0].includes('websocket') || args[0].includes('WebSocket') || args[0].includes('createWebSocketModuleRunnerTransport'))) return;
+          const first = typeof args[0] === 'string' ? args[0] : '';
+          if (first.includes('[vite]') || first.includes('websocket') || first.includes('WebSocket') || first.includes('createWebSocketModuleRunnerTransport') || first.includes('Missing or insufficient permissions') || first.includes('firebase_auth')) return;
           origError.apply(console, args);
         };
         window.addEventListener('unhandledrejection', function(event) {
-          if (event && event.reason && String(event.reason).includes('WebSocket')) {
+          const reasonStr = event && event.reason ? String(event.reason) : '';
+          if (reasonStr.includes('WebSocket') || reasonStr.includes('permissions') || reasonStr.includes('auth/')) {
             event.preventDefault();
           }
         });

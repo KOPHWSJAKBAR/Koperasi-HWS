@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
 import { generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
+import { detectPlatform } from '../lib/activityLogger';
 import { Fingerprint, Lock, User, ArrowRight, ShieldCheck, UserPlus, HelpCircle, X, Upload, CheckCircle2, AlertCircle, Key, Check } from 'lucide-react';
 
 interface LoginViewProps {
@@ -223,66 +224,112 @@ export const LoginView: React.FC<LoginViewProps> = ({
       setSavedAdminAccount(null);
     }
 
+    // Record login activity for Super Admin history across Web, Mobile, PC (Req 2)
+    const platform = detectPlatform();
+    const audit = createAuditLog(
+      admin,
+      'Login Admin',
+      `Admin (${admin.nama} - Role: ${admin.role}) berhasil masuk ke sistem via [${platform.toUpperCase()}]`
+    );
+    updateState((prev) => ({
+      ...prev,
+      auditLogs: [audit, ...(prev.auditLogs || [])],
+    }));
+
     onLoginAdmin(admin);
   };
 
-  // Biometric Login (Terintegrasi langsung ke pengingat password & User ID - Req 3 & 6)
+  // Biometric Login (Wajib diaktifkan terlebih dahulu di Pengaturan - Hilangkan biometrik otomatis anggota pertama dan super admin)
   const handleBiometricAuth = async () => {
     try {
       setErrorMessage('');
+
+      // 1. Verifikasi status aktivasi biometrik pada perangkat (Wajib diaktifkan terlebih dahulu)
+      const isBiometricActive =
+        typeof window !== 'undefined' &&
+        localStorage.getItem('hws_biometric_active') === 'true';
+
+      if (!isBiometricActive) {
+        setErrorMessage(
+          '⚠️ Fitur Biometrik belum diaktifkan pada perangkat ini. Sesuai aturan keamanan koperasi, fitur Biometrik (Sidik Jari / Face ID) harus diaktifkan terlebih dahulu di menu Pengaturan Akun setelah login menggunakan Password/PIN. Biometrik bawaan untuk anggota pertama dan super admin telah ditiadakan.'
+        );
+        return;
+      }
+
       setSuccessMessage('🔐 Memindai Biometrik perangkat (Sidik Jari / Face ID)...');
 
       if (activeTab === 'member') {
-        const targetId = savedMemberAccount?.identifier || memberIdentifier;
-        const member = (targetId && state.members.find(
-          (m) =>
-            m.nomorAnggota.toLowerCase() === targetId.toLowerCase() ||
-            m.whatsapp.replace(/\D/g, '') === targetId.replace(/\D/g, '') ||
-            m.nomorRekening === targetId
-        )) || state.members[0];
-
-        if (!member) {
-          setErrorMessage('Belum ada akun anggota yang tersimpan di perangkat ini.');
+        if (!savedMemberAccount || !savedMemberAccount.identifier) {
+          setErrorMessage(
+            'Belum ada akun anggota yang ditautkan ke sensor biometrik perangkat ini. Silakan login dengan Nomor Anggota & PIN sekali, lalu aktifkan Biometrik di menu Pengaturan.'
+          );
+          setSuccessMessage('');
           return;
         }
 
-        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk via pengingat password: ${member.nama}`);
-        // Ensure remembered
-        if (rememberAccount) {
-          const saved = {
-            identifier: member.nomorAnggota,
-            nama: member.nama,
-            password: member.password,
-          };
-          localStorage.setItem('hws_saved_member_account', JSON.stringify(saved));
-          setSavedMemberAccount(saved);
+        const member = state.members.find(
+          (m) =>
+            m.nomorAnggota.toLowerCase() === savedMemberAccount.identifier.toLowerCase() ||
+            m.whatsapp.replace(/\D/g, '') === savedMemberAccount.identifier.replace(/\D/g, '') ||
+            m.nomorRekening === savedMemberAccount.identifier
+        );
+
+        if (!member) {
+          setErrorMessage('Akun anggota yang ditautkan ke biometrik tidak ditemukan pada database.');
+          setSuccessMessage('');
+          return;
         }
 
+        if (member.status === 'dibekukan' || member.status === 'nonaktif') {
+          setErrorMessage('Akun anggota ini sedang tidak aktif atau dibekukan pengurus.');
+          setSuccessMessage('');
+          return;
+        }
+
+        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk sebagai: ${member.nama}`);
         setTimeout(() => {
           onLoginMember(member);
         }, 500);
       } else {
-        const targetUser = savedAdminAccount?.username || adminUsername || 'Abzqar';
-        const admin = state.admins.find(
-          (a) => a.username.toLowerCase() === targetUser.toLowerCase() || a.email.toLowerCase() === targetUser.toLowerCase()
-        ) || state.admins.find((a) => a.username.toLowerCase() === 'abzqar') || state.admins[0];
-
-        if (!admin) {
-          setErrorMessage('Pengurus tidak ditemukan.');
+        if (!savedAdminAccount || !savedAdminAccount.username) {
+          setErrorMessage(
+            'Belum ada akun admin yang ditautkan ke sensor biometrik perangkat ini. Silakan login dengan Username & Password sekali, lalu aktifkan Biometrik di menu Pengaturan.'
+          );
+          setSuccessMessage('');
           return;
         }
 
-        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk via pengingat akun: ${admin.nama}`);
-        if (rememberAccount) {
-          const saved = {
-            username: admin.username,
-            nama: admin.nama,
-            password: admin.password,
-          };
-          localStorage.setItem('hws_saved_admin_account', JSON.stringify(saved));
-          setSavedAdminAccount(saved);
+        const targetUser = savedAdminAccount.username.trim().toLowerCase();
+        const admin = state.admins.find(
+          (a) =>
+            a.username.toLowerCase() === targetUser ||
+            a.email.toLowerCase() === targetUser
+        );
+
+        if (!admin) {
+          setErrorMessage('Akun pengurus yang ditautkan ke biometrik tidak ditemukan.');
+          setSuccessMessage('');
+          return;
         }
 
+        if (admin.status === 'dibekukan') {
+          setErrorMessage('Akun pengurus ini sedang DIBEKUKAN oleh Super Admin koperasi.');
+          setSuccessMessage('');
+          return;
+        }
+
+        const platform = detectPlatform();
+        const audit = createAuditLog(
+          admin,
+          'Login Biometrik Admin',
+          `Admin (${admin.nama} - Role: ${admin.role}) masuk via sensor biometrik perangkat [${platform.toUpperCase()}]`
+        );
+        updateState((prev) => ({
+          ...prev,
+          auditLogs: [audit, ...(prev.auditLogs || [])],
+        }));
+
+        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk sebagai pengurus: ${admin.nama}`);
         setTimeout(() => {
           onLoginAdmin(admin);
         }, 500);
@@ -1007,10 +1054,45 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Opsi 4: Firebase Android Config & google-services.json */}
+              <div className="p-3 bg-slate-900/80 border border-slate-700/80 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-base">🔥</span>
+                    <div>
+                      <div className="font-bold text-white text-xs">Konfigurasi Firebase Android & Realtime Database</div>
+                      <div className="text-[10px] text-slate-400">Package: com.koperasi.hws • Sinkronisasi Online Realtime</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href="/api/download/google-services.json"
+                    download="google-services.json"
+                    onClick={() => {
+                      setSuccessMessage('✓ File konfigurasi google-services.json berhasil diunduh untuk modul Android app/');
+                    }}
+                    className="flex-1 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 font-bold text-[10px] rounded-xl text-center transition-all"
+                  >
+                    Unduh google-services.json
+                  </a>
+                </div>
+              </div>
+
+              {/* Tips & Solusi Instalasi */}
+              <div className="p-2.5 bg-slate-900/60 rounded-xl border border-slate-750 text-[10px] text-slate-300 space-y-1">
+                <div className="font-extrabold text-amber-400 flex items-center gap-1">
+                  <span>💡</span> Tips Agar Aplikasi Langsung Terpasang:
+                </div>
+                <div>• <b>Android:</b> Jika muncul peringatan keamanan, izinkan "Instal dari sumber ini" di Pengaturan HP, atau klik tombol <i>Pasang di HP</i> untuk instal instan tanpa file.</div>
+                <div>• <b>PC Windows:</b> Klik kanan <i>Install-Koperasi-HWS.bat</i> lalu pilih "Jalankan sebagai administrator" atau unduh .EXE.</div>
+                <div>• <b>iPhone:</b> Buka dengan Safari, ketuk tombol Share lalu pilih "Tambah ke Layar Utama".</div>
+              </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-slate-700/80 text-[10px] text-slate-400 text-center">
-              Aplikasi resmi tersinkronisasi otomatis dengan server cloud Koperasi HWS.
+            <div className="mt-3 pt-2.5 border-t border-slate-700/80 text-[10px] text-slate-400 text-center">
+              Aplikasi resmi tersinkronisasi otomatis secara online realtime dengan database Firebase Firestore & Cloud Koperasi HWS.
             </div>
           </div>
         </div>

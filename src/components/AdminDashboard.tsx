@@ -41,6 +41,7 @@ import {
   VolumeX,
   X,
   Sparkles,
+  Activity,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -74,6 +75,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [showSettings, setShowSettings] = useState(false);
   const [settingSubModal, setSettingSubModal] = useState<any>(null);
+
+  // Orcas Policy Engine confirmation modal state for Mobile & PC
+  const [orcasConfirmation, setOrcasConfirmation] = useState<{
+    isOpen: boolean;
+    title: string;
+    actionName: string;
+    details: string;
+    onApprove?: () => void;
+    onReject?: () => void;
+  } | null>(null);
 
   // Notification state
   const [toasts, setToasts] = useState<AdminToast[]>([]);
@@ -469,6 +480,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Realtime Online Status Badge */}
+            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-extrabold text-emerald-400">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>Online Realtime (Firebase)</span>
+            </div>
+
+            {/* Write Permission Status: Write hanya pada Super Admin */}
+            <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-[10px] font-bold">
+              <span className="text-slate-400">Akses Tulis:</span>
+              <span className={isSuperAdmin ? 'text-amber-400 font-black' : 'text-slate-400'}>
+                {isSuperAdmin ? 'Super Admin' : 'Terbatas'}
+              </span>
+            </div>
+
+            {/* Quick Kelola Admin Button for Super Admin */}
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingSubModal('daftar_admin');
+                  setShowSettings(true);
+                }}
+                className="py-1.5 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                title="Kelola Akun Admin (Edit, Tambah, Hapus)"
+              >
+                <Shield className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Kelola Admin</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/30 font-mono font-black">
+                  {state.admins.length}
+                </span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -944,6 +988,64 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span>›</span>
                   </button>
                 )}
+
+                {isSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingSubModal('daftar_admin');
+                      setShowSettings(true);
+                    }}
+                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 to-[#111c33] border border-amber-500/40 text-white flex items-center justify-between text-left hover:border-amber-400 transition-all shadow-md"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-black">
+                        <Shield className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-extrabold flex items-center gap-2">
+                          <span>8. Kelola Administrator</span>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-amber-500 text-slate-950 font-black">
+                            {state.admins.length} Admin
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Super Admin: Edit data akun, tambah pengurus baru, atau hapus admin
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-amber-400 font-bold">›</span>
+                  </button>
+                )}
+
+                {isSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingSubModal('log_audit');
+                      setShowSettings(true);
+                    }}
+                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-purple-500/10 to-[#111c33] border border-purple-500/40 text-white flex items-center justify-between text-left hover:border-purple-400 transition-all shadow-md"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-black">
+                        <Activity className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-extrabold flex items-center gap-2">
+                          <span>9. Log Audit History Multi-Platform</span>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-purple-500 text-white font-black">
+                            {state.auditLogs.length} Log
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Rekam aktivitas admin dari Web, Android Mobile (.APK), iOS & PC Desktop
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-purple-400 font-bold">›</span>
+                  </button>
+                )}
               </div>
             </div>
           </>
@@ -1077,6 +1179,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           }}
           onLogout={onLogout}
         />
+      )}
+
+      {/* ================= ORCAS POLICY ENGINE CONFIRMATION MODAL (MOBILE & PC) ================= */}
+      {orcasConfirmation?.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-amber-500/50 w-full max-w-md rounded-3xl p-5 shadow-2xl">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-700/80 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-black">
+                <Shield className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-amber-400 uppercase tracking-wider">
+                  Orcas Policy Engine SDK
+                </h4>
+                <div className="text-[11px] text-white font-bold">
+                  Konfirmasi Kebijakan Keamanan Sistem
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2 mb-4">
+              <div className="text-[11px] font-bold text-slate-200">
+                Orcas policy engine requires confirmation for this tool call, please approve or reject
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Aksi: <span className="text-amber-300 font-semibold">{orcasConfirmation.actionName}</span>
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Keterangan: <span className="text-slate-300">{orcasConfirmation.details}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  orcasConfirmation.onReject?.();
+                  setOrcasConfirmation(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition-all"
+              >
+                Reject (Tolak)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  orcasConfirmation.onApprove?.();
+                  setOrcasConfirmation(null);
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-lg transition-all"
+              >
+                Approve (Setujui)
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
