@@ -20,6 +20,7 @@ import {
   Smile,
   Paperclip,
   Wifi,
+  ArrowLeft,
 } from 'lucide-react';
 
 interface ChatOnlineViewProps {
@@ -39,8 +40,29 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   const [selectedMemberId, setSelectedMemberId] = useState<string>(
     isMember ? currentMember.id : state.members[0]?.id || ''
   );
+  const [mobileChatOpen, setMobileChatOpen] = useState(isMember ? true : false);
+  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [inputPesan, setInputPesan] = useState('');
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Online Presence Polling (Req 19: chat admin tampilkan anggota online yang sedang membuka aplikasi)
+  useEffect(() => {
+    const fetchPresence = async () => {
+      try {
+        const res = await fetch('/api/presence');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.onlineUsers && Array.isArray(data.onlineUsers)) {
+            const ids = new Set<string>(data.onlineUsers.map((u: any) => String(u.userId)));
+            setOnlineUserIds(ids);
+          }
+        }
+      } catch {}
+    };
+    fetchPresence();
+    const interval = setInterval(fetchPresence, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Realtime Polling Fallback (ensures live chat across all devices & mobile)
   useEffect(() => {
@@ -50,22 +72,27 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Group messages by member
-  // Sort members for admin: requirement "tampilkan chat diatas pada orang terakhir pesan masuk pada chat pilihan menu chat pada admin seperti pada whatsaap aplikasi"
+  // Group messages by member & track online status
   const memberListWithLastMsg = state.members.map((mem) => {
     const memMsgs = state.chatMessages.filter((m) => m.memberId === mem.id);
     const lastMsg = memMsgs[memMsgs.length - 1];
     const unreadCount = memMsgs.filter((m) => m.senderType === 'member' && !m.isReadByAdmin).length;
+    const isOnline = onlineUserIds.has(mem.id);
     return {
       member: mem,
       lastMsg,
       unreadCount,
+      isOnline,
       lastTimestamp: lastMsg ? new Date(lastMsg.timestamp).getTime() : 0,
     };
   });
 
-  // Sort descending by last message timestamp
-  memberListWithLastMsg.sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+  // Sort: online and latest messages first
+  memberListWithLastMsg.sort((a, b) => {
+    if (a.isOnline && !b.isOnline) return -1;
+    if (!a.isOnline && b.isOnline) return 1;
+    return b.lastTimestamp - a.lastTimestamp;
+  });
 
   // Active member object
   const activeMember = state.members.find((m) => m.id === selectedMemberId);
@@ -152,34 +179,60 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[75vh] max-h-[700px]">
       {/* ================= LEFT / TOP: CONVERSATION LIST (ADMIN ONLY) ================= */}
       {!isMember && (
-        <div className="w-full md:w-80 border-b md:border-b-0 md:border-r border-slate-700/80 bg-[#0d1424] flex flex-col shrink-0">
+        <div
+          className={`w-full md:w-80 border-b md:border-b-0 md:border-r border-slate-700/80 bg-[#0d1424] flex flex-col shrink-0 ${
+            mobileChatOpen ? 'hidden md:flex' : 'flex'
+          }`}
+        >
           <div className="p-3.5 border-b border-slate-700 flex justify-between items-center">
             <span className="text-xs font-black text-white uppercase tracking-wider">
               Chat Anggota (20 Hari)
             </span>
-            <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-full">
-              {state.members.length} Kontak
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {memberListWithLastMsg.filter((m) => m.isOnline).length} Online
+              </span>
+              <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-full">
+                {state.members.length} Kontak
+              </span>
+            </div>
           </div>
 
           <div className="overflow-y-auto flex-1 divide-y divide-slate-800/60">
-            {memberListWithLastMsg.map(({ member, lastMsg, unreadCount }) => (
+            {memberListWithLastMsg.map(({ member, lastMsg, unreadCount, isOnline }) => (
               <button
                 key={member.id}
                 type="button"
-                onClick={() => setSelectedMemberId(member.id)}
+                onClick={() => {
+                  setSelectedMemberId(member.id);
+                  setMobileChatOpen(true);
+                }}
                 className={`w-full p-3 text-left flex items-center gap-3 transition-colors ${
                   selectedMemberId === member.id
                     ? 'bg-slate-800/90 border-l-4 border-amber-500'
                     : 'hover:bg-slate-800/40'
                 }`}
               >
-                <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold shrink-0">
-                  {member.nama.charAt(0).toUpperCase()}
+                <div className="relative shrink-0">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold">
+                    {member.nama.charAt(0).toUpperCase()}
+                  </div>
+                  {isOnline && (
+                    <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-[#0d1424]" />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-xs font-bold text-white truncate">{member.nama}</span>
+                  <div className="flex justify-between items-baseline gap-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-xs font-bold text-white truncate">{member.nama}</span>
+                      {isOnline && (
+                        <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-black border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          Online
+                        </span>
+                      )}
+                    </div>
                     {lastMsg && (
                       <span className="text-[9px] text-slate-500 font-mono shrink-0">
                         {lastMsg.timestamp.slice(11, 16)}
@@ -210,10 +263,27 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       )}
 
       {/* ================= RIGHT / MAIN: CHAT CONVERSATION WINDOW ================= */}
-      <div className="flex-1 flex flex-col bg-[#0b1120] relative">
+      <div
+        className={`flex-1 flex flex-col bg-[#0b1120] relative ${
+          !isMember && !mobileChatOpen ? 'hidden md:flex' : 'flex'
+        }`}
+      >
         {/* Chat Header */}
         <div className="p-3.5 bg-[#162035] border-b border-slate-700/80 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            {/* Mobile Back Button to Member List (Req B.2) */}
+            {!isMember && (
+              <button
+                type="button"
+                onClick={() => setMobileChatOpen(false)}
+                className="md:hidden py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-xl text-xs font-bold flex items-center gap-1 border border-slate-700 shrink-0 shadow-sm"
+                title="Kembali ke Daftar Anggota"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Kontak</span>
+              </button>
+            )}
+
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-300 p-0.5">
               <div className="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center font-bold text-amber-400 text-xs">
                 {isMember ? 'HWS' : activeMember?.nama.charAt(0).toUpperCase() || 'A'}
@@ -222,7 +292,13 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             <div>
               <div className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
                 {isMember ? 'Layanan Pengurus Koperasi HWS' : activeMember?.nama}
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    !isMember && activeMember && !onlineUserIds.has(activeMember.id)
+                      ? 'bg-slate-500'
+                      : 'bg-emerald-400 animate-pulse'
+                  }`}
+                />
               </div>
               <div className="text-[10px] text-slate-400">
                 {isMember

@@ -242,6 +242,30 @@ setInterval(cleanupOldChats, 60 * 60 * 1000); // Check hourly
 // SSE (Server-Sent Events) clients for instant cross-device realtime sync
 const sseClients = new Set<Response>();
 
+// Connected Devices & Online Users Presence Store (Req 1 & 19)
+interface ConnectedDevicePresence {
+  deviceId: string;
+  userId: string;
+  userName: string;
+  role: 'member' | 'admin' | 'super_admin';
+  platform: 'mobile_android' | 'mobile_ios' | 'desktop_pc' | 'web';
+  lastSeen: number;
+  ip?: string;
+  userAgent?: string;
+}
+
+const activeDevicesMap = new Map<string, ConnectedDevicePresence>();
+
+function cleanStalePresence() {
+  const now = Date.now();
+  for (const [key, dev] of activeDevicesMap.entries()) {
+    if (now - dev.lastSeen > 2.5 * 60 * 1000) { // stale after 2.5 minutes
+      activeDevicesMap.delete(key);
+    }
+  }
+}
+setInterval(cleanStalePresence, 20000);
+
 function broadcastEvent(type: string, payload: any) {
   const data = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
   for (const client of sseClients) {
@@ -304,6 +328,53 @@ async function startServer() {
     saveDatabase(currentState);
     broadcastEvent('NEW_CHAT_MESSAGE', message);
     res.json({ success: true, message });
+  });
+
+  // Heartbeat / Online Presence Endpoint (Req 1 & 19)
+  app.post('/api/presence', (req: Request, res: Response) => {
+    try {
+      const { deviceId, userId, userName, role, platform } = req.body;
+      const key = deviceId || `${userId || 'guest'}-${platform || 'web'}`;
+      const now = Date.now();
+
+      activeDevicesMap.set(key, {
+        deviceId: key,
+        userId: userId || 'guest',
+        userName: userName || 'Tamu / Pengunjung',
+        role: role || 'member',
+        platform: platform || 'web',
+        lastSeen: now,
+        ip: req.ip || req.socket.remoteAddress || '127.0.0.1',
+        userAgent: req.headers['user-agent'] || '',
+      });
+
+      res.json({ success: true, activeDevices: activeDevicesMap.size });
+    } catch {
+      res.status(500).json({ error: 'Presence tracking error' });
+    }
+  });
+
+  app.get('/api/presence', (req: Request, res: Response) => {
+    cleanStalePresence();
+    const activeList = Array.from(activeDevicesMap.values());
+    const platforms = {
+      android: activeList.filter((d) => d.platform === 'mobile_android').length,
+      ios: activeList.filter((d) => d.platform === 'mobile_ios').length,
+      pc: activeList.filter((d) => d.platform === 'desktop_pc').length,
+      web: activeList.filter((d) => d.platform === 'web').length,
+    };
+
+    const onlineMemberIds = activeList
+      .filter((d) => d.role === 'member' && d.userId && d.userId !== 'guest')
+      .map((d) => d.userId);
+
+    res.json({
+      success: true,
+      totalConnectedDevices: Math.max(activeList.length, sseClients.size, 1),
+      connectedPlatforms: platforms,
+      onlineUsers: activeList,
+      onlineMemberIds,
+    });
   });
 
   // Reset to initial clean state
@@ -812,6 +883,16 @@ async function startServer() {
           auditLogsCount: (currentState.auditLogs || []).length,
           saldoKasKoperasi: totalKasKoperasi,
           totalTabunganAnggota: totalSaldoAnggota,
+        },
+        connectedDevicesAnalytics: {
+          totalDevices: Math.max(activeDevicesMap.size, sseClients.size, 1),
+          platforms: {
+            android: Array.from(activeDevicesMap.values()).filter((d) => d.platform === 'mobile_android').length,
+            ios: Array.from(activeDevicesMap.values()).filter((d) => d.platform === 'mobile_ios').length,
+            pc: Array.from(activeDevicesMap.values()).filter((d) => d.platform === 'desktop_pc').length,
+            web: Array.from(activeDevicesMap.values()).filter((d) => d.platform === 'web').length || (activeDevicesMap.size === 0 ? 1 : 0),
+          },
+          onlineUsers: Array.from(activeDevicesMap.values()),
         },
         issues,
         autoRepairAvailable: true,

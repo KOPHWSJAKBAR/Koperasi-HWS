@@ -19,6 +19,7 @@ import {
   Trash2,
   Edit,
   Eye,
+  EyeOff,
   Lock,
   Unlock,
   CheckCircle,
@@ -74,6 +75,18 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [formRekPribadi, setFormRekPribadi] = useState('');
   const [formAtasNama, setFormAtasNama] = useState('');
   const [formPassword, setFormPassword] = useState('user123');
+  const [formJenisKelamin, setFormJenisKelamin] = useState('Laki-laki');
+  const [formTanggalLahir, setFormTanggalLahir] = useState('1990-01-01');
+  const [formPekerjaan, setFormPekerjaan] = useState('Wirausaha');
+  const [formPinTransaksi, setFormPinTransaksi] = useState('123456');
+  const [formSetoranPokok, setFormSetoranPokok] = useState('50000');
+  const [formSetoranWajib, setFormSetoranWajib] = useState('20000');
+  
+  // Visibility toggles
+  const [showFormPassword, setShowFormPassword] = useState(false);
+  const [showFormPin, setShowFormPin] = useState(false);
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [showEditPin, setShowEditPin] = useState(false);
 
   const isSuperAdmin = currentAdmin.role === 'super_admin';
   const isWriter = currentAdmin.role === 'admin_write';
@@ -450,27 +463,31 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       nama: formNama.trim(),
       nik: formNik.trim(),
       whatsapp: formWhatsapp.trim(),
-      email: formEmail.trim(),
+      email: formEmail.trim() || `${formNik.trim()}@anggota.hws.id`,
       wilayah: formWilayah,
+      jenisKelamin: formJenisKelamin,
+      tanggalLahir: formTanggalLahir,
+      pekerjaan: formPekerjaan,
       alamatLengkap: formAlamat.trim(),
       provinsi: formProvinsi,
       kota: formKota,
       kecamatan: formKecamatan,
-      kelurahan: formKelurahan,
-      rt: formRt,
-      rw: formRw,
-      kodePos: formKodePos,
+      kelurahan: formKelurahan || 'Cengkareng Barat',
+      rt: formRt || '001',
+      rw: formRw || '001',
+      kodePos: formKodePos || '11740',
       bankPribadi: {
         namaBank: formBank,
-        nomorRekening: formRekPribadi,
+        nomorRekening: formRekPribadi || '0000000000',
         atasNama: formAtasNama || formNama,
       },
-      password: formPassword,
-      saldoPokok: 0,
+      password: formPassword || 'user123',
+      pinTransaksi: formPinTransaksi || '123456',
+      saldoPokok: Number(formSetoranPokok) || 0,
       isPokokLocked: true,
       saldoZakatFitrah: 0,
       saldoQurban: 0,
-      saldoUmum: 0,
+      saldoUmum: Number(formSetoranWajib) || 0,
       status: 'aktif',
       terdaftarSejak: new Date().toISOString().split('T')[0],
     };
@@ -972,20 +989,33 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveEditMember} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Nama Lengkap</label>
-                <input
-                  type="text"
-                  required
-                  value={editingMember.nama}
-                  onChange={(e) => setEditingMember({ ...editingMember, nama: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Nama Lengkap *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingMember.nama}
+                    onChange={(e) => setEditingMember({ ...editingMember, nama: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">NIK (16 Digit) *</label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={16}
+                    value={editingMember.nik}
+                    onChange={(e) => setEditingMember({ ...editingMember, nik: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-bold text-slate-300 mb-1">Nomor WhatsApp</label>
+                  <label className="block font-bold text-slate-300 mb-1">Nomor WhatsApp *</label>
                   <input
                     type="tel"
                     required
@@ -998,24 +1028,162 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   <label className="block font-bold text-slate-300 mb-1">Email</label>
                   <input
                     type="email"
-                    required
-                    value={editingMember.email}
+                    value={editingMember.email || ''}
                     onChange={(e) => setEditingMember({ ...editingMember, email: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Password Anggota Baru</label>
-                <input
-                  type="text"
-                  placeholder="Ketik password baru jika ingin mengubah"
-                  value={editingMember.password || ''}
-                  onChange={(e) => setEditingMember({ ...editingMember, password: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
-                />
+              {/* Wilayah Koperasi & Status Akun (Req 18: Admin dapat merubah wilayah anggota) */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-amber-400 mb-1">Wilayah Koperasi *</label>
+                  <select
+                    value={editingMember.wilayah}
+                    onChange={(e) => setEditingMember({ ...editingMember, wilayah: e.target.value as WilayahKoperasi })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-amber-500/50 rounded-xl text-white font-bold"
+                  >
+                    <option value="Cengkareng">Cengkareng</option>
+                    <option value="Kalideres">Kalideres</option>
+                    <option value="Kembangan">Kembangan</option>
+                    <option value="Kebon Jeruk">Kebon Jeruk</option>
+                    <option value="Grogol Petamburan">Grogol Petamburan</option>
+                    <option value="Palmerah">Palmerah</option>
+                    <option value="Taman Sari">Taman Sari</option>
+                    <option value="Tambora">Tambora</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Status Keanggotaan</label>
+                  <select
+                    value={editingMember.status}
+                    onChange={(e) => setEditingMember({ ...editingMember, status: e.target.value as any })}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-semibold"
+                  >
+                    <option value="aktif">Aktif</option>
+                    <option value="nonaktif">Non-Aktif</option>
+                    <option value="dibekukan">Dibekukan</option>
+                    <option value="pending">Pending Verifikasi</option>
+                  </select>
+                </div>
               </div>
+
+              {/* Password & PIN Transaksi (Req 13 & 22) */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Password Anggota</label>
+                  <div className="relative">
+                    <input
+                      type={showEditPassword ? 'text' : 'password'}
+                      placeholder="Ketik password baru jika diubah"
+                      value={editingMember.password || ''}
+                      onChange={(e) => setEditingMember({ ...editingMember, password: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowEditPassword(!showEditPassword)}
+                      className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-white"
+                      title={showEditPassword ? 'Sembunyikan' : 'Tampilkan'}
+                    >
+                      {showEditPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">PIN Transaksi (6 Digit)</label>
+                  <div className="relative">
+                    <input
+                      type={showEditPin ? 'text' : 'password'}
+                      maxLength={6}
+                      value={editingMember.pinTransaksi || '123456'}
+                      onChange={(e) => setEditingMember({ ...editingMember, pinTransaksi: e.target.value.replace(/\D/g, '').slice(0, 6) })}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowEditPin(!showEditPin)}
+                      className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-white"
+                      title={showEditPin ? 'Sembunyikan' : 'Tampilkan'}
+                    >
+                      {showEditPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rekening Bank Pribadi */}
+              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-700/80 space-y-2">
+                <div className="text-[11px] font-bold text-amber-400">Rekening Bank Pribadi Anggota:</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Bank</label>
+                    <input
+                      type="text"
+                      value={editingMember.bankPribadi?.namaBank || ''}
+                      onChange={(e) => setEditingMember({
+                        ...editingMember,
+                        bankPribadi: { ...editingMember.bankPribadi, namaBank: e.target.value }
+                      })}
+                      className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">No. Rekening</label>
+                    <input
+                      type="text"
+                      value={editingMember.bankPribadi?.nomorRekening || ''}
+                      onChange={(e) => setEditingMember({
+                        ...editingMember,
+                        bankPribadi: { ...editingMember.bankPribadi, nomorRekening: e.target.value }
+                      })}
+                      className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Atas Nama</label>
+                    <input
+                      type="text"
+                      value={editingMember.bankPribadi?.atasNama || ''}
+                      onChange={(e) => setEditingMember({
+                        ...editingMember,
+                        bankPribadi: { ...editingMember.bankPribadi, atasNama: e.target.value }
+                      })}
+                      className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Super Admin Penyesuaian Saldo Profil (Req 13) */}
+              {isSuperAdmin && (
+                <div className="p-3 bg-amber-500/10 rounded-2xl border border-amber-500/30 space-y-2">
+                  <div className="text-[11px] font-bold text-amber-300">
+                    Penyesuaian Saldo Tabungan (Khusus Super Admin):
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400">Saldo Pokok (Rp)</label>
+                      <input
+                        type="number"
+                        value={editingMember.saldoPokok}
+                        onChange={(e) => setEditingMember({ ...editingMember, saldoPokok: Number(e.target.value) || 0 })}
+                        className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-amber-300 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400">Saldo Umum (Rp)</label>
+                      <input
+                        type="number"
+                        value={editingMember.saldoUmum}
+                        onChange={(e) => setEditingMember({ ...editingMember, saldoUmum: Number(e.target.value) || 0 })}
+                        className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-sky-300 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-slate-300 mb-1">Alamat Lengkap</label>
@@ -1047,93 +1215,309 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         </div>
       )}
 
-      {/* Modal Add Member */}
+      {/* Modal Add Member (Req 17: Pendaftaran anggota oleh admin lengkap sesuai anggota) */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto my-4 text-slate-100">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
-              <h3 className="text-sm font-extrabold text-white">Tambah Anggota Koperasi Baru</h3>
+              <div>
+                <h3 className="text-sm font-extrabold text-white">
+                  Formulir Lengkap Pendaftaran Anggota Baru
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Data lengkap terdaftar resmi di Koperasi HWS Syariah
+                </p>
+              </div>
               <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleAddMemberSubmit} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-slate-300 mb-1">Nama Lengkap *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formNama}
-                    onChange={(e) => setFormNama(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                  />
+            <form onSubmit={handleAddMemberSubmit} className="space-y-3.5 text-xs">
+              {/* 1. Data Diri Pokok */}
+              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 space-y-2.5">
+                <div className="font-bold text-amber-400 text-xs">1. Identitas Anggota</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-300 mb-1">Nama Lengkap (Sesuai KTP) *</label>
+                    <input
+                      type="text"
+                      required
+                      value={formNama}
+                      onChange={(e) => setFormNama(e.target.value)}
+                      placeholder="Nama lengkap"
+                      className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">NIK (16 Digit KTP) *</label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={16}
+                      value={formNik}
+                      onChange={(e) => setFormNik(e.target.value.replace(/\D/g, ''))}
+                      placeholder="16 digit angka"
+                      className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-slate-300 mb-1">No. WhatsApp *</label>
+                    <input
+                      type="tel"
+                      required
+                      value={formWhatsapp}
+                      onChange={(e) => setFormWhatsapp(e.target.value)}
+                      placeholder="0812xxxx"
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">Email</label>
+                    <input
+                      type="email"
+                      value={formEmail}
+                      onChange={(e) => setFormEmail(e.target.value)}
+                      placeholder="email@example.com"
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">Wilayah Koperasi *</label>
+                    <select
+                      value={formWilayah}
+                      onChange={(e) => setFormWilayah(e.target.value as any)}
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold"
+                    >
+                      <option value="Cengkareng">Cengkareng</option>
+                      <option value="Kalideres">Kalideres</option>
+                      <option value="Kembangan">Kembangan</option>
+                      <option value="Kebon Jeruk">Kebon Jeruk</option>
+                      <option value="Grogol Petamburan">Grogol Petamburan</option>
+                      <option value="Palmerah">Palmerah</option>
+                      <option value="Taman Sari">Taman Sari</option>
+                      <option value="Tambora">Tambora</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-slate-300 mb-1">Jenis Kelamin</label>
+                    <select
+                      value={formJenisKelamin}
+                      onChange={(e) => setFormJenisKelamin(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    >
+                      <option value="Laki-laki">Laki-laki</option>
+                      <option value="Perempuan">Perempuan</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">Tanggal Lahir</label>
+                    <input
+                      type="date"
+                      value={formTanggalLahir}
+                      onChange={(e) => setFormTanggalLahir(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-[11px]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">Pekerjaan</label>
+                    <input
+                      type="text"
+                      value={formPekerjaan}
+                      onChange={(e) => setFormPekerjaan(e.target.value)}
+                      placeholder="Pedagang / Usaha"
+                      className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Alamat Lengkap Sesuai KTP */}
+              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 space-y-2">
+                <div className="font-bold text-amber-400 text-xs">2. Alamat Domisili & Sesuai KTP</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400">RT / RW</label>
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        placeholder="RT"
+                        value={formRt}
+                        onChange={(e) => setFormRt(e.target.value)}
+                        className="w-1/2 px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                      />
+                      <input
+                        type="text"
+                        placeholder="RW"
+                        value={formRw}
+                        onChange={(e) => setFormRw(e.target.value)}
+                        className="w-1/2 px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Kelurahan</label>
+                    <input
+                      type="text"
+                      value={formKelurahan}
+                      onChange={(e) => setFormKelurahan(e.target.value)}
+                      placeholder="Kelurahan"
+                      className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Kecamatan</label>
+                    <input
+                      type="text"
+                      value={formKecamatan}
+                      onChange={(e) => setFormKecamatan(e.target.value)}
+                      placeholder="Kecamatan"
+                      className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
                 </div>
                 <div>
-                  <label className="block font-bold text-slate-300 mb-1">NIK (16 Digit) *</label>
+                  <label className="block text-[10px] text-slate-400">Jalan / No. Rumah</label>
                   <input
                     type="text"
                     required
-                    maxLength={16}
-                    value={formNik}
-                    onChange={(e) => setFormNik(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    value={formAlamat}
+                    onChange={(e) => setFormAlamat(e.target.value)}
+                    placeholder="Jl. Raya No..."
+                    className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-slate-300 mb-1">No. WhatsApp *</label>
-                  <input
-                    type="tel"
-                    required
-                    value={formWhatsapp}
-                    onChange={(e) => setFormWhatsapp(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-300 mb-1">Wilayah *</label>
-                  <select
-                    value={formWilayah}
-                    onChange={(e) => setFormWilayah(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                  >
-                    <option value="Cengkareng">Cengkareng</option>
-                    <option value="Kalideres">Kalideres</option>
-                    <option value="Kembangan">Kembangan</option>
-                    <option value="Kebon Jeruk">Kebon Jeruk</option>
-                  </select>
+              {/* 3. Rekening Bank Pribadi */}
+              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 space-y-2">
+                <div className="font-bold text-amber-400 text-xs">3. Rekening Bank Pribadi Anggota</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Bank Pribadi</label>
+                    <select
+                      value={formBank}
+                      onChange={(e) => setFormBank(e.target.value)}
+                      className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                    >
+                      <option>Bank Central Asia (BCA)</option>
+                      <option>Bank Mandiri</option>
+                      <option>Bank Rakyat Indonesia (BRI)</option>
+                      <option>Bank Negara Indonesia (BNI)</option>
+                      <option>Bank Syariah Indonesia (BSI)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Nomor Rekening</label>
+                    <input
+                      type="text"
+                      value={formRekPribadi}
+                      onChange={(e) => setFormRekPribadi(e.target.value)}
+                      placeholder="No. Rekening"
+                      className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-400">Atas Nama</label>
+                    <input
+                      type="text"
+                      value={formAtasNama}
+                      onChange={(e) => setFormAtasNama(e.target.value)}
+                      placeholder="Nama di buku tabungan"
+                      className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Alamat Lengkap</label>
-                <input
-                  type="text"
-                  required
-                  value={formAlamat}
-                  onChange={(e) => setFormAlamat(e.target.value)}
-                  placeholder="Jl. Raya No..."
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                />
+              {/* 4. Keamanan Akun & Simpanan Awal */}
+              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 space-y-2">
+                <div className="font-bold text-amber-400 text-xs">4. Password, PIN & Simpanan Pokok</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-300 mb-1">Buat Password Masuk *</label>
+                    <div className="relative">
+                      <input
+                        type={showFormPassword ? 'text' : 'password'}
+                        required
+                        value={formPassword}
+                        onChange={(e) => setFormPassword(e.target.value)}
+                        className="w-full pl-3 pr-8 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowFormPassword(!showFormPassword)}
+                        className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-white"
+                        title={showFormPassword ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showFormPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">PIN Transaksi (6 Digit) *</label>
+                    <div className="relative">
+                      <input
+                        type={showFormPin ? 'text' : 'password'}
+                        required
+                        maxLength={6}
+                        value={formPinTransaksi}
+                        onChange={(e) => setFormPinTransaksi(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        className="w-full pl-3 pr-8 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowFormPin(!showFormPin)}
+                        className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-white"
+                        title={showFormPin ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showFormPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-slate-300 mb-1">Setoran Pokok Awal (Rp)</label>
+                    <input
+                      type="number"
+                      value={formSetoranPokok}
+                      onChange={(e) => setFormSetoranPokok(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-amber-300 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-300 mb-1">Setoran Tabungan Umum (Rp)</label>
+                    <input
+                      type="number"
+                      value={formSetoranWajib}
+                      onChange={(e) => setFormSetoranWajib(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-sky-300 font-mono"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 py-2 bg-slate-800 text-slate-300 font-bold rounded-xl"
+                  className="flex-1 py-2.5 bg-slate-800 text-slate-300 font-bold rounded-xl"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-amber-500 text-slate-950 font-black rounded-xl"
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow-lg transition-all"
                 >
-                  Daftarkan Anggota
+                  Daftarkan Anggota Baru
                 </button>
               </div>
             </form>

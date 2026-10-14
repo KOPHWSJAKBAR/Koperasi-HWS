@@ -47,20 +47,66 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
     return true;
   });
 
-  // Sort chronological: requirement 55 "urutannya dari awal ada di atas serta selanjutnya ke bawah"
+  // Sort chronological: requirement "urutannya dari awal ada di atas serta selanjutnya ke bawah"
   filtered.sort((a, b) => {
     const da = `${a.tanggal} ${a.jam || '00:00'}`;
     const db = `${b.tanggal} ${b.jam || '00:00'}`;
     return da.localeCompare(db);
   });
 
-  // Calculate totals
+  // Calculate totals in the filtered period
   let totalMasuk = 0;
   let totalKeluar = 0;
   filtered.forEach((tx) => {
     if (tx.tipe === 'masuk') totalMasuk += tx.nominal;
     else totalKeluar += tx.nominal;
   });
+
+  // Saldo Awal calculation per Req A.4:
+  // "saldo awal dari tanggal 1 hari periode yang di tentukan di tambahkan jumlah pemasukan sesuai periode yang di tentukan, di kurangi debit hasil saldo"
+  let periodStartDate = '';
+  if (periodeTipe === 'bulanan' && selectedBulan) {
+    periodStartDate = `${selectedBulan}-01`;
+  } else if (periodeTipe === 'custom' && startDate) {
+    periodStartDate = startDate;
+  }
+
+  const allCategoryTx = state.memberTransactions.filter((tx) => {
+    if (tx.memberId !== member.id) return false;
+    if (kategoriTabungan === 'pokok' && tx.kategori !== 'pokok') return false;
+    if (kategoriTabungan === 'umum' && tx.kategori !== 'umum') return false;
+    return true;
+  });
+
+  let saldoAwal = 0;
+  if (periodStartDate) {
+    const priorTx = allCategoryTx.filter((tx) => tx.tanggal < periodStartDate);
+    priorTx.forEach((tx) => {
+      if (tx.tipe === 'masuk') saldoAwal += tx.nominal;
+      else saldoAwal -= tx.nominal;
+    });
+  } else {
+    saldoAwal = 0;
+  }
+  if (saldoAwal < 0) saldoAwal = 0;
+
+  // Running balance calculation starting from saldoAwal
+  let runningSaldo = saldoAwal;
+  const enrichedFiltered = filtered.map((tx) => {
+    if (tx.tipe === 'masuk') {
+      runningSaldo += tx.nominal;
+    } else {
+      runningSaldo -= tx.nominal;
+    }
+    return {
+      ...tx,
+      debit: tx.tipe === 'keluar' ? tx.nominal : 0,
+      kredit: tx.tipe === 'masuk' ? tx.nominal : 0,
+      computedSaldo: runningSaldo,
+    };
+  });
+
+  const saldoAkhir = runningSaldo;
 
   const getPeriodeLabel = () => {
     if (periodeTipe === 'bulanan') {
@@ -203,31 +249,29 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
           </div>
         </div>
 
-        {/* Total Summary Pills */}
+        {/* Total Summary Pills (Req A.4) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-700/60">
-          <div className="bg-slate-800/60 p-3 rounded-2xl">
-            <span className="text-[10px] text-slate-400">Total Transaksi</span>
-            <div className="text-sm font-extrabold text-white mt-0.5">{filtered.length} Mutasi</div>
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700">
+            <span className="text-[10px] text-amber-300 font-bold">1. Saldo Awal Periode</span>
+            <div className="text-sm font-extrabold text-amber-400 mt-0.5">{formatRupiah(saldoAwal)}</div>
+            <span className="text-[9px] text-slate-400">Dari Tgl 1 / Awal Periode</span>
           </div>
-          <div className="bg-slate-800/60 p-3 rounded-2xl">
-            <span className="text-[10px] text-emerald-400">Total Masuk (CR)</span>
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700">
+            <span className="text-[10px] text-emerald-400 font-bold">2. Total Masuk / Kredit (+)</span>
             <div className="text-sm font-extrabold text-emerald-400 mt-0.5">{formatRupiah(totalMasuk)}</div>
+            <span className="text-[9px] text-slate-400">Pemasukan periode ini</span>
           </div>
-          <div className="bg-slate-800/60 p-3 rounded-2xl">
-            <span className="text-[10px] text-red-400">Total Keluar (DB)</span>
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-slate-700">
+            <span className="text-[10px] text-red-400 font-bold">3. Total Keluar / Debit (-)</span>
             <div className="text-sm font-extrabold text-red-400 mt-0.5">{formatRupiah(totalKeluar)}</div>
+            <span className="text-[9px] text-slate-400">Pengurangan / penarikan</span>
           </div>
-          <div className="bg-slate-800/60 p-3 rounded-2xl">
-            <span className="text-[10px] text-amber-400">Saldo Rekening Terkini</span>
-            <div className="text-sm font-extrabold text-amber-400 mt-0.5">
-              {formatRupiah(
-                kategoriTabungan === 'pokok'
-                  ? member.saldoPokok
-                  : kategoriTabungan === 'umum'
-                  ? member.saldoUmum
-                  : member.saldoPokok + member.saldoUmum
-              )}
+          <div className="bg-slate-800/60 p-3 rounded-2xl border border-amber-500/30">
+            <span className="text-[10px] text-sky-400 font-bold">4. Saldo Akhir Periode</span>
+            <div className="text-sm font-extrabold text-sky-300 mt-0.5">
+              {formatRupiah(saldoAkhir)}
             </div>
+            <span className="text-[9px] text-emerald-400">Awal + Masuk - Keluar</span>
           </div>
         </div>
       </div>
@@ -285,53 +329,87 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
           </div>
         </div>
 
-        {/* Table of Transactions */}
+        {/* Table of Transactions with Debit, Credit, Saldo (Req A.4) */}
         <div className="overflow-x-auto border border-slate-900 rounded-xl">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-100 border-b border-slate-900 text-slate-800 font-extrabold text-[10px] uppercase">
-                <th className="py-2 px-3">TANGGAL</th>
-                <th className="py-2 px-3">KETERANGAN</th>
-                <th className="py-2 px-3">CBG</th>
-                <th className="py-2 px-3 text-right">MUTASI (KELUAR / MASUK)</th>
-                <th className="py-2 px-3 text-right">SALDO</th>
+                <th className="py-2.5 px-3">TANGGAL</th>
+                <th className="py-2.5 px-3">KETERANGAN</th>
+                <th className="py-2.5 px-3 text-center">CBG</th>
+                <th className="py-2.5 px-3 text-right text-red-700">DEBIT (DB)</th>
+                <th className="py-2.5 px-3 text-right text-emerald-700">KREDIT (CR)</th>
+                <th className="py-2.5 px-3 text-right">SALDO</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {filtered.map((tx) => {
-                const isMasuk = tx.tipe === 'masuk';
-                return (
-                  <tr key={tx.id} className="hover:bg-slate-50">
-                    <td className="py-2 px-3 font-mono text-slate-700">
-                      {tx.tanggal.split('-').reverse().slice(0, 2).join('/')}
-                    </td>
-                    <td className="py-2 px-3">
-                      <div className="font-bold text-slate-900 uppercase">{tx.keterangan}</div>
-                      <div className="text-[10px] text-slate-500 font-mono">{tx.jam}</div>
-                    </td>
-                    <td className="py-2 px-3 font-mono text-slate-600">{tx.cbg || '0001'}</td>
-                    <td
-                      className={`py-2 px-3 text-right font-mono font-bold ${
-                        isMasuk ? 'text-emerald-700' : 'text-red-700'
-                      }`}
-                    >
-                      {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.nominal)}{' '}
-                      <span className="text-[10px]">{isMasuk ? 'CR' : 'DB'}</span>
-                    </td>
-                    <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
-                      {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.saldoSetelah)}
-                    </td>
-                  </tr>
-                );
-              })}
-              {filtered.length === 0 && (
+              {/* Row 0: Saldo Awal Periode */}
+              <tr className="bg-amber-50/70 font-semibold border-b border-slate-300">
+                <td className="py-2 px-3 font-mono text-slate-700">
+                  {periodStartDate ? periodStartDate.split('-').reverse().slice(0, 2).join('/') : '01'}
+                </td>
+                <td className="py-2 px-3">
+                  <div className="font-extrabold text-amber-900 uppercase">
+                    SALDO AWAL DARI TANGGAL 1 HARI PERIODE
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono">
+                    Saldo awal sebelum transaksi periode berjalan
+                  </div>
+                </td>
+                <td className="py-2 px-3 text-center font-mono text-slate-500">-</td>
+                <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
+                <td className="py-2 px-3 text-right font-mono text-slate-400">-</td>
+                <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
+                  {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(saldoAwal)}
+                </td>
+              </tr>
+
+              {/* Transaction Rows */}
+              {enrichedFiltered.map((tx) => (
+                <tr key={tx.id} className="hover:bg-slate-50">
+                  <td className="py-2 px-3 font-mono text-slate-700">
+                    {tx.tanggal.split('-').reverse().slice(0, 2).join('/')}
+                  </td>
+                  <td className="py-2 px-3">
+                    <div className="font-bold text-slate-900 uppercase">{tx.keterangan}</div>
+                    <div className="text-[10px] text-slate-500 font-mono">{tx.jam}</div>
+                  </td>
+                  <td className="py-2 px-3 text-center font-mono text-slate-600">{tx.cbg || '0001'}</td>
+                  <td className="py-2 px-3 text-right font-mono font-bold text-red-700">
+                    {tx.debit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.debit) : '-'}
+                  </td>
+                  <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700">
+                    {tx.kredit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.kredit) : '-'}
+                  </td>
+                  <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
+                    {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.computedSaldo)}
+                  </td>
+                </tr>
+              ))}
+              {enrichedFiltered.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-500 text-xs">
-                    Tidak ada mutasi transaksi pada periode ini.
+                  <td colSpan={6} className="py-4 text-center text-slate-500 text-xs italic">
+                    Tidak ada mutasi transaksi tambahan pada periode ini. Saldo tetap {formatRupiah(saldoAwal)}.
                   </td>
                 </tr>
               )}
             </tbody>
+            <tfoot className="bg-slate-100 font-bold border-t-2 border-slate-900 text-slate-900">
+              <tr>
+                <td colSpan={3} className="py-2.5 px-3 text-right uppercase text-[11px] font-black">
+                  TOTAL MUTASI PERIODE & SALDO AKHIR:
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono font-black text-red-700">
+                  {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(totalKeluar)}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono font-black text-emerald-700">
+                  {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(totalMasuk)}
+                </td>
+                <td className="py-2.5 px-3 text-right font-mono font-black text-slate-950 text-sm">
+                  {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(saldoAkhir)}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
 

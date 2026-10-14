@@ -336,9 +336,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </button>
 
-              {/* Notification Center Popover */}
+              {/* Notification Center Popover (Req B.1: tidak dibuat melebar pada mobile) */}
               {showNotifCenter && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
+                <div className="fixed top-14 inset-x-2 sm:inset-x-auto sm:right-4 sm:top-auto sm:absolute sm:mt-2 w-auto sm:w-96 max-w-[calc(100vw-16px)] bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
                   <div className="p-3 bg-[#162035] border-b border-slate-700 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Bell className="w-4 h-4 text-amber-400" />
@@ -657,7 +657,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ================= MAIN CONTENT BODY ================= */}
-      <main className="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1">
+      <main className="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1 overflow-x-hidden">
         {activeTab === 'dashboard' ? (
           <>
             {/* Top 4 Stat Cards Grid (Matching Tampilan Pada Dashboard PC Aplikasi admin.png) */}

@@ -12,7 +12,10 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
 
+import { detectPlatform } from './lib/activityLogger';
+
 const SESSION_KEY = 'koperasi_hws_active_session';
+const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Req 12: Buat aplikasi ini auto logout dalam 2 menit apabila tidak tertutup)
 
 export default function App() {
   const { state, updateState } = useKoperasiState();
@@ -29,6 +32,7 @@ export default function App() {
   });
 
   const [isFirebaseAuthReady, setIsFirebaseAuthReady] = useState(false);
+  const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
 
   // Synchronize and persist user session with Firebase Authentication across all platforms (Web, Mobile, PC)
   useEffect(() => {
@@ -54,7 +58,7 @@ export default function App() {
   }, [activeSession]);
 
   // Handle Logout with Firebase Auth
-  const handleLogout = async () => {
+  const handleLogout = async (reason?: string) => {
     try {
       localStorage.removeItem(SESSION_KEY);
       if (auth.currentUser) {
@@ -62,6 +66,9 @@ export default function App() {
       }
     } catch {}
     setActiveSession(null);
+    if (reason) {
+      alert(reason);
+    }
   };
 
   // Helper to safely trigger optional Firebase Auth in the background
@@ -104,6 +111,94 @@ export default function App() {
       ? state.admins.find((a) => a.id === activeSession.id) || null
       : null;
 
+  // Requirement 12: Auto logout dalam 2 menit apabila tidak ada interaksi / tidak tertutup
+  useEffect(() => {
+    if (!currentMember && !currentAdmin) return;
+
+    let timeoutId: any;
+
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        handleLogout('Sesi Anda telah berakhir secara otomatis demi keamanan (inaktif 2 menit).');
+      }, AUTO_LOGOUT_MS);
+    };
+
+    resetTimer();
+
+    const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click'];
+    activityEvents.forEach((ev) => window.addEventListener(ev, resetTimer, { passive: true }));
+
+    return () => {
+      clearTimeout(timeoutId);
+      activityEvents.forEach((ev) => window.removeEventListener(ev, resetTimer));
+    };
+  }, [currentMember, currentAdmin]);
+
+  // Requirement 11: Integrasi tombol back device terinstall (Android back / browser popstate)
+  // Apabila masuk back pada device berfungsi untuk Kembali, klik back 2x logout
+  useEffect(() => {
+    if (!currentMember && !currentAdmin) return;
+
+    let lastBackPress = 0;
+    // Push dummy history state so popstate is captured
+    window.history.pushState({ page: 'app-main' }, '', window.location.href);
+
+    const handlePopState = (e: PopStateEvent) => {
+      e.preventDefault();
+      const now = Date.now();
+
+      if (now - lastBackPress < 2500) {
+        // Double back pressed within 2.5s -> Logout
+        setBackToastMessage(null);
+        handleLogout();
+      } else {
+        lastBackPress = now;
+        setBackToastMessage('Tekan tombol kembali sekali lagi untuk keluar / logout');
+        // Push state again so next back can be captured
+        window.history.pushState({ page: 'app-main' }, '', window.location.href);
+
+        setTimeout(() => {
+          setBackToastMessage(null);
+        }, 2500);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [currentMember, currentAdmin]);
+
+  // Online Presence Heartbeat across Web, Mobile, and PC (Req 1 & 19)
+  useEffect(() => {
+    const sendPresence = async () => {
+      try {
+        const platform = detectPlatform();
+        const activeId = currentMember?.id || currentAdmin?.id || 'guest';
+        const activeName = currentMember?.nama || currentAdmin?.nama || 'Pengunjung';
+        const role = currentAdmin
+          ? (currentAdmin.role === 'super_admin' ? 'super_admin' : 'admin')
+          : 'member';
+
+        await fetch('/api/presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: activeId,
+            userName: activeName,
+            role,
+            platform,
+          }),
+        });
+      } catch {}
+    };
+
+    sendPresence();
+    const interval = setInterval(sendPresence, 25000);
+    return () => clearInterval(interval);
+  }, [currentMember, currentAdmin]);
+
   // Capture PWA install prompt and notification permission
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
@@ -123,34 +218,38 @@ export default function App() {
     };
   }, []);
 
-  if (currentMember) {
-    return (
-      <MemberDashboard
-        state={state}
-        updateState={updateState}
-        member={currentMember}
-        onLogout={handleLogout}
-      />
-    );
-  }
-
-  if (currentAdmin) {
-    return (
-      <AdminDashboard
-        state={state}
-        updateState={updateState}
-        admin={currentAdmin}
-        onLogout={handleLogout}
-      />
-    );
-  }
-
   return (
-    <LoginView
-      state={state}
-      updateState={updateState}
-      onLoginMember={handleLoginMember}
-      onLoginAdmin={handleLoginAdmin}
-    />
+    <>
+      {currentMember ? (
+        <MemberDashboard
+          state={state}
+          updateState={updateState}
+          member={currentMember}
+          onLogout={handleLogout}
+        />
+      ) : currentAdmin ? (
+        <AdminDashboard
+          state={state}
+          updateState={updateState}
+          admin={currentAdmin}
+          onLogout={handleLogout}
+        />
+      ) : (
+        <LoginView
+          state={state}
+          updateState={updateState}
+          onLoginMember={handleLoginMember}
+          onLoginAdmin={handleLoginAdmin}
+        />
+      )}
+
+      {/* Floating Back Button Double-Click Toast (Req 11) */}
+      {backToastMessage && (
+        <div className="fixed bottom-6 inset-x-0 mx-auto w-fit z-50 px-4 py-2 bg-slate-900/95 text-white border border-amber-500/80 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2 backdrop-blur animate-fade-in">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>{backToastMessage}</span>
+        </div>
+      )}
+    </>
   );
 }

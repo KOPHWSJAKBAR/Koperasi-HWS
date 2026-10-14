@@ -27,6 +27,8 @@ import {
   AlertTriangle,
   RefreshCw,
   Radio,
+  Download,
+  ArrowRight,
 } from 'lucide-react';
 
 interface MemberVerificationViewProps {
@@ -34,6 +36,7 @@ interface MemberVerificationViewProps {
   updateState: (updater: (prev: AppState) => AppState) => Promise<void>;
   currentMember?: MemberUser;
   currentAdmin?: AdminUser;
+  onBackToDashboard?: () => void;
 }
 
 export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
@@ -41,8 +44,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   updateState,
   currentMember,
   currentAdmin,
+  onBackToDashboard,
 }) => {
   const isMember = !!currentMember;
+  const [buktiSetorSuccess, setBuktiSetorSuccess] = useState<SetoranVerifikasi | null>(null);
 
   // Member deposit form state
   const [jenisSetoran, setJenisSetoran] = useState<'kewajiban' | 'umum'>('kewajiban');
@@ -173,12 +178,204 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     }));
 
     setIsSubmitting(false);
+    setBuktiSetorSuccess(newDeposit);
     setMsg({
       type: 'success',
       text: 'Setoran berhasil diajukan! Menunggu verifikasi admin koperasi.',
     });
     setBuktiUrl('');
     setCatatan('');
+  };
+
+  // Download QRIS as JPG (Req A.5)
+  const handleDownloadQrisJpg = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 1000;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 800, 1000);
+
+    const grad = ctx.createLinearGradient(0, 0, 800, 180);
+    grad.addColorStop(0, '#0f172a');
+    grad.addColorStop(1, '#1e293b');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 800, 180);
+
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = 'bold 32px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('KOPERASI HWS SYARIAH', 400, 70);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('QRIS STANDAR PEMBAYARAN NASIONAL', 400, 115);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('NMID: ID1020038849201 • KCP CENGKARENG & SEKITARNYA', 400, 150);
+
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(100, 220, 600, 600);
+
+    ctx.fillStyle = '#0f172a';
+    const drawFinder = (x: number, y: number) => {
+      ctx.fillRect(x, y, 100, 100);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x + 16, y + 16, 68, 68);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(x + 32, y + 32, 36, 36);
+    };
+    drawFinder(140, 260);
+    drawFinder(560, 260);
+    drawFinder(140, 680);
+
+    for (let r = 0; r < 14; r++) {
+      for (let c = 0; c < 14; c++) {
+        if ((r < 4 && c < 4) || (r < 4 && c > 9) || (r > 9 && c < 4)) continue;
+        if ((r * 7 + c * 13) % 3 === 0 || (r + c) % 2 === 0) {
+          ctx.fillRect(260 + c * 20, 380 + r * 20, 16, 16);
+        }
+      }
+    }
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(400, 520, 50, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 5;
+    ctx.stroke();
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('HWS', 400, 526);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillText(`Nominal: ${formatRupiah(nominalFinal)}`, 400, 870);
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('BCA, Mandiri, BRI, BNI, BSI, DANA, OVO, GoPay, ShopeePay', 400, 915);
+    ctx.fillText('Dicetak Resmi oleh Aplikasi Koperasi HWS', 400, 945);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = `QRIS_Koperasi_HWS_${Date.now()}.jpg`;
+    link.click();
+  };
+
+  // Download Bukti Setor as JPG (Req A.7)
+  const handleDownloadBuktiSetorJpg = (deposit: SetoranVerifikasi) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 900;
+    canvas.height = 1100;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, 900, 1100);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(40, 40, 820, 1020);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(40, 40, 820, 1020);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(40, 40, 820, 160);
+
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = 'bold 34px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('KOPERASI HWS SYARIAH', 450, 100);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('SLIP TANDA TERIMA BUKTI SETORAN ANGGOTA', 450, 140);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Sistem Administrasi Digital & Buku Tabungan Realtime', 450, 170);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText('INFORMASI TRANSAKSI', 80, 240);
+
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(80, 255);
+    ctx.lineTo(820, 255);
+    ctx.stroke();
+
+    const drawRow = (label: string, value: string, y: number, isHighlight = false) => {
+      ctx.fillStyle = '#64748b';
+      ctx.font = '16px sans-serif';
+      ctx.fillText(label, 80, y);
+
+      ctx.fillStyle = isHighlight ? '#059669' : '#0f172a';
+      ctx.font = isHighlight ? 'bold 22px monospace' : 'bold 16px sans-serif';
+      ctx.fillText(value, 360, y);
+    };
+
+    const waktuStr = deposit.createdAt ? new Date(deposit.createdAt).toLocaleString('id-ID') : new Date().toLocaleString('id-ID');
+    drawRow('No. Referensi / Transaksi:', deposit.nomorReferensi || deposit.id, 290);
+    drawRow('Waktu Pengajuan:', waktuStr, 330);
+    drawRow('Nama Lengkap Anggota:', deposit.memberNama, 370);
+    drawRow('No. Rekening Anggota:', deposit.memberRekening, 410);
+    drawRow('Jenis Setoran:', deposit.jenis === 'kewajiban' ? 'Kewajiban Pokok Anggota' : 'Tabungan Umum Bebas', 450);
+    if (deposit.jenis === 'kewajiban') {
+      drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || 1} Hari`, 490);
+    }
+    drawRow('Rekening Tujuan / Metode:', `${deposit.rekeningTujuan} (${(deposit.metode || 'TRANSFER').toUpperCase()})`, 530);
+    drawRow('Status Verifikasi:', deposit.status === 'disetujui' ? 'BERHASIL / DISETUJUI' : 'MENUNGGU VERIFIKASI ADMIN', 570, true);
+
+    ctx.fillStyle = '#ecfdf5';
+    ctx.fillRect(80, 620, 740, 90);
+    ctx.strokeStyle = '#10b981';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(80, 620, 740, 90);
+
+    ctx.fillStyle = '#065f46';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText('TOTAL NOMINAL SETORAN:', 110, 675);
+
+    ctx.fillStyle = '#047857';
+    ctx.font = 'bold 32px monospace';
+    ctx.fillText(formatRupiah(deposit.nominal), 420, 678);
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '14px sans-serif';
+    ctx.fillText(`Catatan: ${deposit.catatanAnggota || '-'}`, 80, 750);
+
+    ctx.strokeStyle = '#dc2626';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(560, 800, 240, 100);
+    ctx.fillStyle = '#dc2626';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('KOPERASI HWS', 680, 835);
+    ctx.font = '12px sans-serif';
+    ctx.fillText('TERVERIFIKASI SISTEM', 680, 860);
+    ctx.fillText('ELEKTRONIK RESMI', 680, 880);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('Bukti setoran ini sah dan diterbitkan secara digital oleh Koperasi HWS Syariah.', 450, 950);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = `Bukti_Setoran_${deposit.memberRekening}_${deposit.id}.jpg`;
+    link.click();
   };
 
   // Submit Penarikan
@@ -860,6 +1057,16 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   <div className="font-mono text-xs font-black text-amber-300">
                     Nominal Transfer: {formatRupiah(nominalFinal)}
                   </div>
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={handleDownloadQrisJpg}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold rounded-xl shadow-md transition-all active:scale-95"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Unduh QRIS (JPG)</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -970,10 +1177,21 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 )}
               </div>
 
-              <div className="mt-3 py-1.5 px-3 bg-amber-500/10 border border-amber-500/30 rounded-xl inline-block">
-                <span className="text-xs font-mono font-black text-amber-400">
-                  Nominal: {formatRupiah(nominalFinal)}
-                </span>
+              <div className="mt-3 flex flex-col items-center gap-2">
+                <div className="py-1.5 px-3 bg-amber-500/10 border border-amber-500/30 rounded-xl inline-block">
+                  <span className="text-xs font-mono font-black text-amber-400">
+                    Nominal: {formatRupiah(nominalFinal)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadQrisJpg}
+                  className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-white border border-amber-500/40 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow transition-all"
+                  title="Unduh Gambar QRIS Format JPG"
+                >
+                  <Download className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Unduh QRIS (JPG)</span>
+                </button>
               </div>
             </div>
 
@@ -1283,6 +1501,112 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             </div>
             <div className="p-4 flex items-center justify-center max-h-[75vh] overflow-auto">
               <img src={previewBukti} alt="Bukti Transfer" className="max-w-full rounded-lg object-contain shadow-lg" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL BUKTI SETORAN ANGGOTA (Req A.7) ================= */}
+      {buktiSetorSuccess && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700 text-slate-100 max-w-md w-full rounded-3xl shadow-2xl overflow-hidden my-4">
+            <div className="p-4 bg-[#162035] border-b border-slate-700 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-sm font-extrabold text-white">
+                  Bukti Tanda Terima Setoran Anggota
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBuktiSetorSuccess(null)}
+                className="w-7 h-7 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Slip Container */}
+            <div className="p-4 space-y-3.5 text-xs">
+              {/* Slip Card Preview */}
+              <div className="bg-white text-slate-900 rounded-2xl p-4 shadow-inner border border-slate-300 space-y-2.5">
+                <div className="text-center pb-2 border-b border-slate-200">
+                  <div className="font-black text-sm text-slate-900 uppercase tracking-wide">
+                    KOPERASI HWS SYARIAH
+                  </div>
+                  <div className="text-[10px] text-slate-500 font-bold uppercase">
+                    SLIP BUKTI PENGAJUAN SETORAN
+                  </div>
+                  <div className="text-[9px] font-mono text-slate-400 mt-0.5">
+                    No. Ref: {buktiSetorSuccess.id}
+                  </div>
+                </div>
+
+                <div className="space-y-1 text-[11px]">
+                  <div className="flex justify-between py-0.5 border-b border-slate-100">
+                    <span className="text-slate-500">Waktu Transaksi:</span>
+                    <span className="font-semibold text-slate-800">
+                      {buktiSetorSuccess.createdAt ? new Date(buktiSetorSuccess.createdAt).toLocaleString('id-ID') : 'Hari ini'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-0.5 border-b border-slate-100">
+                    <span className="text-slate-500">Nama Anggota:</span>
+                    <span className="font-bold text-slate-900">{buktiSetorSuccess.memberNama}</span>
+                  </div>
+                  <div className="flex justify-between py-0.5 border-b border-slate-100">
+                    <span className="text-slate-500">No. Rekening:</span>
+                    <span className="font-mono font-bold text-slate-900">{buktiSetorSuccess.memberRekening}</span>
+                  </div>
+                  <div className="flex justify-between py-0.5 border-b border-slate-100">
+                    <span className="text-slate-500">Jenis Setoran:</span>
+                    <span className="font-semibold text-slate-800">
+                      {buktiSetorSuccess.jenis === 'kewajiban' ? `Kewajiban Pokok (${buktiSetorSuccess.jumlahHari || 1} Hari)` : 'Tabungan Umum Bebas'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-0.5 border-b border-slate-100">
+                    <span className="text-slate-500">Tujuan / Jalur:</span>
+                    <span className="font-semibold text-slate-800 truncate max-w-[200px]">
+                      {buktiSetorSuccess.rekeningTujuan} ({(buktiSetorSuccess.metode || 'TRANSFER').toUpperCase()})
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex justify-between items-center">
+                  <span className="font-black text-emerald-900 text-xs">TOTAL SETORAN:</span>
+                  <span className="font-mono font-black text-emerald-700 text-base">
+                    {formatRupiah(buktiSetorSuccess.nominal)}
+                  </span>
+                </div>
+
+                <div className="text-[10px] text-center text-slate-500 italic">
+                  Status: Menunggu konfirmasi verifikasi admin koperasi
+                </div>
+              </div>
+
+              {/* Action Buttons: Unduh JPG & Kembali ke Dashboard (Req A.7) */}
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => handleDownloadBuktiSetorJpg(buktiSetorSuccess)}
+                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow-lg flex items-center justify-center gap-2 text-xs transition-all"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Unduh Bukti Setor (JPG)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBuktiSetorSuccess(null);
+                    if (onBackToDashboard) {
+                      onBackToDashboard();
+                    }
+                  }}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl border border-slate-700 flex items-center justify-center gap-1.5 text-xs transition-all"
+                >
+                  <ArrowRight className="w-4 h-4 rotate-180" />
+                  <span>Kembali ke Dashboard Anggota</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

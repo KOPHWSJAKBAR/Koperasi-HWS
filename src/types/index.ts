@@ -126,6 +126,9 @@ export interface MemberUser {
   kodePos: string;
   ktpPhotoUrl?: string;
   avatarUrl?: string;
+  jenisKelamin?: string;
+  tanggalLahir?: string;
+  pekerjaan?: string;
   bankPribadi: {
     namaBank: string;
     nomorRekening: string;

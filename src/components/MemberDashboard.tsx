@@ -70,6 +70,13 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tfError, setTfError] = useState('');
   const [tfSuccess, setTfSuccess] = useState('');
 
+  // Requirement A.8: Ganti PIN 6-digit saat transfer
+  const [showChangePinInTransfer, setShowChangePinInTransfer] = useState(false);
+  const [pinChangePassword, setPinChangePassword] = useState('');
+  const [pinChangeNewPin, setPinChangeNewPin] = useState('');
+  const [pinChangeConfirmPin, setPinChangeConfirmPin] = useState('');
+  const [pinChangeMsg, setPinChangeMsg] = useState('');
+
   // Tarik Tabungan Umum State
   const [showTarikModal, setShowTarikModal] = useState(false);
   const [tarikNominal, setTarikNominal] = useState('');
@@ -252,6 +259,52 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     }, 2000);
   };
 
+  // Requirement A.8: Proses pergantian PIN 6 digit saat transfer
+  const handleChangePinInTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinChangeMsg('');
+
+    if (pinChangePassword !== currentMember.password) {
+      setPinChangeMsg('Password login Anda tidak cocok.');
+      return;
+    }
+
+    if (!pinChangeNewPin || pinChangeNewPin.length !== 6 || !/^\d{6}$/.test(pinChangeNewPin)) {
+      setPinChangeMsg('PIN baru harus 6 digit angka.');
+      return;
+    }
+
+    if (pinChangeNewPin !== pinChangeConfirmPin) {
+      setPinChangeMsg('Konfirmasi PIN baru tidak sesuai.');
+      return;
+    }
+
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === currentMember.id ? { ...m, pinTransaksi: pinChangeNewPin } : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          { id: currentMember.id, nama: currentMember.nama, role: 'admin_read' } as any,
+          'Ganti PIN Transaksi',
+          `Anggota ${currentMember.nama} berhasil mengganti PIN transaksi 6 digit saat proses transfer`
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    setTfPin(pinChangeNewPin);
+    setPinChangeMsg('✓ PIN transaksi 6-digit berhasil diganti!');
+    setTimeout(() => {
+      setShowChangePinInTransfer(false);
+      setPinChangePassword('');
+      setPinChangeNewPin('');
+      setPinChangeConfirmPin('');
+      setPinChangeMsg('');
+    }, 1200);
+  };
+
   // Handle Penarikan Tabungan Umum
   const handleTarikSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -322,39 +375,68 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* ================= HEADER (Matching Anggota PC Dashboard.png & Mobile) ================= */}
-      <header className="sticky top-0 z-40 bg-[#0d1424]/90 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-3">
-        <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex items-center justify-between">
-          {/* Left: Logo & Member Info */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-white p-0.5 shadow flex items-center justify-center shrink-0">
-              <LogoHws className="w-full h-full" />
+      <header className="sticky top-0 z-40 bg-[#0d1424]/90 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-2.5 sm:py-3">
+        <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
+          {/* Top Row: Logo & Member Info */}
+          <div className="flex items-center justify-between sm:justify-start gap-3">
+            <div className="flex items-center gap-2.5 sm:gap-3">
+              <div className="w-10 h-10 rounded-full bg-white p-0.5 shadow flex items-center justify-center shrink-0">
+                <LogoHws className="w-full h-full" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <span className="font-black text-sm sm:text-base tracking-wide text-white">
+                    KOPERASI HWS
+                  </span>
+                  <span className="bg-[#f59e0b] text-slate-950 font-black text-[9px] sm:text-[10px] px-2 py-0.5 rounded-md uppercase">
+                    ANGGOTA
+                  </span>
+                </div>
+                <div className="text-[11px] sm:text-xs text-slate-400 font-medium truncate max-w-[210px] sm:max-w-none">
+                  {currentMember.nama} • KCP {currentMember.wilayah}
+                </div>
+              </div>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-black text-sm sm:text-base tracking-wide text-white">
-                  KOPERASI HWS
-                </span>
-                <span className="bg-[#f59e0b] text-slate-950 font-black text-[9px] sm:text-[10px] px-2 py-0.5 rounded-md uppercase">
-                  ANGGOTA
-                </span>
-              </div>
-              <div className="text-[11px] sm:text-xs text-slate-400 font-medium truncate max-w-[200px] sm:max-w-none">
-                {currentMember.nama} • {currentMember.wilayah}
-              </div>
+
+            {/* Desktop Only Right Action Buttons */}
+            <div className="hidden sm:flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveMenu('chat')}
+                className="relative p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
+                title="Chat Online Pengurus"
+              >
+                <MessageSquare className="w-4 h-4" />
+                {unreadChatCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] flex items-center justify-center">
+                    {unreadChatCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSettings(true)}
+                className="py-1.5 px-3 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
+              >
+                <Settings className="w-4 h-4 text-amber-500" />
+                <span>Pengaturan</span>
+              </button>
             </div>
           </div>
 
-          {/* Right: Actions (Logout removed from dashboard header per user instruction) */}
-          <div className="flex items-center gap-2">
+          {/* Requirement A.1 & A.2: Tampilan tombol setting dan chat di mobile pindahkan ke bawah logo koperasi dan nama anggota */}
+          {/* Tombol setting pada dashboard anggota JANGAN dibuat melebar kesamping pada mobile, tempatkan di bawah chat atau hanya logo icon */}
+          <div className="flex sm:hidden items-center gap-2 pt-1 border-t border-slate-800/60">
             <button
               type="button"
               onClick={() => setActiveMenu('chat')}
-              className="relative p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
-              title="Chat Online Pengurus"
+              className="py-1.5 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
             >
-              <MessageSquare className="w-4 h-4" />
+              <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+              <span>Chat Pengurus</span>
               {unreadChatCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] flex items-center justify-center">
+                <span className="w-4 h-4 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] flex items-center justify-center ml-0.5">
                   {unreadChatCount}
                 </span>
               )}
@@ -363,10 +445,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             <button
               type="button"
               onClick={() => setShowSettings(true)}
-              className="py-1.5 px-3 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
+              className="w-8 h-8 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/40 flex items-center justify-center transition-all shadow-sm shrink-0"
+              title="Pengaturan Koperasi"
             >
               <Settings className="w-4 h-4 text-amber-500" />
-              <span>Pengaturan</span>
             </button>
           </div>
         </div>
@@ -689,6 +771,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             state={state}
             updateState={updateState}
             currentMember={currentMember}
+            onBackToDashboard={() => setActiveMenu('dashboard')}
           />
         ) : activeMenu === 'mutasi' ? (
           <MutasiRekeningView state={state} member={currentMember} />
@@ -777,49 +860,30 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs focus:ring-2 focus:ring-amber-500"
                     />
 
-                    {/* Recipient Preview */}
+                    {/* Recipient Preview: Hanya muncul setelah nomor rekening benar per Req A.6 */}
                     {targetMemberRecipient ? (
-                      <div className="mt-2 p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl flex items-center gap-2.5">
-                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <div>
-                          <div className="font-extrabold text-white text-[11px]">
+                      <div className="mt-2.5 p-3 bg-emerald-950/60 border border-emerald-500/50 rounded-2xl flex items-center gap-3 shadow-md">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-base shrink-0 border border-emerald-500/30">
+                          ✓
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] text-emerald-400 font-extrabold uppercase tracking-wider">
+                            Penerima Ditemukan:
+                          </div>
+                          <div className="font-extrabold text-white text-xs sm:text-sm truncate">
                             {targetMemberRecipient.nama}
                           </div>
-                          <div className="text-[10px] text-emerald-300 font-mono">
-                            {targetMemberRecipient.nomorRekening} • Wilayah {targetMemberRecipient.wilayah}
+                          <div className="text-[11px] text-slate-300 font-mono">
+                            Rek: {targetMemberRecipient.nomorRekening} • KCP {targetMemberRecipient.wilayah}
                           </div>
                         </div>
                       </div>
-                    ) : cleanTargetQuery.length >= 4 ? (
-                      <div className="mt-1 text-[11px] text-amber-400">
-                        Mencari anggota penerima...
+                    ) : tfTargetRek.trim().length >= 4 ? (
+                      <div className="mt-2 text-[11px] text-amber-400/90 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                        <span>Memeriksa kecocokan nomor rekening penerima...</span>
                       </div>
                     ) : null}
-
-                    {/* Quick Recipient Select Chips */}
-                    {state.members.filter((m) => m.id !== currentMember.id).length > 0 && (
-                      <div className="mt-2 space-y-1">
-                        <div className="text-[10px] text-slate-400">Pilih cepat dari anggota koperasi:</div>
-                        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                          {state.members
-                            .filter((m) => m.id !== currentMember.id)
-                            .map((otherMem) => (
-                              <button
-                                key={otherMem.id}
-                                type="button"
-                                onClick={() => setTfTargetRek(otherMem.nomorRekening)}
-                                className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-all ${
-                                  tfTargetRek === otherMem.nomorRekening
-                                    ? 'bg-amber-500 text-slate-950 border-amber-400'
-                                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                                }`}
-                              >
-                                {otherMem.nama} ({otherMem.nomorRekening})
-                              </button>
-                            ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
 
                   {/* Transfer Amount */}
@@ -979,9 +1043,71 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                       placeholder="••••••"
                       className="w-full px-3 py-3 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-center tracking-[0.5em] text-lg focus:ring-2 focus:ring-amber-500"
                     />
-                    <p className="text-[10px] text-slate-400 text-center mt-1">
-                      PIN default keamanan awal: 123456
-                    </p>
+                    <div className="flex justify-between items-center text-[10px] text-slate-400 mt-2 px-1">
+                      <span>PIN default awal: 123456</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowChangePinInTransfer(!showChangePinInTransfer)}
+                        className="text-amber-400 hover:text-amber-300 font-bold underline"
+                      >
+                        {showChangePinInTransfer ? 'Tutup Ganti PIN' : 'Ganti PIN 6-Digit?'}
+                      </button>
+                    </div>
+
+                    {/* Inline Form Ganti PIN 6-Digit saat Transfer (Req A.8) */}
+                    {showChangePinInTransfer && (
+                      <div className="mt-3 p-3 bg-slate-900 rounded-2xl border border-amber-500/40 space-y-2 text-left">
+                        <div className="text-xs font-extrabold text-amber-400">
+                          Ganti PIN Transaksi (6-Digit)
+                        </div>
+                        {pinChangeMsg && (
+                          <div className={`p-1.5 rounded-lg text-[10px] font-bold ${pinChangeMsg.startsWith('✓') ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
+                            {pinChangeMsg}
+                          </div>
+                        )}
+                        <div>
+                          <label className="block text-[10px] text-slate-400">Password Login Anda</label>
+                          <input
+                            type="password"
+                            value={pinChangePassword}
+                            onChange={(e) => setPinChangePassword(e.target.value)}
+                            placeholder="Konfirmasi password akun"
+                            className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-slate-400">PIN 6-Digit Baru</label>
+                            <input
+                              type="password"
+                              maxLength={6}
+                              value={pinChangeNewPin}
+                              onChange={(e) => setPinChangeNewPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                              placeholder="6 digit baru"
+                              className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono text-center text-xs tracking-widest"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400">Ulangi PIN Baru</label>
+                            <input
+                              type="password"
+                              maxLength={6}
+                              value={pinChangeConfirmPin}
+                              onChange={(e) => setPinChangeConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                              placeholder="Ulangi 6 digit"
+                              className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono text-center text-xs tracking-widest"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleChangePinInTransfer}
+                          className="w-full py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg transition-all"
+                        >
+                          Simpan PIN Baru & Lanjutkan
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="pt-2 flex gap-2">

@@ -40,6 +40,8 @@ import {
   AlertTriangle,
   CheckCircle,
   Wrench,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 interface SettingModalProps {
@@ -132,6 +134,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editAdminEmail, setEditAdminEmail] = useState(currentAdmin?.email || '');
   const [editAdminNik, setEditAdminNik] = useState(currentAdmin?.nik || '');
   const [editAdminPassword, setEditAdminPassword] = useState('');
+  
+  // Password & PIN visibility toggles (Req 22)
+  const [showEditMemberPassword, setShowEditMemberPassword] = useState(false);
+  const [showEditMemberPin, setShowEditMemberPin] = useState(false);
+  const [showEditAdminPassword, setShowEditAdminPassword] = useState(false);
+  const [showNewAdminPassword, setShowNewAdminPassword] = useState(false);
+  const [showEditAdminAccPassword, setShowEditAdminAccPassword] = useState(false);
 
   // Synchronize profile form states when currentMember or currentAdmin updates
   useEffect(() => {
@@ -1790,23 +1799,43 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block font-bold text-slate-300 mb-1">Ganti Password (Opsional)</label>
-                    <input
-                      type="password"
-                      placeholder="Kosongkan jika tetap"
-                      value={editMemberPassword}
-                      onChange={(e) => setEditMemberPassword(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showEditMemberPassword ? 'text' : 'password'}
+                        placeholder="Kosongkan jika tetap"
+                        value={editMemberPassword}
+                        onChange={(e) => setEditMemberPassword(e.target.value)}
+                        className="w-full pl-3 pr-9 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEditMemberPassword(!showEditMemberPassword)}
+                        className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-white"
+                        title={showEditMemberPassword ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showEditMemberPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="block font-bold text-slate-300 mb-1">PIN Transaksi (6 Digit)</label>
-                    <input
-                      type="password"
-                      maxLength={6}
-                      value={editMemberPin}
-                      onChange={(e) => setEditMemberPin(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showEditMemberPin ? 'text' : 'password'}
+                        maxLength={6}
+                        value={editMemberPin}
+                        onChange={(e) => setEditMemberPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        className="w-full pl-3 pr-9 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEditMemberPin(!showEditMemberPin)}
+                        className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-white"
+                        title={showEditMemberPin ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showEditMemberPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1875,13 +1904,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
                 <div>
                   <label className="block font-bold text-slate-300 mb-1">Ganti Password (Opsional)</label>
-                  <input
-                    type="password"
-                    placeholder="Kosongkan bila tidak diubah"
-                    value={editAdminPassword}
-                    onChange={(e) => setEditAdminPassword(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showEditAdminPassword ? 'text' : 'password'}
+                      placeholder="Kosongkan bila tidak diubah"
+                      value={editAdminPassword}
+                      onChange={(e) => setEditAdminPassword(e.target.value)}
+                      className="w-full pl-3 pr-9 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowEditAdminPassword(!showEditAdminPassword)}
+                      className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-white"
+                      title={showEditAdminPassword ? 'Sembunyikan' : 'Tampilkan'}
+                    >
+                      {showEditAdminPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="pt-2 flex gap-2">
@@ -2665,14 +2704,24 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-300 font-bold mb-1">Password Masuk *</label>
-                    <input
-                      type="text"
-                      required
-                      value={newAdminPassword}
-                      onChange={(e) => setNewAdminPassword(e.target.value)}
-                      placeholder="Password login"
-                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showNewAdminPassword ? 'text' : 'password'}
+                        required
+                        value={newAdminPassword}
+                        onChange={(e) => setNewAdminPassword(e.target.value)}
+                        placeholder="Password login"
+                        className="w-full pl-2.5 pr-8 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewAdminPassword(!showNewAdminPassword)}
+                        className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-white"
+                        title={showNewAdminPassword ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showNewAdminPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -2986,13 +3035,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-300 font-bold mb-1">Password Baru (Opsional)</label>
-                    <input
-                      type="text"
-                      value={editAdminAccNewPassword}
-                      onChange={(e) => setEditAdminAccNewPassword(e.target.value)}
-                      placeholder="Kosongkan jika tidak diubah"
-                      className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showEditAdminAccPassword ? 'text' : 'password'}
+                        value={editAdminAccNewPassword}
+                        onChange={(e) => setEditAdminAccNewPassword(e.target.value)}
+                        placeholder="Kosongkan jika tidak diubah"
+                        className="w-full pl-2.5 pr-8 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEditAdminAccPassword(!showEditAdminAccPassword)}
+                        className="absolute inset-y-0 right-0 pr-2 flex items-center text-slate-400 hover:text-white"
+                        title={showEditAdminAccPassword ? 'Sembunyikan' : 'Tampilkan'}
+                      >
+                        {showEditAdminAccPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -3697,6 +3756,93 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span>{repairMsg}</span>
               </div>
             )}
+
+            {/* SEKSI 0: ANALISIS DEVICE TERHUBUNG & PENGGUNA ONLINE REALTIME (REQ 1 & 19) */}
+            <div className="bg-slate-900/90 border border-slate-700/80 rounded-2xl p-3.5 space-y-3">
+              <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2 font-extrabold text-emerald-400 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                  <span>📱 Analisis Perangkat Terhubung & Sedang Online</span>
+                </div>
+                <span className="px-2.5 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-full text-[10px] font-black">
+                  {diagData?.connectedDevicesAnalytics?.totalDevices || 1} Device Aktif
+                </span>
+              </div>
+
+              {/* Platform breakdown */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-bold">🤖 Mobile Android</div>
+                  <div className="text-base font-black font-mono text-emerald-400 mt-0.5">
+                    {diagData?.connectedDevicesAnalytics?.platforms?.android || 0}
+                  </div>
+                  <div className="text-[9px] text-slate-500">Aplikasi .APK</div>
+                </div>
+                <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-bold">🍏 iPhone / iOS</div>
+                  <div className="text-base font-black font-mono text-sky-400 mt-0.5">
+                    {diagData?.connectedDevicesAnalytics?.platforms?.ios || 0}
+                  </div>
+                  <div className="text-[9px] text-slate-500">PWA / Web-Clip</div>
+                </div>
+                <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-bold">💻 Desktop PC</div>
+                  <div className="text-base font-black font-mono text-amber-400 mt-0.5">
+                    {diagData?.connectedDevicesAnalytics?.platforms?.pc || 0}
+                  </div>
+                  <div className="text-[9px] text-slate-500">Windows .EXE</div>
+                </div>
+                <div className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700">
+                  <div className="text-[10px] text-slate-400 font-bold">🌐 Web Browser</div>
+                  <div className="text-base font-black font-mono text-purple-400 mt-0.5">
+                    {diagData?.connectedDevicesAnalytics?.platforms?.web || 1}
+                  </div>
+                  <div className="text-[9px] text-slate-500">Chrome/Safari/Edge</div>
+                </div>
+              </div>
+
+              {/* Online Users List */}
+              <div className="mt-2 space-y-1.5">
+                <div className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                  <span>Daftar Pengguna yang Sedang Membuka Aplikasi (Online):</span>
+                  <span className="text-[10px] text-emerald-400 font-mono">Pembaruan Realtime Tiap 25d</span>
+                </div>
+                <div className="max-h-36 overflow-y-auto divide-y divide-slate-800 rounded-xl border border-slate-800 bg-slate-950/60">
+                  {diagData?.connectedDevicesAnalytics?.onlineUsers && diagData.connectedDevicesAnalytics.onlineUsers.length > 0 ? (
+                    diagData.connectedDevicesAnalytics.onlineUsers.map((u: any, idx: number) => (
+                      <div key={u.deviceId || idx} className="p-2 flex items-center justify-between text-[11px]">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                          <div className="truncate">
+                            <span className="font-extrabold text-white">{u.userName}</span>
+                            <span className="text-slate-400 text-[10px] ml-1.5">
+                              ({u.role === 'super_admin' ? 'Super Admin' : u.role === 'admin' ? 'Admin' : 'Anggota'})
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 font-mono text-[10px]">
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-amber-300 border border-slate-700">
+                            {u.platform === 'mobile_android' ? 'Android' : u.platform === 'mobile_ios' ? 'iOS' : u.platform === 'desktop_pc' ? 'PC' : 'Web'}
+                          </span>
+                          <span className="text-emerald-400 font-bold">ONLINE</span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-2 flex items-center justify-between text-[11px]">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        <span className="font-bold text-white">
+                          {currentAdmin?.nama || currentMember?.nama || 'Sistem Super Admin'}
+                        </span>
+                        <span className="text-[10px] text-slate-400">(Sesi Ini)</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-emerald-400 font-bold">ONLINE SEKARANG</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
             {/* SEKSI 1: ANALISIS SPEED & KECEPATAN REALTIME (REQ 16) */}
             <div className="bg-slate-900/90 border border-slate-700/80 rounded-2xl p-3.5 space-y-2.5">
