@@ -163,13 +163,8 @@ export default function App() {
       clearTimeout(toastTimer);
 
       if (backPressCount === 1) {
-        // 1x klik: Kembali ke menu sebelumnya
-        window.dispatchEvent(new CustomEvent('app:back_press', { detail: { count: 1 } }));
-        setBackToastMessage('Kembali ke menu sebelumnya. (Klik 3x untuk logout)');
-        toastTimer = setTimeout(() => {
-          setBackToastMessage(null);
-          backPressCount = 0;
-        }, 3000);
+        // 1x klik: Kembali ke menu sebelumnya / tutup modal yang terbuka (tanpa toast note sesuai Req 2)
+        window.dispatchEvent(new CustomEvent('app:back_press', { cancelable: true, detail: { count: 1 } }));
       } else if (backPressCount === 2) {
         setBackToastMessage('Klik 1x lagi untuk keluar / logout dari aplikasi');
         toastTimer = setTimeout(() => {

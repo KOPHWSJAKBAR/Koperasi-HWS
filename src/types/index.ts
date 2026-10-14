@@ -250,6 +250,8 @@ export interface SuratResmi {
   diterbitkanOleh: string;
   statusTerkirimWa: boolean;
   statusTerkirimEmail: boolean;
+  readByMemberIds?: string[];
+  readByAdminIds?: string[];
   createdAt: string;
 }
 

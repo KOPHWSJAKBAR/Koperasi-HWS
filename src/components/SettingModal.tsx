@@ -119,7 +119,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
   // Handle Back Press in Settings (Req 7)
   useEffect(() => {
-    const handleAppBack = () => {
+    const handleAppBack = (e: Event) => {
+      e.preventDefault();
       if (installWizardApp) {
         setInstallWizardApp(null);
       } else if (subModal) {
@@ -4304,20 +4305,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStartSettingInstall('apk')}
-                  className="w-full p-3 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 hover:border-emerald-500/50 rounded-2xl flex items-center justify-between transition-all text-left"
+                  className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 hover:border-emerald-500/60 rounded-2xl flex items-center justify-between transition-all text-left group shadow-md"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center text-xl shrink-0">
-                      🤖
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-950 to-slate-900 border border-emerald-500/40 p-1.5 flex items-center justify-center shrink-0 shadow-inner group-hover:scale-105 transition-transform">
+                      <LogoHws className="w-8 h-8 drop-shadow" />
                     </div>
                     <div>
-                      <div className="font-extrabold text-white text-xs">Unduh Android (.APK)</div>
-                      <div className="text-[10px] text-emerald-400 font-medium">
-                        Paket mentah .APK resmi siap pasang di smartphone Android
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-white text-xs">Unduh Android (.APK)</span>
+                        <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold px-1.5 py-0.2 rounded">
+                          Mobile App
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-emerald-400 font-medium mt-0.5">
+                        Paket APK resmi Koperasi HWS • Sensor Sidik Jari & Notifikasi
                       </div>
                     </div>
                   </div>
-                  <span className="text-[11px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-3 py-1.5 rounded-xl shrink-0 shadow-sm">
+                  <span className="text-[11px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black px-3.5 py-2 rounded-xl shrink-0 shadow-sm transition-colors">
                     Unduh Android
                   </span>
                 </button>
@@ -4326,42 +4332,52 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStartSettingInstall('ios')}
-                  className="w-full p-3 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 hover:border-purple-500/50 rounded-2xl flex items-center justify-between transition-all text-left"
+                  className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 hover:border-purple-500/60 rounded-2xl flex items-center justify-between transition-all text-left group shadow-md"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-purple-950/80 border border-purple-500/40 flex items-center justify-center text-xl shrink-0">
-                      🍏
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-950 to-slate-900 border border-purple-500/40 p-1.5 flex items-center justify-center shrink-0 shadow-inner group-hover:scale-105 transition-transform">
+                      <LogoHws className="w-8 h-8 drop-shadow" />
                     </div>
                     <div>
-                      <div className="font-extrabold text-white text-xs">Unduh iOS (iPhone / iPad)</div>
-                      <div className="text-[10px] text-purple-300 font-medium">
-                        Profil WebClip resmi terpasang di layar utama Apple iOS
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-white text-xs">Unduh iOS (iPhone / iPad)</span>
+                        <span className="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold px-1.5 py-0.2 rounded">
+                          Apple iOS
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-purple-300 font-medium mt-0.5">
+                        Profil WebClip resmi terpasang di Layar Utama iPhone / iPad
                       </div>
                     </div>
                   </div>
-                  <span className="text-[11px] bg-purple-500 hover:bg-purple-400 text-white font-bold px-3 py-1.5 rounded-xl shrink-0 shadow-sm">
+                  <span className="text-[11px] bg-purple-500 hover:bg-purple-400 text-white font-black px-3.5 py-2 rounded-xl shrink-0 shadow-sm transition-colors">
                     Unduh iOS
                   </span>
                 </button>
 
-                {/* 3. Unduh PC (.EXE) */}
+                {/* 3. Unduh PC (.EXE) - Desktop Installer Resmi */}
                 <button
                   type="button"
                   onClick={() => handleStartSettingInstall('exe')}
-                  className="w-full p-3 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 hover:border-amber-500/50 rounded-2xl flex items-center justify-between transition-all text-left"
+                  className="w-full p-3.5 bg-slate-800/90 hover:bg-slate-750 border border-slate-700 hover:border-amber-500/60 rounded-2xl flex items-center justify-between transition-all text-left group shadow-md"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-amber-950/80 border border-amber-500/40 flex items-center justify-center text-xl shrink-0">
-                      💻
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-950 to-slate-900 border border-amber-500/40 p-1.5 flex items-center justify-center shrink-0 shadow-inner group-hover:scale-105 transition-transform">
+                      <LogoHws className="w-8 h-8 drop-shadow" />
                     </div>
                     <div>
-                      <div className="font-extrabold text-white text-xs">Unduh PC (.EXE)</div>
-                      <div className="text-[10px] text-amber-300 font-medium">
-                        Aplikasi desktop executable launcher mandiri Windows
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-white text-xs">Unduh PC (.EXE)</span>
+                        <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold px-1.5 py-0.2 rounded">
+                          Windows App
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-amber-300 font-medium mt-0.5">
+                        Installer Desktop Mandiri (koperasi-hws-setup.exe) • Windows 10/11
                       </div>
                     </div>
                   </div>
-                  <span className="text-[11px] bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-xl shrink-0 shadow-sm">
+                  <span className="text-[11px] bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-3.5 py-2 rounded-xl shrink-0 shadow-sm transition-colors">
                     Unduh .EXE
                   </span>
                 </button>

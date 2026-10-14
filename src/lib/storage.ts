@@ -89,7 +89,7 @@ const defaultInitialState: AppState = {
       nik: '3173010101700001',
       wilayahKantor: 'Cengkareng',
       role: 'super_admin',
-      password: 'ciganea',
+      password: 'Abieza88',
       securityQuestion: 'Nama kota pendirian koperasi?',
       securityAnswer: 'jakarta',
       alamatLengkap: 'Jl. Raya Daan Mogot KM 11 No. 8, RT 001 RW 001, Kel. Rawa Buaya',
@@ -109,43 +109,7 @@ const defaultInitialState: AppState = {
       createdAt: new Date().toISOString(),
     },
   ],
-  members: [
-    {
-      id: 'mem-1',
-      nomorAnggota: 'HWS-CKR-2026-001',
-      nomorRekening: '7729666666',
-      nama: 'Almaydha Arya Budiman',
-      nik: '3173012005950003',
-      whatsapp: '085817554296',
-      email: 'almaydha.arya@gmail.com',
-      wilayah: 'Cengkareng',
-      alamatLengkap: 'Jl. Albarkah Raya No. 8, RT 003 RW 003, Kel. Rawa Buaya',
-      provinsi: 'DKI Jakarta',
-      kota: 'Jakarta Barat',
-      kecamatan: 'Cengkareng',
-      kelurahan: 'Rawa Buaya',
-      rt: '003',
-      rw: '003',
-      kodePos: '11740',
-      ktpPhotoUrl: '',
-      bankPribadi: {
-        namaBank: 'Bank Central Asia (BCA)',
-        nomorRekening: '5490706161',
-        atasNama: 'Almaydha Arya Budiman',
-      },
-      password: 'user123',
-      pinTransaksi: '123456',
-      securityQuestion: 'Nama hewan peliharaan pertama?',
-      securityAnswer: 'kucing',
-      saldoPokok: 0,
-      isPokokLocked: true,
-      saldoZakatFitrah: 0,
-      saldoQurban: 0,
-      saldoUmum: 0,
-      status: 'aktif',
-      terdaftarSejak: '2026-02-01',
-    },
-  ],
+  members: [],
   setoranList: [],
   memberTransactions: [],
   kasList: [],
@@ -300,15 +264,16 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   if (!base) return incoming;
   if (!incoming) return base;
 
-  // 1. Members: merge by ID, NEVER delete existing members, preserve photos & bank info
-  const memberMap = new Map<string, MemberUser>();
-  (base.members || []).forEach((m) => memberMap.set(m.id, { ...m }));
-  (incoming.members || []).forEach((m) => {
-    const existing = memberMap.get(m.id);
-    if (!existing) {
-      memberMap.set(m.id, m);
-    } else {
-      memberMap.set(m.id, {
+  // 1. Members: if incoming.members is provided as an array, use it as current list (preserving base file URLs if missing in incoming)
+  // This allows Super Admin to delete members permanently (Req 8).
+  let mergedMembers: MemberUser[];
+  if (Array.isArray(incoming.members)) {
+    const baseMemberMap = new Map<string, MemberUser>();
+    (base.members || []).forEach((m) => baseMemberMap.set(m.id, m));
+    mergedMembers = incoming.members.map((m) => {
+      const existing = baseMemberMap.get(m.id);
+      if (!existing) return m;
+      return {
         ...existing,
         ...m,
         ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
@@ -317,9 +282,11 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
           ...existing.bankPribadi,
           ...(m.bankPribadi || {}),
         },
-      });
-    }
-  });
+      };
+    });
+  } else {
+    mergedMembers = base.members || [];
+  }
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
   const setoranMap = new Map<string, SetoranVerifikasi>();
@@ -360,7 +327,13 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     if (!suratMap.has(s.id)) {
       suratMap.set(s.id, s);
     } else {
-      suratMap.set(s.id, { ...suratMap.get(s.id)!, ...s });
+      const existing = suratMap.get(s.id)!;
+      suratMap.set(s.id, {
+        ...existing,
+        ...s,
+        readByMemberIds: Array.from(new Set([...(existing.readByMemberIds || []), ...(s.readByMemberIds || [])])),
+        readByAdminIds: Array.from(new Set([...(existing.readByAdminIds || []), ...(s.readByAdminIds || [])])),
+      });
     }
   });
 
@@ -369,25 +342,34 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   (base.memberTransactions || []).forEach((tx) => txMap.set(tx.id, tx));
   (incoming.memberTransactions || []).forEach((tx) => txMap.set(tx.id, tx));
 
-  // 6. Kas List (Buku Kas Koperasi)
-  const kasMap = new Map<string, KasEntry>();
-  (base.kasList || []).forEach((k) => kasMap.set(k.id, k));
-  (incoming.kasList || []).forEach((k) => kasMap.set(k.id, k));
+  // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
+  let mergedKasList: KasEntry[];
+  if (Array.isArray(incoming.kasList)) {
+    mergedKasList = incoming.kasList;
+  } else {
+    mergedKasList = base.kasList || [];
+  }
 
   // 7. Penyaluran List (Zakat & Qurban)
   const penyaluranMap = new Map<string, PenyaluranZakatQurban>();
   (base.penyaluranList || []).forEach((p) => penyaluranMap.set(p.id, p));
   (incoming.penyaluranList || []).forEach((p) => penyaluranMap.set(p.id, p));
 
-  // 8. Audit Logs (Preserve 100% audit trail - PERMANENT)
-  const logMap = new Map<string, AuditLog>();
-  (base.auditLogs || []).forEach((l) => logMap.set(l.id, l));
-  (incoming.auditLogs || []).forEach((l) => logMap.set(l.id, l));
+  // 8. Audit Logs: if incoming.auditLogs is provided as an array, use it directly so logs can be cleared or reset (Req 3).
+  let mergedAuditLogs: AuditLog[];
+  if (Array.isArray(incoming.auditLogs)) {
+    mergedAuditLogs = incoming.auditLogs;
+  } else {
+    mergedAuditLogs = base.auditLogs || [];
+  }
 
-  // 9. Admins
-  const adminMap = new Map<string, AdminUser>();
-  (base.admins || []).forEach((a) => adminMap.set(a.id, a));
-  (incoming.admins || []).forEach((a) => adminMap.set(a.id, a));
+  // 9. Admins: if incoming.admins is provided, use it directly so admin management works properly.
+  let mergedAdmins: AdminUser[];
+  if (Array.isArray(incoming.admins)) {
+    mergedAdmins = incoming.admins;
+  } else {
+    mergedAdmins = base.admins || [];
+  }
 
   // 10. Profile: preserve QRIS and official details
   const profile = {
@@ -400,15 +382,15 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     ...base,
     ...incoming,
     profile,
-    admins: Array.from(adminMap.values()),
-    members: Array.from(memberMap.values()),
+    admins: mergedAdmins,
+    members: mergedMembers,
     setoranList: Array.from(setoranMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
     memberTransactions: Array.from(txMap.values()).sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
-    kasList: Array.from(kasMap.values()).sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
+    kasList: mergedKasList.sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
-    auditLogs: Array.from(logMap.values()).sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
+    auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     lastRunningNumber: Math.max(base.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
     serverSyncStatus: {
       online: true,

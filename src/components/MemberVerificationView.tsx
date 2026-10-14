@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppState,
   MemberUser,
@@ -8,6 +8,7 @@ import {
   KasEntry,
 } from '../types';
 import { formatRupiah, createAuditLog, fetchStateFromServer } from '../lib/storage';
+import { sendRealtimeNotification } from '../lib/fcm';
 import { LogoHws } from '../lib/logo';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import {
@@ -49,9 +50,9 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const isMember = !!currentMember;
   const [buktiSetorSuccess, setBuktiSetorSuccess] = useState<SetoranVerifikasi | null>(null);
 
-  // Member deposit form state
+  // Member deposit form state (Req 1: Kolom jumlah hari dikosongkan agar langsung dapat diinput)
   const [jenisSetoran, setJenisSetoran] = useState<'kewajiban' | 'umum'>('kewajiban');
-  const [jumlahHari, setJumlahHari] = useState<number>(1);
+  const [jumlahHari, setJumlahHari] = useState<string>('');
   const [nominalUmum, setNominalUmum] = useState<string>('50000');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>(
     state.profile.rekeningPenampungan[0]?.bankName + ' - ' + state.profile.rekeningPenampungan[0]?.accountNumber || 'BCA 5490706161'
@@ -77,11 +78,30 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [approvingId, setApprovingId] = useState<string | null>(null);
 
-  // Calculations for setoran kewajiban
-  const nominalKewajiban = (jumlahHari || 1) * state.profile.biayaWajibHarian; // 2.000 / hari
-  const porsiPokok = (jumlahHari || 1) * state.profile.pembagianPokokHarian; // 1.000 / hari
-  const porsiZakat = (jumlahHari || 1) * state.profile.pembagianZakatHarian; // 500 / hari
-  const porsiQurban = (jumlahHari || 1) * state.profile.pembagianQurbanHarian; // 500 / hari
+  // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
+  useEffect(() => {
+    const handleDeviceBack = (e: Event) => {
+      if (previewBukti) {
+        e.preventDefault();
+        setPreviewBukti(null);
+      } else if (buktiSetorSuccess) {
+        e.preventDefault();
+        setBuktiSetorSuccess(null);
+      } else if (isTarikModalOpen) {
+        e.preventDefault();
+        setIsTarikModalOpen(false);
+      }
+    };
+    window.addEventListener('app:back_press', handleDeviceBack);
+    return () => window.removeEventListener('app:back_press', handleDeviceBack);
+  }, [previewBukti, buktiSetorSuccess, isTarikModalOpen]);
+
+  // Calculations for setoran kewajiban (Req 1)
+  const daysCount = parseInt(jumlahHari, 10) || 0;
+  const nominalKewajiban = daysCount * (state.profile?.biayaWajibHarian || 2000); // 2.000 / hari
+  const porsiPokok = daysCount * (state.profile?.pembagianPokokHarian || 1000); // 1.000 / hari
+  const porsiZakat = daysCount * (state.profile?.pembagianZakatHarian || 500); // 500 / hari
+  const porsiQurban = daysCount * (state.profile?.pembagianQurbanHarian || 500); // 500 / hari
 
   const nominalFinal = jenisSetoran === 'kewajiban' ? nominalKewajiban : Number(nominalUmum) || 0;
 
@@ -135,6 +155,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMember) return;
+    if (jenisSetoran === 'kewajiban' && daysCount <= 0) {
+      setMsg({ type: 'error', text: 'Silakan isi jumlah hari setoran kewajiban terlebih dahulu.' });
+      return;
+    }
     if (nominalFinal <= 0) {
       setMsg({ type: 'error', text: 'Nominal setoran harus lebih dari Rp 0.' });
       return;
@@ -153,7 +177,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       memberRekening: currentMember.nomorRekening,
       memberWilayah: currentMember.wilayah,
       jenis: jenisSetoran,
-      jumlahHari: jenisSetoran === 'kewajiban' ? jumlahHari : undefined,
+      jumlahHari: jenisSetoran === 'kewajiban' ? daysCount : undefined,
       nominal: nominalFinal,
       rekeningTujuan,
       metode,
@@ -185,6 +209,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     });
     setBuktiUrl('');
     setCatatan('');
+    setJumlahHari('');
   };
 
   // Download QRIS as JPG (Req A.5)
@@ -502,6 +527,16 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         } else {
           await fetchStateFromServer();
         }
+        // Kirim FCM & Realtime Push Notifikasi ke Anggota (Req 1)
+        sendRealtimeNotification({
+          recipientId: dep.memberId,
+          recipientNama: dep.memberNama,
+          title: '✅ Verifikasi Setoran Disetujui',
+          body: `Setoran ${dep.jenis === 'kewajiban' ? 'Kewajiban Pokok' : 'Tabungan Umum'} sebesar ${formatRupiah(dep.nominal)} telah disetujui & masuk ke saldo Anda.`,
+          type: 'setoran_verified',
+          data: { depositId: dep.id, nominal: dep.nominal },
+        }).catch(() => {});
+
         alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui! Saldo tepat terupdate 1 kali.`);
         setApprovingId(null);
         return;
@@ -556,12 +591,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             referensiId: dep.id,
           });
 
+          // 1. Catat Tabungan Pokok di Buku Kas Anggota (Req 6)
           newKasList.push({
-            id: `kas-ang-${Date.now()}`,
+            id: `kas-ang-pokok-${Date.now()}`,
             bukuKas: 'anggota',
             tanggal: tgl,
             kategori: 'Tabungan Pokok',
-            keterangan: `Setoran Kewajiban ${targetMember.nama} ${jlhHari} x 1000`,
+            keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
             nominal: pokokNominal,
@@ -571,12 +607,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
 
+          // 2. Catat Tabungan Zakat di Buku Kas Anggota (Req 6)
           newKasList.push({
-            id: `kas-kop-zakat-${Date.now()}`,
-            bukuKas: 'koperasi',
+            id: `kas-ang-zakat-${Date.now() + 1}`,
+            bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: 'Iuran Tabungan Zakat & Qurban',
-            keterangan: `${targetMember.nama} TAB ZAKAT FITRAH ${jlhHari} x 500`,
+            kategori: 'Tabungan Zakat',
+            keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
             nominal: zakatNominal,
@@ -586,12 +623,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
 
+          // 3. Catat Tabungan Qurban di Buku Kas Anggota (Req 6)
           newKasList.push({
-            id: `kas-kop-qurban-${Date.now() + 1}`,
-            bukuKas: 'koperasi',
+            id: `kas-ang-qurban-${Date.now() + 2}`,
+            bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: 'Iuran Tabungan Zakat & Qurban',
-            keterangan: `${targetMember.nama} TAB QURBAN ${jlhHari} x 500`,
+            kategori: 'Tabungan Qurban',
+            keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
             nominal: qurbanNominal,
@@ -708,6 +746,16 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         auditLogs: [audit, ...prev.auditLogs],
       };
     });
+
+    // Kirim notifikasi realtime ke anggota
+    sendRealtimeNotification({
+      recipientId: dep.memberId,
+      recipientNama: dep.memberNama,
+      title: '⚠️ Pengajuan Setoran Belum Disetujui',
+      body: `Pengajuan setoran ${formatRupiah(dep.nominal)} belum disetujui. Catatan pengurus: ${reason}`,
+      type: 'info',
+      data: { depositId: dep.id, nominal: dep.nominal },
+    }).catch(() => {});
   };
 
   // Export deposits table to CSV or printable PDF
@@ -870,17 +918,17 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 <div className="bg-[#162544] p-4 rounded-2xl border border-amber-500/30 space-y-3">
                   <div>
                     <label className="block text-xs font-bold text-amber-300 mb-1">
-                      Jumlah Hari Disetor
+                      Jumlah Hari Disetor *
                     </label>
                     <div className="flex items-center gap-2">
                       <input
                         type="number"
                         min={1}
                         max={365}
-                        required
+                        placeholder="Ketik hari (misal: 30)"
                         value={jumlahHari}
-                        onChange={(e) => setJumlahHari(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-center text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        onChange={(e) => setJumlahHari(e.target.value)}
+                        className="w-48 px-3 py-2 bg-slate-900 border border-amber-500/50 rounded-xl text-center text-sm font-bold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
                       />
                       <span className="text-xs text-slate-300">Hari (x Rp 2.000 / hari)</span>
                     </div>

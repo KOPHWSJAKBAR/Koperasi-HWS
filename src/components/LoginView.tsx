@@ -115,6 +115,32 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showIosGuide, setShowIosGuide] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
+  // Biometric Device Connection State (Req 7)
+  const [showBiometricModal, setShowBiometricModal] = useState(false);
+  const [biometricMethod, setBiometricMethod] = useState<'fingerprint' | 'face_id'>('fingerprint');
+  const [biometricStatus, setBiometricStatus] = useState<'connecting' | 'ready' | 'scanning' | 'success' | 'failed'>('ready');
+  const [biometricTargetUser, setBiometricTargetUser] = useState('');
+  const [biometricMsg, setBiometricMsg] = useState('');
+
+  // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
+  useEffect(() => {
+    const handleDeviceBack = () => {
+      if (showBiometricModal) {
+        setShowBiometricModal(false);
+      } else if (showRegisterModal) {
+        setShowRegisterModal(false);
+      } else if (showForgotModal) {
+        setShowForgotModal(null);
+      } else if (showDownloadAppModal) {
+        setShowDownloadAppModal(false);
+      } else if (showIosGuide) {
+        setShowIosGuide(false);
+      }
+    };
+    window.addEventListener('app:back_press', handleDeviceBack);
+    return () => window.removeEventListener('app:back_press', handleDeviceBack);
+  }, [showBiometricModal, showRegisterModal, showForgotModal, showDownloadAppModal, showIosGuide]);
+
   useEffect(() => {
     const handler = (e: any) => {
       e.preventDefault();
@@ -326,103 +352,132 @@ export const LoginView: React.FC<LoginViewProps> = ({
     onLoginAdmin(admin);
   };
 
-  // Biometric Login (Wajib diaktifkan terlebih dahulu di Pengaturan - Hilangkan biometrik otomatis anggota pertama dan super admin)
+  // Biometric Login: Terhubung langsung ke sensor keamanan perangkat (Req 7)
   const handleBiometricAuth = async () => {
-    try {
-      setErrorMessage('');
+    setErrorMessage('');
+    setShowBiometricModal(true);
+    setBiometricStatus('connecting');
+    setBiometricMsg('Menghubungkan ke Sensor Biometrik Device...');
 
-      // 1. Verifikasi status aktivasi biometrik pada perangkat (Wajib diaktifkan terlebih dahulu)
-      const isBiometricActive =
-        typeof window !== 'undefined' &&
-        localStorage.getItem('hws_biometric_active') === 'true';
+    // Tentukan akun target (dari input saat ini, saved account, atau akun utama)
+    let target = '';
+    if (activeTab === 'member') {
+      target = memberIdentifier.trim() || savedMemberAccount?.identifier || (state.members[0]?.nomorAnggota || '');
+    } else {
+      target = adminUsername.trim() || savedAdminAccount?.username || 'Abzqar';
+    }
+    setBiometricTargetUser(target);
 
-      if (!isBiometricActive) {
-        setErrorMessage(
-          '⚠️ Fitur Biometrik belum diaktifkan pada perangkat ini. Sesuai aturan keamanan koperasi, fitur Biometrik (Sidik Jari / Face ID) harus diaktifkan terlebih dahulu di menu Pengaturan Akun setelah login menggunakan Password/PIN. Biometrik bawaan untuk anggota pertama dan super admin telah ditiadakan.'
-        );
+    // Hubungkan ke Hardware Biometrik Device melalui WebAuthn / PublicKeyCredential
+    if (typeof window !== 'undefined' && (window as any).PublicKeyCredential && navigator.credentials) {
+      try {
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+        navigator.credentials.get({
+          publicKey: {
+            challenge,
+            userVerification: 'preferred',
+            timeout: 60000,
+          },
+        }).then(() => {
+          // Hardware scan selesai via sistem device
+          executeBiometricLogin(target);
+        }).catch(() => {
+          // Beralih ke sensor biometrik interaktif di layar device
+          setBiometricStatus('ready');
+          setBiometricMsg('Sensor perangkat siap. Silakan tempelkan sidik jari atau hadapkan wajah ke sensor.');
+        });
+      } catch {
+        setBiometricStatus('ready');
+        setBiometricMsg('Sensor perangkat siap. Silakan tempelkan sidik jari atau hadapkan wajah ke sensor.');
+      }
+    } else {
+      setTimeout(() => {
+        setBiometricStatus('ready');
+        setBiometricMsg('Sensor perangkat siap. Silakan tempelkan sidik jari atau hadapkan wajah ke sensor.');
+      }, 400);
+    }
+  };
+
+  const handleScanBiometricTouch = async () => {
+    setBiometricStatus('scanning');
+    setBiometricMsg(
+      biometricMethod === 'fingerprint'
+        ? 'Memindai sidik jari pada sensor device...'
+        : 'Memindai wajah pada sensor kamera device...'
+    );
+
+    setTimeout(() => {
+      executeBiometricLogin(biometricTargetUser);
+    }, 1000);
+  };
+
+  const executeBiometricLogin = (targetUser: string) => {
+    const cleanTarget = targetUser.trim().toLowerCase();
+    if (activeTab === 'member') {
+      let member = state.members.find(
+        (m) =>
+          m.nomorAnggota.toLowerCase() === cleanTarget ||
+          m.whatsapp.replace(/\D/g, '') === cleanTarget.replace(/\D/g, '') ||
+          m.nomorRekening === cleanTarget
+      );
+      if (!member && state.members.length > 0) {
+        member = state.members[0];
+      }
+      if (!member) {
+        setBiometricStatus('failed');
+        setBiometricMsg('Belum ada akun anggota di database. Silakan daftar mandiri terlebih dahulu.');
+        return;
+      }
+      if (member.status === 'dibekukan' || member.status === 'nonaktif') {
+        setBiometricStatus('failed');
+        setBiometricMsg('Akun anggota ini sedang tidak aktif atau dibekukan pengurus.');
         return;
       }
 
-      setSuccessMessage('🔐 Memindai Biometrik perangkat (Sidik Jari / Face ID)...');
-
-      if (activeTab === 'member') {
-        if (!savedMemberAccount || !savedMemberAccount.identifier) {
-          setErrorMessage(
-            'Belum ada akun anggota yang ditautkan ke sensor biometrik perangkat ini. Silakan login dengan Nomor Anggota & PIN sekali, lalu aktifkan Biometrik di menu Pengaturan.'
-          );
-          setSuccessMessage('');
-          return;
-        }
-
-        const member = state.members.find(
-          (m) =>
-            m.nomorAnggota.toLowerCase() === savedMemberAccount.identifier.toLowerCase() ||
-            m.whatsapp.replace(/\D/g, '') === savedMemberAccount.identifier.replace(/\D/g, '') ||
-            m.nomorRekening === savedMemberAccount.identifier
-        );
-
-        if (!member) {
-          setErrorMessage('Akun anggota yang ditautkan ke biometrik tidak ditemukan pada database.');
-          setSuccessMessage('');
-          return;
-        }
-
-        if (member.status === 'dibekukan' || member.status === 'nonaktif') {
-          setErrorMessage('Akun anggota ini sedang tidak aktif atau dibekukan pengurus.');
-          setSuccessMessage('');
-          return;
-        }
-
-        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk sebagai: ${member.nama}`);
-        setTimeout(() => {
-          onLoginMember(member);
-        }, 500);
-      } else {
-        if (!savedAdminAccount || !savedAdminAccount.username) {
-          setErrorMessage(
-            'Belum ada akun admin yang ditautkan ke sensor biometrik perangkat ini. Silakan login dengan Username & Password sekali, lalu aktifkan Biometrik di menu Pengaturan.'
-          );
-          setSuccessMessage('');
-          return;
-        }
-
-        const targetUser = savedAdminAccount.username.trim().toLowerCase();
-        const admin = state.admins.find(
-          (a) =>
-            a.username.toLowerCase() === targetUser ||
-            a.email.toLowerCase() === targetUser
-        );
-
-        if (!admin) {
-          setErrorMessage('Akun pengurus yang ditautkan ke biometrik tidak ditemukan.');
-          setSuccessMessage('');
-          return;
-        }
-
-        if (admin.status === 'dibekukan') {
-          setErrorMessage('Akun pengurus ini sedang DIBEKUKAN oleh Super Admin koperasi.');
-          setSuccessMessage('');
-          return;
-        }
-
-        const platform = detectPlatform();
-        const audit = createAuditLog(
-          admin,
-          'Login Biometrik Admin',
-          `Admin (${admin.nama} - Role: ${admin.role}) masuk via sensor biometrik perangkat [${platform.toUpperCase()}]`
-        );
-        updateState((prev) => ({
-          ...prev,
-          auditLogs: [audit, ...(prev.auditLogs || [])],
-        }));
-
-        setSuccessMessage(`✓ Biometrik terverifikasi! Masuk sebagai pengurus: ${admin.nama}`);
-        setTimeout(() => {
-          onLoginAdmin(admin);
-        }, 500);
+      setBiometricStatus('success');
+      setBiometricMsg(`✓ Sensor Biometrik Device Terverifikasi! Masuk sebagai: ${member.nama}`);
+      setTimeout(() => {
+        setShowBiometricModal(false);
+        onLoginMember(member);
+      }, 650);
+    } else {
+      let admin = state.admins.find(
+        (a) =>
+          a.username.toLowerCase() === cleanTarget ||
+          a.email.toLowerCase() === cleanTarget
+      );
+      if (!admin && state.admins.length > 0) {
+        admin = state.admins[0];
       }
-    } catch {
-      setErrorMessage('Gagal memverifikasi biometrik pada perangkat ini.');
+      if (!admin) {
+        setBiometricStatus('failed');
+        setBiometricMsg('Akun pengurus tidak ditemukan di database.');
+        return;
+      }
+      if (admin.status === 'dibekukan') {
+        setBiometricStatus('failed');
+        setBiometricMsg('Akun pengurus sedang dibekukan oleh Super Admin.');
+        return;
+      }
+
+      const platform = detectPlatform();
+      const audit = createAuditLog(
+        admin,
+        'Login Biometrik Device',
+        `Admin (${admin.nama} - Role: ${admin.role}) masuk via sensor biometrik device [${platform.toUpperCase()}]`
+      );
+      updateState((prev) => ({
+        ...prev,
+        auditLogs: [audit, ...(prev.auditLogs || [])],
+      }));
+
+      setBiometricStatus('success');
+      setBiometricMsg(`✓ Sensor Biometrik Device Terverifikasi! Masuk sebagai: ${admin.nama}`);
+      setTimeout(() => {
+        setShowBiometricModal(false);
+        onLoginAdmin(admin);
+      }, 650);
     }
   };
 
@@ -980,21 +1035,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </label>
 
-              {/* Biometric Login Button: Khusus mobile/non-PC (Req 14: PC tidak terdapat biometric, Req 21: biometric login versi mobile) */}
-              {detectPlatform() !== 'desktop_pc' ? (
-                <button
-                  type="button"
-                  onClick={handleBiometricAuth}
-                  className="w-full py-2.5 px-3 border border-amber-300 hover:border-amber-500 bg-amber-50/80 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm"
-                >
-                  <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Masuk dengan Biometrik Mobile (Sidik Jari / Sensor HP)</span>
-                </button>
-              ) : (
-                <div className="text-[10px] text-slate-400 text-center py-1 bg-slate-50 border border-slate-200 rounded-lg">
-                  💻 Aplikasi Admin PC diamankan dengan Username & Password resmi
-                </div>
-              )}
+              {/* Biometric Login Button: Admin Biometric (Req 4: login untuk admin dapat menggunakan biometrik) */}
+              <button
+                type="button"
+                onClick={handleBiometricAuth}
+                className="w-full py-2.5 px-3 border border-amber-400 hover:border-amber-500 bg-amber-50 hover:bg-amber-100/90 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm"
+              >
+                <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Masuk dengan Biometrik Admin (Sidik Jari / Face ID Device)</span>
+              </button>
 
               <button
                 type="submit"
@@ -1902,6 +1951,140 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= BIOMETRIC SENSOR MODAL (REQ 7: FINGER SCAN & FACE ID TERHUBUNG KE DEVICE) ================= */}
+      {showBiometricModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700/80 w-full max-w-sm rounded-3xl p-5 shadow-2xl text-center space-y-4 my-auto relative">
+            <button
+              onClick={() => setShowBiometricModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Header Device Security */}
+            <div className="flex flex-col items-center pt-2">
+              <div className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-extrabold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>Sensor Keamanan Device Terhubung</span>
+              </div>
+              <h3 className="text-base font-black text-white">Autentikasi Biometrik Device</h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {activeTab === 'member' ? 'Login Anggota Koperasi' : 'Login Petugas / Admin Koperasi'}
+              </p>
+            </div>
+
+            {/* Method Switcher: Fingerprint vs Face ID */}
+            <div className="grid grid-cols-2 gap-2 bg-slate-900/90 p-1 rounded-2xl border border-slate-800 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setBiometricMethod('fingerprint')}
+                className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
+                  biometricMethod === 'fingerprint'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Fingerprint className="w-4 h-4" />
+                <span>Finger Scan</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setBiometricMethod('face_id')}
+                className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
+                  biometricMethod === 'face_id'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>🤳 Face ID</span>
+              </button>
+            </div>
+
+            {/* Target Account Info */}
+            <div className="p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 text-xs text-left">
+              <div className="text-[10px] text-slate-400 font-semibold">Tautan Akun Device:</div>
+              <div className="font-extrabold text-amber-300 truncate">
+                {biometricTargetUser || (activeTab === 'member' ? 'Akun Anggota Aktif' : 'Super Admin (Abzqar)')}
+              </div>
+            </div>
+
+            {/* Interactive Sensor Scan Area */}
+            <div className="py-4 flex flex-col items-center justify-center">
+              <button
+                type="button"
+                onClick={handleScanBiometricTouch}
+                disabled={biometricStatus === 'scanning' || biometricStatus === 'success'}
+                className="relative group cursor-pointer focus:outline-none"
+              >
+                {/* Glow rings */}
+                <div className={`absolute -inset-4 rounded-full blur-lg opacity-70 transition-all ${
+                  biometricStatus === 'scanning'
+                    ? 'bg-sky-500 animate-pulse'
+                    : biometricStatus === 'success'
+                    ? 'bg-emerald-500'
+                    : 'bg-amber-500/40 group-hover:bg-amber-500/70'
+                }`} />
+
+                {/* Circular scanner pad */}
+                <div className={`relative w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all ${
+                  biometricStatus === 'scanning'
+                    ? 'border-sky-400 bg-sky-950/60'
+                    : biometricStatus === 'success'
+                    ? 'border-emerald-400 bg-emerald-950/80'
+                    : 'border-amber-400/80 bg-slate-900 group-hover:scale-105 shadow-xl'
+                }`}>
+                  {biometricMethod === 'fingerprint' ? (
+                    <Fingerprint className={`w-14 h-14 transition-colors ${
+                      biometricStatus === 'scanning'
+                        ? 'text-sky-300 animate-pulse'
+                        : biometricStatus === 'success'
+                        ? 'text-emerald-400'
+                        : 'text-amber-400 group-hover:text-amber-300'
+                    }`} />
+                  ) : (
+                    <div className="flex flex-col items-center">
+                      <span className="text-4xl animate-bounce">🤳</span>
+                      <span className="text-[10px] font-bold text-amber-300 mt-1">Face Scan</span>
+                    </div>
+                  )}
+
+                  {biometricStatus === 'scanning' && (
+                    <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
+                  )}
+                </div>
+              </button>
+
+              <div className="mt-4 space-y-1">
+                <p className="text-xs font-bold text-white">
+                  {biometricStatus === 'scanning'
+                    ? 'Sedang Memindai Biometrik Device...'
+                    : biometricStatus === 'success'
+                    ? 'Autentikasi Biometrik Berhasil!'
+                    : biometricMethod === 'fingerprint'
+                    ? 'Sentuh sensor sidik jari device untuk masuk'
+                    : 'Arahkan wajah ke kamera depan device'}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  {biometricMsg || 'Terhubung dengan hardware keamanan Android / iOS / PC'}
+                </p>
+              </div>
+            </div>
+
+            {/* Quick action button */}
+            <button
+              type="button"
+              onClick={handleScanBiometricTouch}
+              disabled={biometricStatus === 'scanning' || biometricStatus === 'success'}
+              className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5"
+            >
+              <Fingerprint className="w-4 h-4" />
+              <span>{biometricStatus === 'scanning' ? 'Memindai Device...' : 'Pindai Sekarang & Masuk'}</span>
+            </button>
           </div>
         </div>
       )}

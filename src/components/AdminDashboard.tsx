@@ -133,23 +133,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         ...prev,
       ]);
     } else {
-      // 1x click: Kembali ke menu sebelumnya (dashboard)
+      // 1x click: Kembali ke menu sebelumnya (dashboard) tanpa menampilkan note (Req 2)
       setActiveTab('dashboard');
-      setToasts((prev) => [
-        {
-          id: `toast-${Date.now()}`,
-          type: 'test',
-          title: 'Kembali ke Menu Utama',
-          message: 'Kembali ke menu sebelumnya. (Klik 3x untuk logout)',
-          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-        },
-        ...prev,
-      ]);
     }
   };
 
   useEffect(() => {
-    const onAppBack = () => {
+    const onAppBack = (e: Event) => {
+      if (e.defaultPrevented) return;
       if (showSettings) {
         setShowSettings(false);
       } else if (activeTab !== 'dashboard') {

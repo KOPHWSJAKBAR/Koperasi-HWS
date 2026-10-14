@@ -93,66 +93,20 @@ const getInitialState = () => ({
       nik: '3173010101700001',
       wilayahKantor: 'Cengkareng',
       role: 'super_admin',
-      password: 'ciganea',
+      password: 'Abieza88',
       securityQuestion: 'Nama kota pendirian koperasi?',
       securityAnswer: 'jakarta',
       createdAt: new Date().toISOString(),
     },
   ],
-  members: [
-    {
-      id: 'mem-1',
-      nomorAnggota: 'HWS-CKR-2026-001',
-      nomorRekening: '7729666666',
-      nama: 'Almaydha Arya Budiman',
-      nik: '3173012005950003',
-      whatsapp: '085817554296',
-      email: 'almaydha.arya@gmail.com',
-      wilayah: 'Cengkareng',
-      alamatLengkap: 'Jl. Albarkah Raya No. 8, RT 003 RW 003, Kel. Rawa Buaya',
-      provinsi: 'DKI Jakarta',
-      kota: 'Jakarta Barat',
-      kecamatan: 'Cengkareng',
-      kelurahan: 'Rawa Buaya',
-      rt: '003',
-      rw: '003',
-      kodePos: '11740',
-      ktpPhotoUrl: '',
-      bankPribadi: {
-        namaBank: 'Bank Central Asia (BCA)',
-        nomorRekening: '5490706161',
-        atasNama: 'Almaydha Arya Budiman',
-      },
-      password: 'user123',
-      pinTransaksi: '123456',
-      securityQuestion: 'Nama hewan peliharaan pertama?',
-      securityAnswer: 'kucing',
-      saldoPokok: 0,
-      isPokokLocked: true,
-      saldoZakatFitrah: 0,
-      saldoQurban: 0,
-      saldoUmum: 0,
-      status: 'aktif',
-      terdaftarSejak: new Date().toISOString().split('T')[0],
-    },
-  ],
+  members: [],
   setoranList: [],
   memberTransactions: [],
   kasList: [],
   penyaluranList: [],
   chatMessages: [],
   suratList: [],
-  auditLogs: [
-    {
-      id: 'log-init',
-      timestamp: new Date().toISOString(),
-      adminId: 'adm-abzqar',
-      adminNama: 'Abzqar',
-      adminRole: 'super_admin',
-      action: 'Inisialisasi Sistem',
-      detail: 'Sistem Koperasi HWS berhasil disinkronisasi & server realtime siap aktif.',
-    },
-  ],
+  auditLogs: [],
   categoriesKasKoperasi: {
     pemasukan: ['Iuran Tabungan Zakat & Qurban', 'Penerimaan Sumbangan / Donasi', 'Pendapatan Jasa Koperasi', 'Pindah Kas Tutup Akun'],
     pengeluaran: ['Penyaluran Zakat Fitrah', 'Penyaluran Tabungan Qurban', 'Biaya Operasional & ATK', 'Sewa Kantor & Listrik', 'Honor Pengurus'],
@@ -257,15 +211,16 @@ function mergeServerState(current: any, incoming: any): any {
   if (!current) return incoming;
   if (!incoming) return current;
 
-  // 1. Members: merge by ID, NEVER delete existing members, preserve photos & bank info
-  const memberMap = new Map<string, any>();
-  (current.members || []).forEach((m: any) => memberMap.set(m.id, { ...m }));
-  (incoming.members || []).forEach((m: any) => {
-    const existing = memberMap.get(m.id);
-    if (!existing) {
-      memberMap.set(m.id, m);
-    } else {
-      memberMap.set(m.id, {
+  // 1. Members: if incoming.members is provided as an array, use it as the current member list (preserving photos & bank info from current if missing in incoming).
+  // This allows Super Admin to delete members permanently (Req 8).
+  let mergedMembers: any[];
+  if (Array.isArray(incoming.members)) {
+    const currentMemberMap = new Map<string, any>();
+    (current.members || []).forEach((m: any) => currentMemberMap.set(m.id, m));
+    mergedMembers = incoming.members.map((m: any) => {
+      const existing = currentMemberMap.get(m.id);
+      if (!existing) return m;
+      return {
         ...existing,
         ...m,
         ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
@@ -274,9 +229,11 @@ function mergeServerState(current: any, incoming: any): any {
           ...existing.bankPribadi,
           ...(m.bankPribadi || {}),
         },
-      });
-    }
-  });
+      };
+    });
+  } else {
+    mergedMembers = current.members || [];
+  }
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
   const setoranMap = new Map<string, any>();
@@ -317,7 +274,13 @@ function mergeServerState(current: any, incoming: any): any {
     if (!suratMap.has(s.id)) {
       suratMap.set(s.id, s);
     } else {
-      suratMap.set(s.id, { ...suratMap.get(s.id)!, ...s });
+      const existing = suratMap.get(s.id)!;
+      suratMap.set(s.id, {
+        ...existing,
+        ...s,
+        readByMemberIds: Array.from(new Set([...(existing.readByMemberIds || []), ...(s.readByMemberIds || [])])),
+        readByAdminIds: Array.from(new Set([...(existing.readByAdminIds || []), ...(s.readByAdminIds || [])])),
+      });
     }
   });
 
@@ -326,25 +289,34 @@ function mergeServerState(current: any, incoming: any): any {
   (current.memberTransactions || []).forEach((tx: any) => txMap.set(tx.id, tx));
   (incoming.memberTransactions || []).forEach((tx: any) => txMap.set(tx.id, tx));
 
-  // 6. Kas List (Buku Kas Koperasi)
-  const kasMap = new Map<string, any>();
-  (current.kasList || []).forEach((k: any) => kasMap.set(k.id, k));
-  (incoming.kasList || []).forEach((k: any) => kasMap.set(k.id, k));
+  // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
+  let mergedKasList: any[];
+  if (Array.isArray(incoming.kasList)) {
+    mergedKasList = incoming.kasList;
+  } else {
+    mergedKasList = current.kasList || [];
+  }
 
   // 7. Penyaluran List (Zakat & Qurban)
   const penyaluranMap = new Map<string, any>();
   (current.penyaluranList || []).forEach((p: any) => penyaluranMap.set(p.id, p));
   (incoming.penyaluranList || []).forEach((p: any) => penyaluranMap.set(p.id, p));
 
-  // 8. Audit Logs (Preserve 100% audit trail - PERMANENT)
-  const logMap = new Map<string, any>();
-  (current.auditLogs || []).forEach((l: any) => logMap.set(l.id, l));
-  (incoming.auditLogs || []).forEach((l: any) => logMap.set(l.id, l));
+  // 8. Audit Logs: if incoming.auditLogs is provided as an array, use it directly so logs can be cleared or reset (Req 3).
+  let mergedAuditLogs: any[];
+  if (Array.isArray(incoming.auditLogs)) {
+    mergedAuditLogs = incoming.auditLogs;
+  } else {
+    mergedAuditLogs = current.auditLogs || [];
+  }
 
-  // 9. Admins
-  const adminMap = new Map<string, any>();
-  (current.admins || []).forEach((a: any) => adminMap.set(a.id, a));
-  (incoming.admins || []).forEach((a: any) => adminMap.set(a.id, a));
+  // 9. Admins: if incoming.admins is provided, use it directly so admin management works properly.
+  let mergedAdmins: any[];
+  if (Array.isArray(incoming.admins)) {
+    mergedAdmins = incoming.admins;
+  } else {
+    mergedAdmins = current.admins || [];
+  }
 
   // 10. Profile: preserve QRIS and official details
   const profile = {
@@ -357,15 +329,15 @@ function mergeServerState(current: any, incoming: any): any {
     ...current,
     ...incoming,
     profile,
-    admins: Array.from(adminMap.values()),
-    members: Array.from(memberMap.values()),
+    admins: mergedAdmins,
+    members: mergedMembers,
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     memberTransactions: Array.from(txMap.values()).sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
-    kasList: Array.from(kasMap.values()).sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
+    kasList: mergedKasList.sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
-    auditLogs: Array.from(logMap.values()).sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1)),
+    auditLogs: mergedAuditLogs.sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1)),
     lastRunningNumber: Math.max(current.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
     serverSyncStatus: {
       online: true,
@@ -701,12 +673,13 @@ async function startServer() {
           });
 
           currentState.kasList = currentState.kasList || [];
+          // 1. Catat Tabungan Pokok di Buku Kas Anggota (Req 6)
           currentState.kasList.unshift({
-            id: `kas-ang-${Date.now()}`,
+            id: `kas-ang-pokok-${Date.now()}`,
             bukuKas: 'anggota',
             tanggal: tgl,
             kategori: 'Tabungan Pokok',
-            keterangan: `Setoran Kewajiban ${targetMember.nama} ${jlhHari} x 1000`,
+            keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
             nominal: pokokNominal,
@@ -716,12 +689,13 @@ async function startServer() {
             createdAt: now.toISOString(),
           });
 
+          // 2. Catat Tabungan Zakat di Buku Kas Anggota (Req 6: Pokok, Qurban & Zakat tercatat di kas anggota)
           currentState.kasList.unshift({
-            id: `kas-kop-zakat-${Date.now()}`,
-            bukuKas: 'koperasi',
+            id: `kas-ang-zakat-${Date.now() + 1}`,
+            bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: 'Iuran Tabungan Zakat & Qurban',
-            keterangan: `${targetMember.nama} TAB ZAKAT FITRAH ${jlhHari} x 500`,
+            kategori: 'Tabungan Zakat',
+            keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
             nominal: zakatNominal,
@@ -731,12 +705,13 @@ async function startServer() {
             createdAt: now.toISOString(),
           });
 
+          // 3. Catat Tabungan Qurban di Buku Kas Anggota (Req 6: Pokok, Qurban & Zakat tercatat di kas anggota)
           currentState.kasList.unshift({
-            id: `kas-kop-qurban-${Date.now() + 1}`,
-            bukuKas: 'koperasi',
+            id: `kas-ang-qurban-${Date.now() + 2}`,
+            bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: 'Iuran Tabungan Zakat & Qurban',
-            keterangan: `${targetMember.nama} TAB QURBAN ${jlhHari} x 500`,
+            kategori: 'Tabungan Qurban',
+            keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
             nominal: qurbanNominal,
@@ -817,6 +792,23 @@ async function startServer() {
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
       broadcastEvent('SETORAN_UPDATED', { action: 'verify', deposit: dep });
+
+      // FCM Realtime Member Notification (Req 1)
+      const notifTitle = isApproved
+        ? '✅ Verifikasi Setoran Berhasil'
+        : '⚠️ Setoran Belum Disetujui';
+      const notifBody = isApproved
+        ? `Setoran Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.jenis === 'kewajiban' ? 'Kewajiban Pokok' : 'Tabungan Umum'}) telah diverifikasi & masuk ke saldo rekening Anda.`
+        : `Pengajuan setoran Rp ${dep.nominal.toLocaleString('id-ID')} ditolak: ${dep.catatanAdmin || 'Mohon periksa bukti setoran'}`;
+
+      broadcastEvent('MEMBER_NOTIFICATION', {
+        recipientId: targetMember.id,
+        recipientNama: targetMember.nama,
+        title: notifTitle,
+        body: notifBody,
+        type: isApproved ? 'setoran_verified' : 'info',
+        data: { depositId: dep.id, nominal: dep.nominal }
+      });
       res.json({
         success: true,
         message: `Setoran a/n ${targetMember.nama} berhasil di-${isApproved ? 'setujui' : 'tolak'} secara online realtime!`,
@@ -914,6 +906,16 @@ async function startServer() {
       broadcastEvent('STATE_UPDATED', currentState);
       broadcastEvent('TRANSFER_COMPLETED', { refId, senderId: sender.id, recipientId: recipient.id, amount });
 
+      // Realtime Notification for new mutasi rekening (Req 1)
+      broadcastEvent('MEMBER_NOTIFICATION', {
+        recipientId: recipient.id,
+        recipientNama: recipient.nama,
+        title: '💳 Mutasi Baru: Transfer Diterima',
+        body: `Dana masuk Rp ${amount.toLocaleString('id-ID')} dari ${sender.nama} (${sender.nomorRekening}). Saldo tabungan umum Anda kini: Rp ${recipient.saldoUmum.toLocaleString('id-ID')}.`,
+        type: 'mutasi_baru',
+        data: { refId, amount, senderName: sender.nama }
+      });
+
       res.json({
         success: true,
         message: `Transfer ${amount.toLocaleString('id-ID')} ke ${recipient.nama} (${recipient.nomorRekening}) berhasil terkirim online realtime!`,
@@ -983,6 +985,93 @@ async function startServer() {
       res.json({ success: true, message: 'Transaksi kas berhasil dihapus' });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus transaksi kas: ' + err.message });
+    }
+  });
+
+  // Dedicated Member Deletion Endpoint for Super Admin (Req 8)
+  app.post('/api/members/delete', (req: Request, res: Response) => {
+    try {
+      const { id, adminName } = req.body;
+      if (!id) return res.status(400).json({ error: 'ID anggota diperlukan' });
+
+      const targetMem = (currentState.members || []).find((m: any) => m.id === id);
+      currentState.members = (currentState.members || []).filter((m: any) => m.id !== id);
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-mem-del-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Hapus Anggota Koperasi',
+        detail: `Menghapus anggota ${targetMem?.nama || id} (${targetMem?.nomorAnggota || ''}) dari database server`,
+        targetId: id,
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: 'Anggota berhasil dihapus secara permanen dari server' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menghapus anggota: ' + err.message });
+    }
+  });
+
+  // In-memory FCM tokens map: userId -> device registration token
+  const fcmTokens = new Map<string, { token: string; role: string; updatedAt: string }>();
+
+  // Register device FCM token (Req 1)
+  app.post('/api/fcm/register', (req: Request, res: Response) => {
+    try {
+      const { userId, role, token } = req.body;
+      if (!userId || !token) {
+        return res.status(400).json({ error: 'userId dan token diperlukan' });
+      }
+      fcmTokens.set(userId, { token, role: role || 'member', updatedAt: new Date().toISOString() });
+      console.log(`[Server FCM] Device token registered for ${userId} (${role})`);
+      res.json({ success: true, message: 'FCM Token terdaftar' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal registrasi token: ' + err.message });
+    }
+  });
+
+  // Broadcast real-time notification to member(s) (Req 1 & 5)
+  app.post('/api/notifications/send', (req: Request, res: Response) => {
+    try {
+      const { recipientId, recipientNama, title, body, type, data } = req.body;
+      if (!recipientId || !title) {
+        return res.status(400).json({ error: 'recipientId dan title diperlukan' });
+      }
+
+      const notifPayload = {
+        id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        recipientId,
+        recipientNama,
+        title,
+        body: body || '',
+        type: type || 'info',
+        timestamp: new Date().toISOString(),
+        data: data || {},
+      };
+
+      // Broadcast ke SSE client realtime
+      broadcastEvent('MEMBER_NOTIFICATION', notifPayload);
+
+      res.json({ success: true, notification: notifPayload });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mengirim notifikasi: ' + err.message });
+    }
+  });
+
+  // Clear Audit Log History (Req 3: Hapus log history mulai dari awal 0)
+  app.post('/api/logs/clear', (req: Request, res: Response) => {
+    try {
+      currentState.auditLogs = [];
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: 'Seluruh riwayat log audit berhasil dihapus bersih (0 log).' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menghapus log history: ' + err.message });
     }
   });
 

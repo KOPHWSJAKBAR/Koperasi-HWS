@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppState,
   MemberUser,
@@ -50,6 +50,30 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [freezeReasonInput, setFreezeReasonInput] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
 
+  // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
+  useEffect(() => {
+    const handleDeviceBack = (e: Event) => {
+      if (selectedMemberForKta) {
+        e.preventDefault();
+        setSelectedMemberForKta(null);
+      } else if (viewingMemberProfile) {
+        e.preventDefault();
+        setViewingMemberProfile(null);
+      } else if (editingMember) {
+        e.preventDefault();
+        setEditingMember(null);
+      } else if (memberToFreeze) {
+        e.preventDefault();
+        setMemberToFreeze(null);
+      } else if (showAddModal) {
+        e.preventDefault();
+        setShowAddModal(false);
+      }
+    };
+    window.addEventListener('app:back_press', handleDeviceBack);
+    return () => window.removeEventListener('app:back_press', handleDeviceBack);
+  }, [selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, showAddModal]);
+
   // Period filter states for reports
   const [periodeTipe, setPeriodeTipe] = useState<'semua' | 'harian' | 'bulanan' | 'tahunan'>('semua');
   const [filterStartDate, setFilterStartDate] = useState('');
@@ -57,7 +81,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
   const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()));
 
-  // New Member Form State
+  // New Member Form State (Req 2: Ditiadakan setoran awal tabungan umum & pokok)
   const [formNama, setFormNama] = useState('');
   const [formNik, setFormNik] = useState('');
   const [formWhatsapp, setFormWhatsapp] = useState('');
@@ -79,8 +103,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [formTanggalLahir, setFormTanggalLahir] = useState('1990-01-01');
   const [formPekerjaan, setFormPekerjaan] = useState('Wirausaha');
   const [formPinTransaksi, setFormPinTransaksi] = useState('123456');
-  const [formSetoranPokok, setFormSetoranPokok] = useState('50000');
-  const [formSetoranWajib, setFormSetoranWajib] = useState('20000');
   
   // Visibility toggles
   const [showFormPassword, setShowFormPassword] = useState(false);
@@ -356,6 +378,17 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
     if (!confirmDelete) return;
 
+    // Panggil server delete endpoint agar anggota terhapus permanen dari server (Req 8)
+    try {
+      await fetch('/api/members/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: member.id, adminName: currentAdmin.nama }),
+      });
+    } catch (e) {
+      console.warn('Server delete call error fallback to state sync:', e);
+    }
+
     const now = new Date();
     const tgl = now.toISOString().split('T')[0];
 
@@ -483,11 +516,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       },
       password: formPassword || 'user123',
       pinTransaksi: formPinTransaksi || '123456',
-      saldoPokok: Number(formSetoranPokok) || 0,
+      saldoPokok: 0,
       isPokokLocked: true,
       saldoZakatFitrah: 0,
       saldoQurban: 0,
-      saldoUmum: Number(formSetoranWajib) || 0,
+      saldoUmum: 0,
       status: 'aktif',
       terdaftarSejak: new Date().toISOString().split('T')[0],
     };
@@ -1436,9 +1469,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </div>
               </div>
 
-              {/* 4. Keamanan Akun & Simpanan Awal */}
+              {/* 4. Keamanan Akun */}
               <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 space-y-2">
-                <div className="font-bold text-amber-400 text-xs">4. Password, PIN & Simpanan Pokok</div>
+                <div className="font-bold text-amber-400 text-xs">4. Password & PIN Transaksi</div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-slate-300 mb-1">Buat Password Masuk *</label>
@@ -1480,27 +1513,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                         {showFormPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
                     </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-slate-300 mb-1">Setoran Pokok Awal (Rp)</label>
-                    <input
-                      type="number"
-                      value={formSetoranPokok}
-                      onChange={(e) => setFormSetoranPokok(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-amber-300 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-300 mb-1">Setoran Tabungan Umum (Rp)</label>
-                    <input
-                      type="number"
-                      value={formSetoranWajib}
-                      onChange={(e) => setFormSetoranWajib(e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-sky-300 font-mono"
-                    />
                   </div>
                 </div>
               </div>

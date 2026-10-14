@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppState,
   AdminUser,
@@ -69,6 +69,27 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const [isAddCatModalOpen, setIsAddCatModalOpen] = useState(false);
   const [newCatTipe, setNewCatTipe] = useState<'pemasukan' | 'pengeluaran'>('pengeluaran');
   const [newCatName, setNewCatName] = useState('');
+
+  // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
+  useEffect(() => {
+    const handleDeviceBack = (e: Event) => {
+      if (selectedReceiptKas) {
+        e.preventDefault();
+        setSelectedReceiptKas(null);
+      } else if (editingKasEntry) {
+        e.preventDefault();
+        setEditingKasEntry(null);
+      } else if (isInputModalOpen) {
+        e.preventDefault();
+        setIsInputModalOpen(false);
+      } else if (isAddCatModalOpen) {
+        e.preventDefault();
+        setIsAddCatModalOpen(false);
+      }
+    };
+    window.addEventListener('app:back_press', handleDeviceBack);
+    return () => window.removeEventListener('app:back_press', handleDeviceBack);
+  }, [selectedReceiptKas, editingKasEntry, isInputModalOpen, isAddCatModalOpen]);
 
   // Check roles
   const isSuperAdmin = currentAdmin.role === 'super_admin';
@@ -466,60 +487,117 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           </div>
         </div>
 
-        {/* 3 Main Tab Buttons */}
-        <div className="grid grid-cols-3 gap-2 mt-4">
+        {/* Tampilan Saldo Buku Kas Disusun ke Bawah (Req 4) */}
+        <div className="flex flex-col gap-3 mt-4">
+          {/* Card 1: Buku Kas Anggota */}
           <button
+            type="button"
             onClick={() => setActiveKasTab('anggota')}
-            className={`py-3 px-3 rounded-2xl text-left border transition-all ${
+            className={`w-full p-4 rounded-2xl text-left border transition-all relative overflow-hidden ${
               activeKasTab === 'anggota'
-                ? 'bg-amber-500/10 border-amber-500 text-amber-300 ring-1 ring-amber-500'
-                : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:text-white'
+                ? 'bg-amber-500/15 border-amber-500 ring-2 ring-amber-500/50 shadow-lg shadow-amber-500/10'
+                : 'bg-slate-800/50 border-slate-700/80 hover:bg-slate-800 hover:border-slate-600'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-extrabold">
-              <Users className="w-4 h-4" />
-              1. Buku Kas Anggota
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={`p-2 rounded-xl ${activeKasTab === 'anggota' ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-800 text-amber-400'}`}>
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-300">Buku Kas 1: Rekapitulasi Kas Anggota</div>
+                  <div className="text-sm font-extrabold text-white">1. Saldo Buku Kas Anggota</div>
+                </div>
+              </div>
+              {activeKasTab === 'anggota' && (
+                <span className="text-[10px] font-black uppercase tracking-wider bg-amber-500 text-slate-950 px-2.5 py-1 rounded-full">
+                  Aktif Ditampilkan
+                </span>
+              )}
             </div>
-            <div className="text-sm font-black text-amber-400 mt-1">
-              {formatRupiah(saldoKasAnggota)}
+
+            <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
+              <div className="text-2xl sm:text-3xl font-black font-mono text-amber-400 tracking-tight">
+                {formatRupiah(saldoKasAnggota)}
+              </div>
+              <div className="text-[11px] text-slate-400 font-medium">
+                Akumulasi Simpanan Pokok, Qurban, Zakat & Tabungan Bebas Anggota
+              </div>
             </div>
-            <div className="text-[10px] text-slate-400">Simpanan Pokok & Bebas</div>
           </button>
 
+          {/* Card 2: Buku Kas Koperasi */}
           <button
+            type="button"
             onClick={() => setActiveKasTab('koperasi')}
-            className={`py-3 px-3 rounded-2xl text-left border transition-all ${
+            className={`w-full p-4 rounded-2xl text-left border transition-all relative overflow-hidden ${
               activeKasTab === 'koperasi'
-                ? 'bg-sky-500/10 border-sky-500 text-sky-300 ring-1 ring-sky-500'
-                : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:text-white'
+                ? 'bg-sky-500/15 border-sky-500 ring-2 ring-sky-500/50 shadow-lg shadow-sky-500/10'
+                : 'bg-slate-800/50 border-slate-700/80 hover:bg-slate-800 hover:border-slate-600'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-extrabold">
-              <Building className="w-4 h-4" />
-              2. Buku Kas Koperasi
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={`p-2 rounded-xl ${activeKasTab === 'koperasi' ? 'bg-sky-500 text-slate-950 font-black' : 'bg-slate-800 text-sky-400'}`}>
+                  <Building className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-300">Buku Kas 2: Operasional & Lembaga</div>
+                  <div className="text-sm font-extrabold text-white">2. Saldo Buku Kas Koperasi</div>
+                </div>
+              </div>
+              {activeKasTab === 'koperasi' && (
+                <span className="text-[10px] font-black uppercase tracking-wider bg-sky-500 text-slate-950 px-2.5 py-1 rounded-full">
+                  Aktif Ditampilkan
+                </span>
+              )}
             </div>
-            <div className="text-sm font-black text-sky-400 mt-1">
-              {formatRupiah(saldoKasKoperasi)}
+
+            <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
+              <div className="text-2xl sm:text-3xl font-black font-mono text-sky-400 tracking-tight">
+                {formatRupiah(saldoKasKoperasi)}
+              </div>
+              <div className="text-[11px] text-slate-400 font-medium">
+                Penerimaan Jasa, Sumbangan / Donasi, Biaya Operasional & Tutup Akun
+              </div>
             </div>
-            <div className="text-[10px] text-slate-400">Overhead, Zakat & Qurban</div>
           </button>
 
+          {/* Card 3: Neraca & Konsolidasi Keuangan */}
           <button
+            type="button"
             onClick={() => setActiveKasTab('neraca')}
-            className={`py-3 px-3 rounded-2xl text-left border transition-all ${
+            className={`w-full p-4 rounded-2xl text-left border transition-all relative overflow-hidden ${
               activeKasTab === 'neraca'
-                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500'
-                : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:text-white'
+                ? 'bg-emerald-500/15 border-emerald-500 ring-2 ring-emerald-500/50 shadow-lg shadow-emerald-500/10'
+                : 'bg-slate-800/50 border-slate-700/80 hover:bg-slate-800 hover:border-slate-600'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-extrabold">
-              <Scale className="w-4 h-4" />
-              3. Neraca & Laba Rugi
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className={`p-2 rounded-xl ${activeKasTab === 'neraca' ? 'bg-emerald-500 text-slate-950 font-black' : 'bg-slate-800 text-emerald-400'}`}>
+                  <Scale className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-300">Buku Kas 3: Neraca & Konsolidasi Total</div>
+                  <div className="text-sm font-extrabold text-white">3. Total Saldo Gabungan (Kas & Bank)</div>
+                </div>
+              </div>
+              {activeKasTab === 'neraca' && (
+                <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-500 text-slate-950 px-2.5 py-1 rounded-full">
+                  Aktif Ditampilkan
+                </span>
+              )}
             </div>
-            <div className="text-sm font-black text-emerald-400 mt-1">
-              {formatRupiah(saldoKasAnggota + saldoKasKoperasi)}
+
+            <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
+              <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-400 tracking-tight">
+                {formatRupiah(saldoKasAnggota + saldoKasKoperasi)}
+              </div>
+              <div className="text-[11px] text-slate-400 font-medium">
+                Total Aset Lancar Kas di Bank & Laporan Posisi Keuangan Koperasi
+              </div>
             </div>
-            <div className="text-[10px] text-slate-400">Konsolidasi Keuangan</div>
           </button>
         </div>
 
