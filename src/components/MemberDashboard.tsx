@@ -159,13 +159,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     (m) => m.memberId === currentMember.id && m.senderType === 'admin' && !m.isReadByMember
   ).length;
 
-  // Unread letters count for member (Req 5: notifikasi surat masuk & badge hilang saat terbaca)
-  const unreadSuratCount = state.suratList.filter(
-    (s) =>
-      (s.tujuanTipe === 'semua' || s.targetMemberId === currentMember.id) &&
-      !s.readByMemberIds?.includes(currentMember.id)
-  ).length;
-
   const handleCopyRekening = () => {
     navigator.clipboard?.writeText(currentMember.nomorRekening);
     setCopiedRekening(true);
@@ -456,20 +449,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             <div className="hidden sm:flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveMenu('surat')}
-                className="relative p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
-                title="Surat Menyurat & Edaran Resmi"
-              >
-                <Mail className="w-4 h-4 text-sky-400" />
-                {unreadSuratCount > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white font-black text-[9px] flex items-center justify-center animate-pulse shadow">
-                    {unreadSuratCount}
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setActiveMenu('chat')}
                 className="relative p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
                 title="Chat Online Pengurus"
@@ -493,22 +472,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             </div>
           </div>
 
-          {/* Requirement A.1 & A.2: Tampilan tombol setting, surat dan chat di mobile */}
+          {/* Requirement A.1 & A.2: Tampilan tombol setting dan chat di mobile pindahkan ke bawah logo koperasi dan nama anggota */}
+          {/* Tombol setting pada dashboard anggota JANGAN dibuat melebar kesamping pada mobile, tempatkan di bawah chat atau hanya logo icon */}
           <div className="flex sm:hidden items-center gap-2 pt-1 border-t border-slate-800/60">
-            <button
-              type="button"
-              onClick={() => setActiveMenu('surat')}
-              className="py-1.5 px-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
-            >
-              <Mail className="w-3.5 h-3.5 text-sky-400" />
-              <span>Surat</span>
-              {unreadSuratCount > 0 && (
-                <span className="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white font-black text-[9px] flex items-center justify-center ml-0.5 animate-pulse">
-                  {unreadSuratCount}
-                </span>
-              )}
-            </button>
-
             <button
               type="button"
               onClick={() => setActiveMenu('chat')}
@@ -808,11 +774,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     <div>
                       <div className="text-xs sm:text-sm font-extrabold flex items-center gap-1.5">
                         <span>6. Surat Menyurat</span>
-                        {unreadSuratCount > 0 && (
-                          <span className="min-w-4.5 h-4.5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center animate-pulse shadow-sm">
-                            {unreadSuratCount}
-                          </span>
-                        )}
+                        <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center">
+                          {state.suratList.length || 1}
+                        </span>
                       </div>
                       <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
                         Edaran resmi koperasi
