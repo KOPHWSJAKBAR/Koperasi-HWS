@@ -135,12 +135,14 @@ export default function App() {
     };
   }, [currentMember, currentAdmin]);
 
-  // Requirement 11: Integrasi tombol back device terinstall (Android back / browser popstate)
-  // Apabila masuk back pada device berfungsi untuk Kembali, klik back 2x logout
+  // Requirement 7: Apabila masuk kedalam suatu menu tombol 1x klik Kembali ke menu sebelumnya, 3 klik logout
   useEffect(() => {
     if (!currentMember && !currentAdmin) return;
 
-    let lastBackPress = 0;
+    let backPressCount = 0;
+    let lastBackPressTime = 0;
+    let toastTimer: any = null;
+
     // Push dummy history state so popstate is captured
     window.history.pushState({ page: 'app-main' }, '', window.location.href);
 
@@ -148,25 +150,47 @@ export default function App() {
       e.preventDefault();
       const now = Date.now();
 
-      if (now - lastBackPress < 2500) {
-        // Double back pressed within 2.5s -> Logout
-        setBackToastMessage(null);
-        handleLogout();
+      if (now - lastBackPressTime < 3000) {
+        backPressCount += 1;
       } else {
-        lastBackPress = now;
-        setBackToastMessage('Tekan tombol kembali sekali lagi untuk keluar / logout');
-        // Push state again so next back can be captured
-        window.history.pushState({ page: 'app-main' }, '', window.location.href);
+        backPressCount = 1;
+      }
+      lastBackPressTime = now;
 
+      // Push state again so next back can be captured
+      window.history.pushState({ page: 'app-main' }, '', window.location.href);
+
+      clearTimeout(toastTimer);
+
+      if (backPressCount === 1) {
+        // 1x klik: Kembali ke menu sebelumnya
+        window.dispatchEvent(new CustomEvent('app:back_press', { detail: { count: 1 } }));
+        setBackToastMessage('Kembali ke menu sebelumnya. (Klik 3x untuk logout)');
+        toastTimer = setTimeout(() => {
+          setBackToastMessage(null);
+          backPressCount = 0;
+        }, 3000);
+      } else if (backPressCount === 2) {
+        setBackToastMessage('Klik 1x lagi untuk keluar / logout dari aplikasi');
+        toastTimer = setTimeout(() => {
+          setBackToastMessage(null);
+          backPressCount = 0;
+        }, 3000);
+      } else if (backPressCount >= 3) {
+        // 3x klik: Logout
+        setBackToastMessage('Keluar dari akun...');
+        backPressCount = 0;
         setTimeout(() => {
           setBackToastMessage(null);
-        }, 2500);
+          handleLogout('Anda telah berhasil keluar dari akun (3x klik tombol kembali).');
+        }, 300);
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => {
       window.removeEventListener('popstate', handlePopState);
+      clearTimeout(toastTimer);
     };
   }, [currentMember, currentAdmin]);
 

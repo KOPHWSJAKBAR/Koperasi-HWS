@@ -295,7 +295,133 @@ export function triggerBrowserNotification(
   }
 }
 
-// Sync to backend & Firebase Firestore
+// Permanent File & State Merger (JANGAN HAPUS FILE ATAU DATA YANG TELAH DIINPUT DATABASE)
+export function mergeStates(base: AppState, incoming: AppState): AppState {
+  if (!base) return incoming;
+  if (!incoming) return base;
+
+  // 1. Members: merge by ID, NEVER delete existing members, preserve photos & bank info
+  const memberMap = new Map<string, MemberUser>();
+  (base.members || []).forEach((m) => memberMap.set(m.id, { ...m }));
+  (incoming.members || []).forEach((m) => {
+    const existing = memberMap.get(m.id);
+    if (!existing) {
+      memberMap.set(m.id, m);
+    } else {
+      memberMap.set(m.id, {
+        ...existing,
+        ...m,
+        ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
+        avatarUrl: m.avatarUrl || existing.avatarUrl,
+        bankPribadi: {
+          ...existing.bankPribadi,
+          ...(m.bankPribadi || {}),
+        },
+      });
+    }
+  });
+
+  // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
+  const setoranMap = new Map<string, SetoranVerifikasi>();
+  (base.setoranList || []).forEach((s) => setoranMap.set(s.id, { ...s }));
+  (incoming.setoranList || []).forEach((s) => {
+    const existing = setoranMap.get(s.id);
+    if (!existing) {
+      setoranMap.set(s.id, s);
+    } else {
+      setoranMap.set(s.id, {
+        ...existing,
+        ...s,
+        buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
+      });
+    }
+  });
+
+  // 3. Chat Messages (Preserve all messages & attachments - PERMANENT)
+  const chatMap = new Map<string, ChatMessage>();
+  (base.chatMessages || []).forEach((c) => chatMap.set(c.id, { ...c }));
+  (incoming.chatMessages || []).forEach((c) => {
+    const existing = chatMap.get(c.id);
+    if (!existing) {
+      chatMap.set(c.id, c);
+    } else {
+      chatMap.set(c.id, {
+        ...existing,
+        ...c,
+        lampiranUrl: c.lampiranUrl || existing.lampiranUrl,
+      });
+    }
+  });
+
+  // 4. Surat Resmi List (Preserve all letters & documents - PERMANENT)
+  const suratMap = new Map<string, SuratResmi>();
+  (base.suratList || []).forEach((s) => suratMap.set(s.id, { ...s }));
+  (incoming.suratList || []).forEach((s) => {
+    if (!suratMap.has(s.id)) {
+      suratMap.set(s.id, s);
+    } else {
+      suratMap.set(s.id, { ...suratMap.get(s.id)!, ...s });
+    }
+  });
+
+  // 5. Member Transactions (Mutasi Rekening)
+  const txMap = new Map<string, MemberTransaction>();
+  (base.memberTransactions || []).forEach((tx) => txMap.set(tx.id, tx));
+  (incoming.memberTransactions || []).forEach((tx) => txMap.set(tx.id, tx));
+
+  // 6. Kas List (Buku Kas Koperasi)
+  const kasMap = new Map<string, KasEntry>();
+  (base.kasList || []).forEach((k) => kasMap.set(k.id, k));
+  (incoming.kasList || []).forEach((k) => kasMap.set(k.id, k));
+
+  // 7. Penyaluran List (Zakat & Qurban)
+  const penyaluranMap = new Map<string, PenyaluranZakatQurban>();
+  (base.penyaluranList || []).forEach((p) => penyaluranMap.set(p.id, p));
+  (incoming.penyaluranList || []).forEach((p) => penyaluranMap.set(p.id, p));
+
+  // 8. Audit Logs (Preserve 100% audit trail - PERMANENT)
+  const logMap = new Map<string, AuditLog>();
+  (base.auditLogs || []).forEach((l) => logMap.set(l.id, l));
+  (incoming.auditLogs || []).forEach((l) => logMap.set(l.id, l));
+
+  // 9. Admins
+  const adminMap = new Map<string, AdminUser>();
+  (base.admins || []).forEach((a) => adminMap.set(a.id, a));
+  (incoming.admins || []).forEach((a) => adminMap.set(a.id, a));
+
+  // 10. Profile: preserve QRIS and official details
+  const profile = {
+    ...base.profile,
+    ...(incoming.profile || {}),
+    qrisImageUrl: incoming.profile?.qrisImageUrl || base.profile?.qrisImageUrl,
+  };
+
+  return {
+    ...base,
+    ...incoming,
+    profile,
+    admins: Array.from(adminMap.values()),
+    members: Array.from(memberMap.values()),
+    setoranList: Array.from(setoranMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
+    chatMessages: Array.from(chatMap.values()).sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
+    suratList: Array.from(suratMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
+    memberTransactions: Array.from(txMap.values()).sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
+    kasList: Array.from(kasMap.values()).sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
+    penyaluranList: Array.from(penyaluranMap.values()),
+    auditLogs: Array.from(logMap.values()).sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
+    lastRunningNumber: Math.max(base.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
+    serverSyncStatus: {
+      online: true,
+      lastSynced: new Date().toISOString(),
+      googleCloudBackup: true,
+      firestoreActive: true,
+      filesProtected: true,
+      permanentStorage: true,
+    },
+  };
+}
+
+// Sync to backend & Firebase Firestore (with permanent file protection)
 export async function syncStateToServer(state: AppState) {
   try {
     const now = new Date().toISOString();
@@ -305,10 +431,15 @@ export async function syncStateToServer(state: AppState) {
       online: true,
       firestoreActive: true,
       googleCloudBackup: true,
+      filesProtected: true,
+      permanentStorage: true,
     };
-    globalState = state;
+    
+    // Merge safely with globalState so no concurrent inputs or files are deleted
+    globalState = mergeStates(globalState, state);
+    
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
     } catch {}
     notifyListeners();
 
@@ -316,10 +447,10 @@ export async function syncStateToServer(state: AppState) {
     fetch('/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state),
+      body: JSON.stringify(globalState),
     }).catch(() => {});
 
-    // 2. Mirror to Firebase Firestore directly (Req 10 & Req 13)
+    // 2. Mirror to Firebase Firestore directly with merge: true (Req 10 & Req 13)
     try {
       const { db } = await import('./firebase');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -328,10 +459,11 @@ export async function syncStateToServer(state: AppState) {
         {
           lastSynced: now,
           updatedBy: CLIENT_ID,
-          totalMembers: state.members.length,
-          totalKas: state.kasList.length,
-          totalSetoran: state.setoranList.length,
-          payload: JSON.stringify(state),
+          totalMembers: globalState.members.length,
+          totalKas: globalState.kasList.length,
+          totalSetoran: globalState.setoranList.length,
+          payload: JSON.stringify(globalState),
+          filesProtected: true,
         },
         { merge: true }
       ).catch(() => {});
@@ -341,18 +473,20 @@ export async function syncStateToServer(state: AppState) {
   }
 }
 
-// Load from server on startup
+// Load from server on startup (with safe merge)
 export async function fetchStateFromServer(): Promise<AppState> {
   try {
     const res = await fetch('/api/state');
     if (res.ok) {
       const data = await res.json();
-      globalState = data;
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      } catch {}
-      notifyListeners();
-      return data;
+      if (data && typeof data === 'object') {
+        globalState = mergeStates(globalState, data);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+        } catch {}
+        notifyListeners();
+        return globalState;
+      }
     }
   } catch (err) {
     console.warn('Could not fetch from server, using local cache', err);
@@ -365,8 +499,9 @@ export function useKoperasiState() {
   const [state, setState] = useState<AppState>(globalState);
 
   useEffect(() => {
+    let isMounted = true;
     const handler = (newState: AppState) => {
-      setState(newState);
+      if (isMounted) setState(newState);
     };
     listeners.add(handler);
 
@@ -378,47 +513,81 @@ export function useKoperasiState() {
       fetchStateFromServer();
     }, 3000);
 
-    // Listen to realtime events via EventSource
+    // Resilient SSE Realtime Connection with Auto-Reconnect
     let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/events');
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
-            globalState = data.payload;
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(data.payload));
-            } catch {}
-            notifyListeners();
-          } else if (
-            data.type === 'SETORAN_UPDATED' ||
-            data.type === 'TRANSFER_COMPLETED' ||
-            data.type === 'SYSTEM_REPAIRED'
-          ) {
-            // Instant pull to ensure balances, mutasi, and kas are synchronized across all devices
-            fetchStateFromServer();
-          } else if (data.type === 'NEW_CHAT_MESSAGE') {
-            const msg = data.payload;
-            if (!globalState.chatMessages.find((m) => m.id === msg.id)) {
-              globalState = {
-                ...globalState,
-                chatMessages: [...globalState.chatMessages, msg],
-              };
-              notifyListeners();
-            }
-          }
-        } catch (e) {
-          console.error('Error handling SSE event', e);
-        }
-      };
-    } catch {}
+    let reconnectTimeout: any = null;
 
-    // 3. Realtime Firestore Listener (Req 10 & 13)
+    function connectSSE() {
+      if (!isMounted) return;
+      try {
+        if (eventSource) {
+          eventSource.close();
+        }
+        eventSource = new EventSource('/api/events');
+        eventSource.onopen = () => {
+          // Connected to realtime database event stream
+        };
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
+              if (data.payload) {
+                globalState = mergeStates(globalState, data.payload);
+                try {
+                  localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+                } catch {}
+                notifyListeners();
+              }
+            } else if (
+              data.type === 'SETORAN_UPDATED' ||
+              data.type === 'TRANSFER_COMPLETED' ||
+              data.type === 'SYSTEM_REPAIRED'
+            ) {
+              fetchStateFromServer();
+            } else if (data.type === 'NEW_CHAT_MESSAGE') {
+              const msg = data.payload;
+              if (msg && !globalState.chatMessages.find((m) => m.id === msg.id)) {
+                globalState = {
+                  ...globalState,
+                  chatMessages: [...globalState.chatMessages, msg],
+                };
+                try {
+                  localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+                } catch {}
+                notifyListeners();
+              }
+            }
+          } catch (e) {
+            console.error('Error handling SSE event', e);
+          }
+        };
+        eventSource.onerror = () => {
+          // Auto-reconnect after 2 seconds if connection drops
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+          }
+          if (isMounted) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(connectSSE, 2000);
+          }
+        };
+      } catch (err) {
+        if (isMounted) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(connectSSE, 3000);
+        }
+      }
+    }
+
+    connectSSE();
+
+    // 3. Realtime Firestore Listener (Persistent & Auto-Reconnecting)
     let unsubscribeFirestore: (() => void) | null = null;
     try {
       import('./firebase').then(({ db }) => {
         import('firebase/firestore').then(({ doc, onSnapshot }) => {
+          if (!isMounted) return;
           unsubscribeFirestore = onSnapshot(
             doc(db, 'koperasi_state', 'main_database'),
             (docSnap) => {
@@ -428,9 +597,9 @@ export function useKoperasiState() {
                   try {
                     const parsed = JSON.parse(remote.payload);
                     if (parsed && parsed.profile && parsed.members) {
-                      globalState = parsed;
+                      globalState = mergeStates(globalState, parsed);
                       try {
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
                       } catch {}
                       notifyListeners();
                     }
@@ -438,7 +607,7 @@ export function useKoperasiState() {
                 }
               }
             },
-            (err) => {
+            () => {
               // Graceful fallback: when unauthenticated or offline, real-time sync is handled seamlessly via Express SSE & REST API
             }
           );
@@ -447,8 +616,10 @@ export function useKoperasiState() {
     } catch {}
 
     return () => {
+      isMounted = false;
       listeners.delete(handler);
       clearInterval(pollInterval);
+      clearTimeout(reconnectTimeout);
       if (eventSource) eventSource.close();
       if (unsubscribeFirestore) unsubscribeFirestore();
     };

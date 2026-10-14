@@ -57,7 +57,7 @@ interface AdminDashboardProps {
   state: AppState;
   updateState: (updater: (prev: AppState) => AppState) => Promise<void>;
   admin: AdminUser;
-  onLogout: () => void;
+  onLogout: (reason?: string) => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -104,6 +104,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     new Set(state.chatMessages.map((m) => m.id))
   );
   const isInitialMountRef = useRef<boolean>(true);
+
+  // Requirement 7: 1x klik kembali ke menu sebelumnya, 3x klik logout
+  const backClicksRef = useRef<number>(0);
+  const lastBackClickTimeRef = useRef<number>(0);
+
+  const handleSubmenuBack = () => {
+    const now = Date.now();
+    if (now - lastBackClickTimeRef.current < 3000) {
+      backClicksRef.current += 1;
+    } else {
+      backClicksRef.current = 1;
+    }
+    lastBackClickTimeRef.current = now;
+
+    if (backClicksRef.current >= 3) {
+      backClicksRef.current = 0;
+      onLogout('Anda telah berhasil keluar dari akun admin (3x klik tombol kembali).');
+    } else if (backClicksRef.current === 2) {
+      setToasts((prev) => [
+        {
+          id: `toast-${Date.now()}`,
+          type: 'test',
+          title: 'Konfirmasi Logout',
+          message: 'Klik 1x lagi untuk keluar / logout dari akun admin.',
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        },
+        ...prev,
+      ]);
+    } else {
+      // 1x click: Kembali ke menu sebelumnya (dashboard)
+      setActiveTab('dashboard');
+      setToasts((prev) => [
+        {
+          id: `toast-${Date.now()}`,
+          type: 'test',
+          title: 'Kembali ke Menu Utama',
+          message: 'Kembali ke menu sebelumnya. (Klik 3x untuk logout)',
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        },
+        ...prev,
+      ]);
+    }
+  };
+
+  useEffect(() => {
+    const onAppBack = () => {
+      if (showSettings) {
+        setShowSettings(false);
+      } else if (activeTab !== 'dashboard') {
+        setActiveTab('dashboard');
+      }
+    };
+    window.addEventListener('app:back_press', onAppBack);
+    return () => window.removeEventListener('app:back_press', onAppBack);
+  }, [showSettings, activeTab]);
 
   // Request browser notification permission once on admin dashboard mount
   useEffect(() => {
@@ -638,7 +693,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <button
               type="button"
-              onClick={() => setActiveTab('dashboard')}
+              onClick={handleSubmenuBack}
               className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />

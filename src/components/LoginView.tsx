@@ -212,6 +212,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
     ktpPhotoUrl: '',
   });
 
+  // State untuk Registrasi Mandiri Anggota (Req 1)
+  const [regError, setRegError] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [regSuccessMember, setRegSuccessMember] = useState<MemberUser | null>(null);
+
   // Forgot Password / ID State
   const [forgotInput, setForgotInput] = useState('');
   const [securityAnswerInput, setForgotAnswer] = useState('');
@@ -432,107 +437,117 @@ export const LoginView: React.FC<LoginViewProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Handle Register Anggota Baru
+  // Handle Register Anggota Baru (Pendaftaran Mandiri - Req 1)
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setRegError('');
     setErrorMessage('');
 
     if (regForm.password !== regForm.confirmPassword) {
-      setErrorMessage('Password dan Konfirmasi Password tidak sama.');
+      setRegError('Password dan Konfirmasi Password tidak sama.');
       return;
     }
 
     if (!regForm.pinTransaksi || regForm.pinTransaksi.length !== 6 || !/^\d{6}$/.test(regForm.pinTransaksi)) {
-      setErrorMessage('PIN Transaksi harus berupa 6 digit angka.');
+      setRegError('PIN Transaksi harus berupa 6 digit angka.');
       return;
     }
 
     if (regForm.pinTransaksi !== regForm.confirmPinTransaksi) {
-      setErrorMessage('PIN Transaksi dan Konfirmasi PIN tidak cocok.');
+      setRegError('PIN Transaksi dan Konfirmasi PIN tidak cocok.');
       return;
     }
 
     // Validation: NIK & No HP cannot be used twice per prompt
     const existingNik = state.members.find((m) => m.nik === regForm.nik.trim());
     if (existingNik) {
-      setErrorMessage('NIK ini sudah terdaftar sebagai anggota koperasi.');
+      setRegError('NIK ini sudah terdaftar sebagai anggota koperasi HWS.');
       return;
     }
 
     const cleanHp = regForm.whatsapp.replace(/\D/g, '');
     const existingHp = state.members.find((m) => m.whatsapp.replace(/\D/g, '') === cleanHp);
     if (existingHp) {
-      setErrorMessage('Nomor HP / WhatsApp ini sudah digunakan oleh anggota lain.');
+      setRegError('Nomor HP / WhatsApp ini sudah digunakan oleh anggota lain.');
       return;
     }
 
-    // Generate Nomor Rekening & Nomor Anggota
-    const { nomorRekening, nextRunningNumber } = generateNomorRekening(
-      regForm.wilayah,
-      regForm.whatsapp,
-      state.lastRunningNumber
-    );
-    const nomorAnggota = generateNomorAnggota(regForm.wilayah, state.members.length);
+    setIsRegistering(true);
 
-    const newMember: MemberUser = {
-      id: `mem-${Date.now()}`,
-      nomorAnggota,
-      nomorRekening,
-      nama: regForm.nama.trim(),
-      nik: regForm.nik.trim(),
-      whatsapp: regForm.whatsapp.trim(),
-      email: regForm.email.trim(),
-      wilayah: regForm.wilayah,
-      alamatLengkap: regForm.alamatLengkap.trim(),
-      provinsi: regForm.provinsi,
-      kota: regForm.kota,
-      kecamatan: regForm.kecamatan,
-      kelurahan: regForm.kelurahan,
-      rt: regForm.rt,
-      rw: regForm.rw,
-      kodePos: regForm.kodePos,
-      ktpPhotoUrl: regForm.ktpPhotoUrl,
-      bankPribadi: {
-        namaBank: regForm.namaBank,
-        nomorRekening: regForm.nomorRekeningBank,
-        atasNama: regForm.atasNamaBank || regForm.nama,
-      },
-      password: regForm.password,
-      pinTransaksi: regForm.pinTransaksi,
-      securityQuestion: regForm.securityQuestion,
-      securityAnswer: regForm.securityAnswer.toLowerCase().trim(),
-      saldoPokok: 0,
-      isPokokLocked: true,
-      saldoZakatFitrah: 0,
-      saldoQurban: 0,
-      saldoUmum: 0,
-      status: 'aktif',
-      terdaftarSejak: new Date().toISOString().split('T')[0],
-    };
+    try {
+      // Generate Nomor Rekening & Nomor Anggota
+      const { nomorRekening, nextRunningNumber } = generateNomorRekening(
+        regForm.wilayah,
+        regForm.whatsapp,
+        state.lastRunningNumber
+      );
+      const nomorAnggota = generateNomorAnggota(regForm.wilayah, state.members.length);
 
-    await updateState((prev) => ({
-      ...prev,
-      members: [...prev.members, newMember],
-      lastRunningNumber: nextRunningNumber,
-      auditLogs: [
-        {
-          id: `log-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          adminId: 'system',
-          adminNama: 'Sistem Registrasi',
-          adminRole: 'super_admin',
-          action: 'Pendaftaran Anggota Baru',
-          detail: `Anggota ${newMember.nama} (${newMember.nomorAnggota}) terdaftar di wilayah ${newMember.wilayah}. Rek: ${newMember.nomorRekening}`,
-          targetId: newMember.id,
+      const newMember: MemberUser = {
+        id: `mem-${Date.now()}`,
+        nomorAnggota,
+        nomorRekening,
+        nama: regForm.nama.trim(),
+        nik: regForm.nik.trim(),
+        whatsapp: regForm.whatsapp.trim(),
+        email: regForm.email.trim(),
+        wilayah: regForm.wilayah,
+        alamatLengkap: regForm.alamatLengkap.trim(),
+        provinsi: regForm.provinsi || 'DKI Jakarta',
+        kota: regForm.kota || 'Jakarta Barat',
+        kecamatan: regForm.kecamatan || regForm.wilayah,
+        kelurahan: regForm.kelurahan || 'Cengkareng Barat',
+        rt: regForm.rt || '001',
+        rw: regForm.rw || '001',
+        kodePos: regForm.kodePos || '11740',
+        ktpPhotoUrl: regForm.ktpPhotoUrl || '',
+        bankPribadi: {
+          namaBank: regForm.namaBank || 'Bank Central Asia (BCA)',
+          nomorRekening: regForm.nomorRekeningBank || '-',
+          atasNama: regForm.atasNamaBank || regForm.nama.trim(),
         },
-        ...prev.auditLogs,
-      ],
-    }));
+        password: regForm.password,
+        pinTransaksi: regForm.pinTransaksi,
+        securityQuestion: regForm.securityQuestion,
+        securityAnswer: regForm.securityAnswer.toLowerCase().trim(),
+        saldoPokok: 0,
+        isPokokLocked: true,
+        saldoZakatFitrah: 0,
+        saldoQurban: 0,
+        saldoUmum: 0,
+        status: 'aktif',
+        terdaftarSejak: new Date().toISOString().split('T')[0],
+      };
 
-    setShowRegisterModal(false);
-    setSuccessMessage(`Pendaftaran berhasil! No. Rekening: ${nomorRekening}, No. Anggota: ${nomorAnggota}`);
-    setMemberIdentifier(nomorAnggota);
-    setMemberPassword(regForm.password);
+      await updateState((prev) => ({
+        ...prev,
+        members: [...prev.members, newMember],
+        lastRunningNumber: nextRunningNumber,
+        auditLogs: [
+          {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            adminId: 'system',
+            adminNama: 'Pendaftaran Mandiri Online',
+            adminRole: 'super_admin',
+            action: 'Pendaftaran Anggota Baru (Mandiri)',
+            detail: `Anggota ${newMember.nama} (${newMember.nomorAnggota}) berhasil mendaftar mandiri di wilayah ${newMember.wilayah}. No. Rek: ${newMember.nomorRekening}`,
+            targetId: newMember.id,
+          },
+          ...prev.auditLogs,
+        ],
+      }));
+
+      // Set member identifier & password ready for immediate login
+      setMemberIdentifier(nomorAnggota);
+      setMemberPassword(regForm.password);
+      setSuccessMessage(`✓ Pendaftaran berhasil! No. Anggota: ${nomorAnggota}, No. Rekening: ${nomorRekening}`);
+      setRegSuccessMember(newMember);
+    } catch (err: any) {
+      setRegError(err?.message || 'Terjadi kesalahan saat memproses pendaftaran. Silakan coba lagi.');
+    } finally {
+      setIsRegistering(false);
+    }
   };
 
   // Find User for Lupa Password / ID
@@ -827,20 +842,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 <ArrowRight className="w-4 h-4" />
               </button>
 
-              <div className="pt-2 text-center">
-                <p className="text-[11px] text-slate-500 mb-2">
-                  Belum terdaftar sebagai anggota koperasi?
+              <div className="pt-2 text-center space-y-1.5">
+                <p className="text-[11px] text-slate-500">
+                  Belum memiliki akun keanggotaan Koperasi HWS?
                 </p>
                 <button
                   type="button"
                   onClick={() => {
                     setErrorMessage('');
+                    setRegError('');
+                    setRegSuccessMember(null);
                     setShowRegisterModal(true);
                   }}
-                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-all"
+                  className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 text-xs font-black rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/20"
                 >
-                  <UserPlus className="w-4 h-4 text-amber-600" />
-                  Daftar Anggota Baru (Upload KTP)
+                  <UserPlus className="w-4 h-4 text-slate-950" />
+                  <span>Daftar Anggota Baru (Pendaftaran Mandiri Online)</span>
                 </button>
               </div>
             </form>
@@ -1299,14 +1316,90 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setShowRegisterModal(false)}
+                onClick={() => {
+                  setShowRegisterModal(false);
+                  setRegSuccessMember(null);
+                  setRegError('');
+                }}
                 className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            {regSuccessMember ? (
+              /* SELEBRASI PENDAFTARAN MANDIRI BERHASIL (REQ 1) */
+              <div className="p-6 space-y-5 text-center">
+                <div className="w-16 h-16 mx-auto rounded-3xl bg-emerald-500/20 border-2 border-emerald-500 flex items-center justify-center text-emerald-400 shadow-xl shadow-emerald-500/20">
+                  <CheckCircle2 className="w-10 h-10" />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-black text-white">Pendaftaran Mandiri Berhasil!</h3>
+                  <p className="text-xs text-slate-300 mt-1 max-w-sm mx-auto">
+                    Selamat, akun keanggotaan Koperasi HWS Anda telah aktif dan terhubung ke sistem.
+                  </p>
+                </div>
+
+                <div className="bg-[#162035] p-4 rounded-2xl border border-slate-700 text-left space-y-2.5 max-w-md mx-auto text-xs">
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
+                    <span className="text-slate-400">Nama Anggota:</span>
+                    <span className="font-extrabold text-white">{regSuccessMember.nama}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
+                    <span className="text-slate-400">No. Anggota:</span>
+                    <span className="font-mono font-black text-amber-400 text-sm">{regSuccessMember.nomorAnggota}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
+                    <span className="text-slate-400">No. Rekening Koperasi:</span>
+                    <span className="font-mono font-black text-white">{regSuccessMember.nomorRekening}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
+                    <span className="text-slate-400">Wilayah Keanggotaan:</span>
+                    <span className="font-bold text-sky-400">{regSuccessMember.wilayah}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">PIN Transaksi:</span>
+                    <span className="font-mono font-black text-amber-300">•••••• (6 Digit Tersimpan)</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2 max-w-md mx-auto pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRegisterModal(false);
+                      const memberToLogin = regSuccessMember;
+                      setRegSuccessMember(null);
+                      onLoginMember(memberToLogin);
+                    }}
+                    className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all"
+                  >
+                    <span>Masuk ke Dashboard Anggota Sekarang</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRegisterModal(false);
+                      setRegSuccessMember(null);
+                    }}
+                    className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all"
+                  >
+                    Kembali ke Halaman Masuk
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={handleRegisterSubmit} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              {regError && (
+                <div className="p-3 bg-red-950/90 border border-red-500/50 text-red-200 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>{regError}</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1">
@@ -1479,7 +1572,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               {/* Upload KTP */}
               <div className="bg-slate-800/80 p-3.5 rounded-xl border border-dashed border-slate-600">
                 <label className="block text-xs font-bold text-slate-200 mb-1">
-                  Upload Foto KTP Asli *
+                  Upload Foto KTP Asli <span className="text-slate-400 font-normal">(Opsional saat pendaftaran)</span>
                 </label>
                 <div className="flex flex-col sm:flex-row items-center gap-3">
                   <input
@@ -1505,8 +1598,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
               {/* Rekening Bank Pribadi Anggota */}
               <div className="bg-[#162035] p-3 rounded-xl border border-slate-700 space-y-2">
-                <div className="text-xs font-bold text-white">
-                  Rekening Bank Pribadi (Untuk Penarikan Tabungan Umum)
+                <div className="text-xs font-bold text-white flex items-center justify-between">
+                  <span>Rekening Bank Pribadi (Untuk Penarikan Tabungan)</span>
+                  <span className="text-[10px] text-slate-400 font-normal">Opsional (bisa diisi nanti)</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
@@ -1530,8 +1624,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <label className="block text-[10px] text-slate-400">No. Rekening Pribadi</label>
                     <input
                       type="text"
-                      required
-                      placeholder="Nomor Rekening Bank"
+                      placeholder="Contoh: 1234567890 (Opsional)"
                       value={regForm.nomorRekeningBank}
                       onChange={(e) => setRegForm({ ...regForm, nomorRekeningBank: e.target.value })}
                       className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
@@ -1541,8 +1634,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <label className="block text-[10px] text-slate-400">Atas Nama Rekening</label>
                     <input
                       type="text"
-                      required
-                      placeholder="Nama di Buku Tabungan"
+                      placeholder="Nama di Rekening (Opsional)"
                       value={regForm.atasNamaBank}
                       onChange={(e) => setRegForm({ ...regForm, atasNamaBank: e.target.value })}
                       className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
@@ -1681,12 +1773,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20"
+                  disabled={isRegistering}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
                 >
-                  Selesaikan Pendaftaran
+                  {isRegistering ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                      <span>Memproses Pendaftaran...</span>
+                    </>
+                  ) : (
+                    <span>Selesaikan Pendaftaran Mandiri</span>
+                  )}
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   AppState,
   MemberUser,
@@ -40,7 +40,7 @@ interface MemberDashboardProps {
   state: AppState;
   updateState: (updater: (prev: AppState) => AppState) => Promise<void>;
   member: MemberUser;
-  onLogout: () => void;
+  onLogout: (reason?: string) => void;
 }
 
 export const MemberDashboard: React.FC<MemberDashboardProps> = ({
@@ -82,6 +82,54 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tarikNominal, setTarikNominal] = useState('');
   const [tarikCatatan, setTarikCatatan] = useState('');
   const [tarikError, setTarikError] = useState('');
+
+  const [backToast, setBackToast] = useState<string | null>(null);
+
+  // Requirement 7: 1x klik kembali ke menu sebelumnya, 3x klik logout
+  const backClicksRef = useRef<number>(0);
+  const lastBackClickTimeRef = useRef<number>(0);
+
+  const handleSubmenuBack = () => {
+    const now = Date.now();
+    if (now - lastBackClickTimeRef.current < 3000) {
+      backClicksRef.current += 1;
+    } else {
+      backClicksRef.current = 1;
+    }
+    lastBackClickTimeRef.current = now;
+
+    if (backClicksRef.current >= 3) {
+      backClicksRef.current = 0;
+      setBackToast(null);
+      onLogout('Anda telah berhasil keluar dari akun (3x klik tombol kembali).');
+    } else if (backClicksRef.current === 2) {
+      setBackToast('Klik 1x lagi untuk keluar / logout dari akun Anda.');
+      setTimeout(() => setBackToast(null), 3000);
+    } else {
+      // 1x click: Kembali ke menu sebelumnya (dashboard)
+      setActiveMenu('dashboard');
+      setBackToast('Kembali ke menu sebelumnya. (Klik 3x untuk logout)');
+      setTimeout(() => setBackToast(null), 3000);
+    }
+  };
+
+  useEffect(() => {
+    const onAppBack = () => {
+      if (showSettings) {
+        setShowSettings(false);
+      } else if (showTransferModal) {
+        setShowTransferModal(false);
+      } else if (showTarikModal) {
+        setShowTarikModal(false);
+      } else if (showKtaModal) {
+        setShowKtaModal(false);
+      } else if (activeMenu !== 'dashboard') {
+        setActiveMenu('dashboard');
+      }
+    };
+    window.addEventListener('app:back_press', onAppBack);
+    return () => window.removeEventListener('app:back_press', onAppBack);
+  }, [showSettings, showTransferModal, showTarikModal, showKtaModal, activeMenu]);
 
   // Auto-lookup recipient for transfer (Req 2: Transfer sesama anggota terkirim akurat)
   const cleanTargetQuery = tfTargetRek.trim().toLowerCase();
@@ -460,7 +508,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex items-center justify-between">
             <button
               type="button"
-              onClick={() => setActiveMenu('dashboard')}
+              onClick={handleSubmenuBack}
               className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -1240,6 +1288,14 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           member={currentMember}
           onClose={() => setShowKtaModal(false)}
         />
+      )}
+
+      {/* ================= FLOATING BACK / LOGOUT TOAST (REQ 7) ================= */}
+      {backToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-4 py-2.5 bg-slate-900/95 border border-amber-500/60 text-amber-300 text-xs sm:text-sm font-bold rounded-2xl shadow-2xl backdrop-blur-md animate-bounce flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>{backToast}</span>
+        </div>
       )}
     </div>
   );
