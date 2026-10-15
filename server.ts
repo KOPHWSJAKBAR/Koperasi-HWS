@@ -939,6 +939,11 @@ async function startServer() {
       const idx = (currentState.kasList || []).findIndex((k: any) => k.id === entry.id);
       if (idx === -1) return res.status(404).json({ error: 'Transaksi buku kas tidak ditemukan' });
 
+      // Perlindungan Buku Kas Anggota: Tidak dapat diinput, diedit, atau dihapus oleh admin
+      if (currentState.kasList[idx].bukuKas === 'anggota' || entry.bukuKas === 'anggota') {
+        return res.status(403).json({ error: 'Buku kas anggota bersifat otomatis dan dilindungi sistem, tidak dapat diedit oleh admin.' });
+      }
+
       currentState.kasList[idx] = { ...currentState.kasList[idx], ...entry };
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
@@ -966,6 +971,10 @@ async function startServer() {
       if (!id) return res.status(400).json({ error: 'ID entry kas diperlukan' });
 
       const deletedEntry = (currentState.kasList || []).find((k: any) => k.id === id);
+      if (deletedEntry && deletedEntry.bukuKas === 'anggota') {
+        return res.status(403).json({ error: 'Buku kas anggota bersifat otomatis dan dilindungi sistem, tidak dapat dihapus oleh admin.' });
+      }
+
       currentState.kasList = (currentState.kasList || []).filter((k: any) => k.id !== id);
 
       currentState.auditLogs = currentState.auditLogs || [];
@@ -1551,13 +1560,13 @@ exit
           purpose: "any"
         },
         {
-          src: "/icon-192.png",
+          src: "/icon-maskable-192.png",
           sizes: "192x192",
           type: "image/png",
           purpose: "maskable"
         },
         {
-          src: "/icon-512.png",
+          src: "/icon-maskable-512.png",
           sizes: "512x512",
           type: "image/png",
           purpose: "maskable"

@@ -188,8 +188,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     alert(isSuperAdmin ? 'Transaksi kas berhasil dicatat!' : 'Transaksi diajukan, menunggu persetujuan Super Admin / Pembukuan.');
   };
 
-  // Open Edit Kas Modal (Req 6)
+  // Open Edit Kas Modal (Req 6) - HANYA Buku Kas Koperasi (Buku Kas Anggota TIDAK DAPAT diedit oleh admin)
   const handleOpenEditKas = (entry: KasEntry) => {
+    if (entry.bukuKas === 'anggota') {
+      alert('Buku Kas Anggota bersifat otomatis dari mutasi dan setoran anggota. Tidak dapat diinput atau diedit oleh admin.');
+      return;
+    }
     setEditingKasEntry(entry);
     setEditTanggal(entry.tanggal);
     setEditBukuKas(entry.bukuKas);
@@ -205,6 +209,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     e.preventDefault();
     if (!editingKasEntry) return;
 
+    if (editingKasEntry.bukuKas === 'anggota') {
+      alert('Buku Kas Anggota dilindungi dan tidak dapat diedit oleh admin.');
+      setEditingKasEntry(null);
+      return;
+    }
+
     const nominalNum = Number(editNominal);
     if (!nominalNum || nominalNum <= 0) {
       alert('Nominal harus lebih dari 0.');
@@ -214,7 +224,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     const updatedEntry: KasEntry = {
       ...editingKasEntry,
       tanggal: editTanggal,
-      bukuKas: editBukuKas,
+      bukuKas: 'koperasi', // Selalu koperasi jika diedit
       kategori: editKategori,
       tipe: editTipe,
       nominal: nominalNum,
@@ -224,11 +234,16 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
     // Kirim update ke server
     try {
-      await fetch('/api/kas/update', {
+      const res = await fetch('/api/kas/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entry: updatedEntry, adminName: currentAdmin.nama }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Gagal mengedit transaksi kas');
+        return;
+      }
     } catch {}
 
     await updateState((prev) => {
@@ -254,6 +269,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
   // Handle Delete Kas Entry (Req 6: Buku kas dapat di-hapus)
   const handleDeleteKas = async (entry: KasEntry) => {
+    if (entry.bukuKas === 'anggota') {
+      alert('Buku Kas Anggota bersifat otomatis dan dilindungi sistem, tidak dapat dihapus oleh admin.');
+      return;
+    }
+
     const confirmDelete = confirm(
       `Hapus transaksi "${entry.keterangan}" (${formatRupiah(entry.nominal)}) dari buku kas? Saldo kas akan otomatis disesuaikan.`
     );
@@ -261,11 +281,16 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
     // Kirim hapus ke server
     try {
-      await fetch('/api/kas/delete', {
+      const res = await fetch('/api/kas/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Gagal menghapus transaksi');
+        return;
+      }
     } catch {}
 
     await updateState((prev) => {
@@ -699,8 +724,13 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                   ) : (
                     <>
                       <option value="Tabungan Pokok">Tabungan Pokok</option>
+                      <option value="Tabungan Zakat">Tabungan Zakat</option>
+                      <option value="Tabungan Qurban">Tabungan Qurban</option>
+                      <option value="Tabungan Bebas">Tabungan Bebas</option>
                       <option value="Setoran Tabungan Umum">Setoran Tabungan Umum</option>
                       <option value="Penarikan Tabungan Umum">Penarikan Tabungan Umum</option>
+                      <option value="Penyaluran Zakat Fitrah">Penyaluran Zakat Fitrah</option>
+                      <option value="Penyaluran Tabungan Qurban">Penyaluran Tabungan Qurban</option>
                     </>
                   )}
                 </select>
@@ -822,6 +852,22 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       ) : (
         /* Table of Cashbook Transactions */
         <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl">
+          {activeKasTab === 'anggota' && (
+            <div className="mb-4 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-start gap-3">
+              <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl font-bold shrink-0 text-sm">
+                🔒
+              </div>
+              <div>
+                <div className="font-extrabold text-white text-xs">
+                  Buku Kas Anggota (Pencatatan Otomatis & Terproteksi)
+                </div>
+                <div className="text-[11px] text-amber-200/90 mt-0.5 leading-relaxed">
+                  Semua transaksi Simpanan Pokok, Tabungan Umum Bebas, Zakat, dan Qurban dicatat secara otomatis ke dalam Buku Kas Anggota. Demi transparansi dan keamanan saldo anggota, buku kas anggota <strong>tidak dapat di-input manual atau diedit oleh admin</strong>.
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between mb-3 text-xs text-slate-400">
             <span>Klik baris mana saja pada riwayat untuk mencetak / melihat <b>Tanda Terima Pembayaran</b> resmi.</span>
             <span className="text-[11px] text-amber-400 font-bold flex items-center gap-1">
@@ -894,46 +940,57 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                             Kuitansi
                           </button>
 
-                          {/* Tombol Edit Buku Kas (Req 6) */}
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditKas(entry)}
-                            className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
-                            title="Edit Transaksi Kas"
-                          >
-                            <Edit className="w-3.5 h-3.5 text-sky-400" />
-                            Edit
-                          </button>
-
-                          {entry.status === 'pending_approval' && canDirectModify && (
+                          {entry.bukuKas === 'anggota' ? (
+                            <span
+                              className="px-2 py-1 bg-slate-900 border border-slate-750 text-slate-400 rounded-lg text-[10px] font-bold"
+                              title="Buku Kas Anggota tercatat otomatis dan dilindungi (tidak dapat diinput atau diedit admin)"
+                            >
+                              🔒 Kas Anggota
+                            </span>
+                          ) : (
                             <>
+                              {/* Tombol Edit Buku Kas Koperasi */}
                               <button
-                                onClick={() => handleApproveKasAction(entry, true)}
-                                className="p-1 text-emerald-400 hover:text-emerald-300"
-                                title="Setujui"
+                                type="button"
+                                onClick={() => handleOpenEditKas(entry)}
+                                className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
+                                title="Edit Transaksi Kas Koperasi"
                               >
-                                <CheckCircle className="w-4 h-4" />
+                                <Edit className="w-3.5 h-3.5 text-sky-400" />
+                                Edit
                               </button>
+
+                              {entry.status === 'pending_approval' && canDirectModify && (
+                                <>
+                                  <button
+                                    onClick={() => handleApproveKasAction(entry, true)}
+                                    className="p-1 text-emerald-400 hover:text-emerald-300"
+                                    title="Setujui"
+                                  >
+                                    <CheckCircle className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleApproveKasAction(entry, false)}
+                                    className="p-1 text-red-400 hover:text-red-300"
+                                    title="Tolak"
+                                  >
+                                    <XCircle className="w-4 h-4" />
+                                  </button>
+                                </>
+                              )}
+
+                              {/* Tombol Hapus Buku Kas Koperasi */}
                               <button
-                                onClick={() => handleApproveKasAction(entry, false)}
-                                className="p-1 text-red-400 hover:text-red-300"
-                                title="Tolak"
+                                type="button"
+                                onClick={() => handleDeleteKas(entry)}
+                                className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
+                                title="Hapus Transaksi Buku Kas Koperasi"
                               >
-                                <XCircle className="w-4 h-4" />
+                                <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                Hapus
                               </button>
                             </>
                           )}
-
-                          {/* Tombol Hapus Buku Kas (Req 6 & Req 2: Buku kas dapat dihapus) */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteKas(entry)}
-                            className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
-                            title="Hapus Transaksi Buku Kas"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                            Hapus
-                          </button>
                         </div>
                       </td>
                     </tr>

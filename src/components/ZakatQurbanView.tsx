@@ -157,10 +157,10 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
         return m;
       });
 
-      // Keluar dari Buku Kas Koperasi per req 48
+      // Keluar dari Buku Kas Anggota (Pencatatan Zakat & Qurban masuk ke Buku Kas Anggota)
       const kasEntry: KasEntry = {
         id: `kas-zkt-${Date.now()}`,
-        bukuKas: 'koperasi',
+        bukuKas: 'anggota',
         tanggal: tgl,
         kategori: p.jenis === 'zakat_fitrah' ? 'Penyaluran Zakat Fitrah' : 'Penyaluran Tabungan Qurban',
         keterangan: `Penyaluran ${p.jenis === 'zakat_fitrah' ? 'Zakat Fitrah' : 'Qurban'} (${p.jumlahPenerima} anggota @ ${formatRupiah(p.nominalPerAnggota)})`,

@@ -15,6 +15,7 @@ import { SuratMenyuratView } from './SuratMenyuratView';
 import { ChatOnlineView } from './ChatOnlineView';
 import { SettingModal } from './SettingModal';
 import { KtaDigitalModal } from './KtaDigitalModal';
+import { InstallAppModal } from './InstallAppModal';
 import {
   CreditCard,
   ArrowUpRight,
@@ -35,6 +36,7 @@ import {
   AlertCircle,
   ShieldCheck,
   Building,
+  Smartphone,
 } from 'lucide-react';
 
 interface MemberDashboardProps {
@@ -59,6 +61,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
   const [showSettings, setShowSettings] = useState(false);
   const [showKtaModal, setShowKtaModal] = useState(false);
+  const [showInstallModal, setShowInstallModal] = useState(false);
   const [copiedRekening, setCopiedRekening] = useState(false);
 
   // Transfer Sesama Anggota State (Req 3: Konfirmasi sebelum memasukkan PIN)
@@ -506,6 +509,16 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
               <button
                 type="button"
+                onClick={() => setShowInstallModal(true)}
+                className="py-1.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                title="Pasang Aplikasi ke Perangkat"
+              >
+                <Smartphone className="w-4 h-4 text-emerald-400" />
+                <span>Pasang Aplikasi</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowSettings(true)}
                 className="py-1.5 px-3 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
               >
@@ -530,6 +543,16 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   {unreadChatCount}
                 </span>
               )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowInstallModal(true)}
+              className="py-1.5 px-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1 transition-all shadow-sm"
+              title="Pasang Aplikasi"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Pasang</span>
             </button>
 
             <button

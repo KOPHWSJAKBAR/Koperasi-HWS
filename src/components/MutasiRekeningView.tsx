@@ -73,8 +73,7 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
 
   const allCategoryTx = state.memberTransactions.filter((tx) => {
     if (tx.memberId !== member.id) return false;
-    if (kategoriTabungan === 'pokok' && tx.kategori !== 'pokok') return false;
-    if (kategoriTabungan === 'umum' && tx.kategori !== 'umum') return false;
+    if (kategoriTabungan !== 'semua' && tx.kategori !== kategoriTabungan) return false;
     return true;
   });
 
@@ -193,6 +192,8 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
               <option value="semua">Semua Tabungan (Konsolidasi)</option>
               <option value="pokok">Tabungan Pokok / Kewajiban (Rp1.000/hr)</option>
               <option value="umum">Tabungan Umum Bebas</option>
+              <option value="zakat">Tabungan Zakat Fitrah (Rp500/hr)</option>
+              <option value="qurban">Tabungan Qurban (Rp500/hr)</option>
             </select>
           </div>
 
