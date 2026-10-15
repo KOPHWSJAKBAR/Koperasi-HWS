@@ -5,8 +5,9 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, fetchStateFromServer } from '../lib/storage';
+import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
+import { initFCM } from '../lib/fcm';
 import { MemberVerificationView } from './MemberVerificationView';
 import { MutasiRekeningView } from './MutasiRekeningView';
 import { ZakatQurbanView } from './ZakatQurbanView';
@@ -84,6 +85,14 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tarikError, setTarikError] = useState('');
 
   const [backToast, setBackToast] = useState<string | null>(null);
+  const [memberToasts, setMemberToasts] = useState<Array<{
+    id: string;
+    title: string;
+    message: string;
+    type: string;
+    timestamp: string;
+    action?: () => void;
+  }>>([]);
 
   // Requirement 7: 1x klik kembali ke menu sebelumnya, 3x klik logout
   const backClicksRef = useRef<number>(0);
@@ -158,6 +167,40 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const unreadChatCount = state.chatMessages.filter(
     (m) => m.memberId === currentMember.id && m.senderType === 'admin' && !m.isReadByMember
   ).length;
+
+  // Unread surat count for member (Req 5: ada notifikasi angka jika belum dibaca, hilangkan jika sudah terbaca)
+  const unreadSuratCount = state.suratList.filter((s) => {
+    const isTarget = s.tujuanTipe === 'semua' || s.targetMemberId === currentMember.id;
+    if (!isTarget) return false;
+    const readList = s.readByMemberIds || [];
+    return !readList.includes(currentMember.id);
+  }).length;
+
+  // Initialize FCM and listen for real-time notifications (Req 1 & 5)
+  useEffect(() => {
+    initFCM(currentMember.id, 'member').catch(() => {});
+
+    const handleNotifEvent = (e: any) => {
+      const notif = e.detail;
+      if (!notif) return;
+      if (notif.recipientId === currentMember.id || notif.recipientId === 'all') {
+        setMemberToasts((prev) => [
+          {
+            id: `toast-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            title: notif.title || 'Pemberitahuan Koperasi HWS',
+            message: notif.body || '',
+            type: notif.type || 'info',
+            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+            action: notif.type === 'surat_baru' ? () => setActiveMenu('surat') : undefined,
+          },
+          ...prev.slice(0, 3),
+        ]);
+      }
+    };
+
+    window.addEventListener('hws:realtime_notification', handleNotifEvent);
+    return () => window.removeEventListener('hws:realtime_notification', handleNotifEvent);
+  }, [currentMember.id]);
 
   const handleCopyRekening = () => {
     navigator.clipboard?.writeText(currentMember.nomorRekening);
@@ -774,9 +817,11 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     <div>
                       <div className="text-xs sm:text-sm font-extrabold flex items-center gap-1.5">
                         <span>6. Surat Menyurat</span>
-                        <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center">
-                          {state.suratList.length || 1}
-                        </span>
+                        {unreadSuratCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center animate-pulse shadow-md">
+                            {unreadSuratCount}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
                         Edaran resmi koperasi
@@ -1287,6 +1332,44 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           member={currentMember}
           onClose={() => setShowKtaModal(false)}
         />
+      )}
+
+      {/* ================= REAL-TIME NOTIFICATIONS TOAST (REQ 1 & 5) ================= */}
+      {memberToasts.length > 0 && (
+        <div className="fixed top-4 right-4 z-[110] max-w-sm w-full space-y-2 pointer-events-none">
+          {memberToasts.map((toast) => (
+            <div
+              key={toast.id}
+              onClick={() => {
+                toast.action?.();
+                setMemberToasts((prev) => prev.filter((t) => t.id !== toast.id));
+              }}
+              className="pointer-events-auto p-3.5 bg-slate-900/95 border border-amber-500/80 rounded-2xl shadow-2xl backdrop-blur text-white flex items-start gap-3 cursor-pointer hover:border-amber-400 transition-all animate-bounce"
+            >
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 text-sm font-bold border border-amber-500/30">
+                {toast.type === 'surat_baru' ? '📬' : toast.type === 'setoran_verified' ? '✅' : '💳'}
+              </div>
+              <div className="flex-1 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-amber-300">{toast.title}</span>
+                  <span className="text-[10px] text-slate-400">{toast.timestamp}</span>
+                </div>
+                <p className="text-slate-200 mt-0.5 line-clamp-2">{toast.message}</p>
+                <span className="text-[10px] text-amber-400 font-bold block mt-1">Ketuk untuk membuka ›</span>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMemberToasts((prev) => prev.filter((t) => t.id !== toast.id));
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* ================= FLOATING BACK / LOGOUT TOAST (REQ 7) ================= */}

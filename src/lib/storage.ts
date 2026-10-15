@@ -538,6 +538,22 @@ export function useKoperasiState() {
                 } catch {}
                 notifyListeners();
               }
+            } else if (data.type === 'MEMBER_NOTIFICATION') {
+              const notif = data.payload;
+              if (notif) {
+                if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru') {
+                  playNotificationSound('deposit');
+                } else {
+                  playNotificationSound('chat');
+                }
+                triggerBrowserNotification(notif.title || 'Notifikasi Koperasi HWS', notif.body || '');
+                window.dispatchEvent(new CustomEvent('hws:realtime_notification', { detail: notif }));
+              }
+            } else if (data.type === 'NEW_SURAT') {
+              playNotificationSound('chat');
+              const s = data.payload?.surat;
+              triggerBrowserNotification('📬 Surat Baru Koperasi HWS', s?.perihal || 'Ada surat masuk baru');
+              window.dispatchEvent(new CustomEvent('hws:new_surat', { detail: data.payload }));
             }
           } catch (e) {
             console.error('Error handling SSE event', e);

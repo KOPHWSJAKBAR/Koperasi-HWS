@@ -1063,6 +1063,51 @@ async function startServer() {
     }
   });
 
+  // Surat Menyurat Endpoints with Realtime Broadcast & Read Tracking (Req 5)
+  app.post('/api/surat/create', (req: Request, res: Response) => {
+    try {
+      const { surat, adminName } = req.body;
+      if (!surat || !surat.id) return res.status(400).json({ error: 'Data surat tidak lengkap' });
+
+      currentState.suratList = [surat, ...(currentState.suratList || [])];
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastEvent('NEW_SURAT', { surat });
+      broadcastEvent('MEMBER_NOTIFICATION', {
+        recipientId: surat.tujuanTipe === 'perorangan' ? surat.targetMemberId : 'all',
+        recipientNama: surat.targetMemberNama,
+        title: '📬 Surat Resmi Baru Koperasi HWS',
+        body: `Perihal: "${surat.perihal}". Nomor: ${surat.nomorSurat}`,
+        type: 'surat_baru',
+        data: { suratId: surat.id }
+      });
+      res.json({ success: true, surat });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menerbitkan surat: ' + err.message });
+    }
+  });
+
+  app.post('/api/surat/read', (req: Request, res: Response) => {
+    try {
+      const { suratId, readerId, readerType } = req.body;
+      const idx = (currentState.suratList || []).findIndex((s: any) => s.id === suratId);
+      if (idx !== -1) {
+        const s = { ...currentState.suratList[idx] };
+        if (readerType === 'member') {
+          s.readByMemberIds = Array.from(new Set([...(s.readByMemberIds || []), readerId]));
+        } else {
+          s.readByAdminIds = Array.from(new Set([...(s.readByAdminIds || []), readerId]));
+        }
+        currentState.suratList[idx] = s;
+        saveDatabase(currentState);
+        broadcastEvent('STATE_UPDATED', currentState);
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal memperbarui status baca surat: ' + err.message });
+    }
+  });
+
   // Clear Audit Log History (Req 3: Hapus log history mulai dari awal 0)
   app.post('/api/logs/clear', (req: Request, res: Response) => {
     try {

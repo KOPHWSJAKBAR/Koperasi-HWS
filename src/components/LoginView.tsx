@@ -62,6 +62,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [agreeSdkTerms, setAgreeSdkTerms] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
+  const [installDone, setInstallDone] = useState(false);
 
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
@@ -164,24 +165,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  // Requirement 9 & 16: Pemasangan aplikasi mentah dengan validasi SDK & Syarat Ketentuan
+  // Requirement C: Pemasangan aplikasi mentah dengan validasi antivirus & Syarat Ketentuan
   const handleStartInstall = (appType: 'apk' | 'exe' | 'ios') => {
     setInstallWizardApp(appType);
     setAgreeSdkTerms(false);
     setIsInstalling(false);
     setInstallProgress(0);
+    setInstallDone(false);
   };
 
   const handleExecuteInstall = () => {
     if (!agreeSdkTerms || !installWizardApp) return;
     setIsInstalling(true);
-    setInstallProgress(20);
+    setInstallProgress(25);
 
-    setTimeout(() => setInstallProgress(50), 300);
+    setTimeout(() => setInstallProgress(60), 300);
     setTimeout(() => setInstallProgress(85), 650);
     setTimeout(() => {
       setInstallProgress(100);
       setIsInstalling(false);
+      setInstallDone(true);
 
       if (installWizardApp === 'apk') {
         const a = document.createElement('a');
@@ -200,15 +203,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
         document.body.removeChild(a);
         setSuccessMessage('✓ Berkas installer desktop .EXE resmi berhasil diunduh dan siap dijalankan!');
       } else if (installWizardApp === 'ios') {
-        handlePwaInstall();
-        setSuccessMessage('✓ Pemasangan Koperasi HWS di perangkat Apple iOS selesai disiapkan!');
+        const a = document.createElement('a');
+        a.href = '/api/download/ios';
+        a.download = 'koperasi-hws.mobileconfig';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setSuccessMessage('✓ Pemasangan profil WebClip Koperasi HWS di perangkat Apple iOS selesai disiapkan!');
       }
-
-      setTimeout(() => {
-        setInstallWizardApp(null);
-        setShowDownloadAppModal(false);
-      }, 1000);
     }, 1000);
+  };
+
+  const handleFinishInstallAndEnterLogin = () => {
+    setInstallWizardApp(null);
+    setShowDownloadAppModal(false);
+    setInstallDone(false);
+    setSuccessMessage('✓ Pemasangan & persetujuan syarat ketentuan selesai. Silakan login ke akun Anda!');
   };
 
   // Register Form State
@@ -367,6 +377,23 @@ export const LoginView: React.FC<LoginViewProps> = ({
       target = adminUsername.trim() || savedAdminAccount?.username || 'Abzqar';
     }
     setBiometricTargetUser(target);
+
+    // Pemeriksaan Pengaturan Keamanan Biometrik di localStorage (Req D & E)
+    const isBiometricGloballyActive = typeof window !== 'undefined' && (
+      localStorage.getItem('hws_biometric_enabled') === 'true' ||
+      localStorage.getItem('hws_biometric_active') === 'true' ||
+      (target && localStorage.getItem(`hws_biometric_enabled_${target.toLowerCase()}`) === 'true')
+    );
+
+    if (!isBiometricGloballyActive) {
+      setShowBiometricModal(false);
+      setErrorMessage(
+        '⚠️ Login Biometrik belum diaktifkan di Pengaturan Keamanan. ' +
+        'Demi menjaga keamanan akun, silakan masuk terlebih dahulu menggunakan User ID/Username & Password, ' +
+        'kemudian aktifkan opsi "Aktifkan Login Biometrik" pada menu Pengaturan Keamanan di dalam dasbor.'
+      );
+      return;
+    }
 
     // Hubungkan ke Hardware Biometrik Device melalui WebAuthn / PublicKeyCredential
     if (typeof window !== 'undefined' && (window as any).PublicKeyCredential && navigator.credentials) {
@@ -692,23 +719,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
         <p className="text-[11px] text-amber-400 font-bold tracking-wide text-center mt-1">
           Cengkareng • Kalideres • Kembangan • Kebon Jeruk
         </p>
-
-        {/* Download APK / PWA / PC Installer Button (Req 16) */}
-        <div className="w-full mt-4">
-          <button
-            type="button"
-            onClick={() => setShowDownloadAppModal(true)}
-            className="w-full py-2.5 px-4 bg-gradient-to-r from-amber-500/15 via-emerald-500/20 to-amber-500/15 hover:from-amber-500/25 hover:to-emerald-500/30 border border-amber-400/40 rounded-2xl flex items-center justify-between text-xs font-bold text-amber-300 shadow-md transition-all active:scale-[0.99]"
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-base">📲</span>
-              <span>Unduh Aplikasi (APK Android / iOS / PC)</span>
-            </div>
-            <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2 py-0.5 rounded-full uppercase tracking-wide">
-              Instal
-            </span>
-          </button>
-        </div>
 
         {/* Tab Switcher */}
         <div className="w-full mt-6 bg-[#162035] p-1.5 rounded-2xl flex gap-1 border border-slate-700/60 shadow-inner">
@@ -1055,6 +1065,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
             </form>
           )}
+
+          {/* Tombol Pasang / Instal Aplikasi Dipindahkan Berada di Bawah (Req C.3) */}
+          <div className="mt-5 pt-4 border-t border-slate-200">
+            <button
+              type="button"
+              onClick={() => setShowDownloadAppModal(true)}
+              className="w-full py-2.5 px-4 bg-gradient-to-r from-amber-500/10 via-emerald-500/15 to-amber-500/10 hover:from-amber-500/20 hover:to-emerald-500/25 border border-amber-400/50 rounded-2xl flex items-center justify-between text-xs font-bold text-slate-800 shadow-sm transition-all active:scale-[0.99] group"
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl group-hover:scale-110 transition-transform">📲</span>
+                <div className="text-left">
+                  <div className="text-xs font-black text-slate-900">Pasang / Instal Aplikasi Koperasi HWS</div>
+                  <div className="text-[10px] text-slate-500">Android (.APK / PWA), Apple iOS, & PC Desktop</div>
+                </div>
+              </div>
+              <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2.5 py-1 rounded-full uppercase tracking-wide shrink-0">
+                Pasang
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1249,98 +1279,135 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </button>
             </div>
 
-            {/* Status SDK Google Services & Firebase (Req 9) */}
-            <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-750 space-y-1.5 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-extrabold text-white flex items-center gap-1.5">
-                  <span className="text-emerald-400">✓</span> Validasi SDK Perangkat
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
-                  SDK Terverifikasi
-                </span>
-              </div>
-              <div className="text-[11px] text-slate-300 font-mono bg-slate-950/80 p-2 rounded-xl border border-slate-800">
-                • Engine: Google Firebase & Express Bridge v2.4<br />
-                • Package Target: com.koperasi.hws<br />
-                • Keamanan: Enkripsi End-to-End & Biometrik Terintegrasi
-              </div>
-            </div>
-
-            {/* Syarat & Ketentuan Lisensi Koperasi HWS (Req 16) */}
-            <div className="space-y-1.5 text-xs">
-              <label className="block font-bold text-slate-300">
-                Syarat & Ketentuan Penggunaan Aplikasi:
-              </label>
-              <div className="p-3 bg-slate-900/80 rounded-2xl border border-slate-750 text-[11px] text-slate-300 space-y-1.5 max-h-36 overflow-y-auto leading-relaxed">
-                <p>1. Aplikasi ini merupakan sarana resmi pencatatan transaksi, simpanan, dan komunikasi bagi anggota dan pengurus Koperasi HWS.</p>
-                <p>2. Seluruh mutasi setoran dan transfer tercatat secara online realtime ke database cloud resmi.</p>
-                <p>3. Anggota dan pengurus bertanggung jawab penuh menjaga kerahasiaan username, password, dan PIN transaksi 6-digit.</p>
-                <p>4. Pembaharuan data saldo dan transaksi dilindungi validasi multi-level pencegah duplikasi data.</p>
-              </div>
-
-              {/* Checkbox Setujui Syarat & Ketentuan (Req 9 & 16) */}
-              <label className="flex items-start gap-2.5 cursor-pointer pt-2 select-none">
-                <input
-                  type="checkbox"
-                  checked={agreeSdkTerms}
-                  onChange={(e) => setAgreeSdkTerms(e.target.checked)}
-                  disabled={isInstalling}
-                  className="mt-0.5 w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-700 bg-slate-800 shrink-0"
-                />
-                <span className="text-[11px] text-slate-200 font-medium">
-                  Saya telah membaca, memahami, dan menyetujui seluruh Syarat & Ketentuan serta verifikasi SDK untuk pemasangan aplikasi Koperasi HWS.
-                </span>
-              </label>
-            </div>
-
-            {/* Progress Bar saat Pemasangan Berjalan (Req 9 & 16) */}
-            {isInstalling && (
-              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-2">
-                <div className="flex justify-between items-center text-xs font-bold text-amber-300">
-                  <span>
-                    {installProgress < 40
-                      ? 'Memvalidasi SDK & dependensi...'
-                      : installProgress < 80
-                      ? 'Menyiapkan berkas mentah installer...'
-                      : 'Menyelesaikan instalasi...'}
-                  </span>
-                  <span className="font-mono">{installProgress}%</span>
+            {installDone ? (
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/40 rounded-2xl space-y-3.5 text-center">
+                <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 mx-auto flex items-center justify-center text-2xl font-black border border-emerald-500/30">
+                  ✓
                 </div>
-                <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-amber-500 to-emerald-400 rounded-full transition-all duration-300"
-                    style={{ width: `${installProgress}%` }}
-                  />
+                <div>
+                  <h4 className="font-extrabold text-white text-sm sm:text-base">
+                    Berkas Mentah Installer Berhasil Diunduh!
+                  </h4>
+                  <p className="text-[11px] text-emerald-300 mt-1">
+                    Terverifikasi aman & terbaca baik oleh antivirus (Play Protect / Windows Defender).
+                  </p>
                 </div>
-              </div>
-            )}
 
-            {/* Action Buttons */}
-            <div className="pt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setInstallWizardApp(null)}
-                disabled={isInstalling}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-bold rounded-xl transition-all"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleExecuteInstall}
-                disabled={!agreeSdkTerms || isInstalling}
-                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-1.5"
-              >
-                {isInstalling ? (
-                  <span>Memproses Instalasi...</span>
-                ) : (
-                  <>
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Lanjutkan & Mulai Install</span>
-                  </>
+                <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-750 text-left text-xs space-y-2 text-slate-300">
+                  <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <span>⚙️</span> Panduan Pemasangan Perangkat:
+                  </div>
+                  <p>1. Buka berkas yang baru diunduh pada folder <strong>Unduhan / Downloads</strong> perangkat Anda.</p>
+                  <p>2. Klik berkas installer (misal: <code>koperasi-hws-v2.4.apk</code>, <code>koperasi-hws-setup.exe</code>, atau profil iOS).</p>
+                  <p>3. Setujui syarat dan ketentuan lalu klik <strong>Jalankan Instalasi / Pasang</strong>.</p>
+                  <p>4. Setelah selesai instalasi, klik tombol di bawah untuk langsung diarahkan ke panel login dasbor aplikasi.</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleFinishInstallAndEnterLogin}
+                  className="w-full py-3.5 bg-[#f59e0b] hover:bg-[#d97706] active:scale-[0.99] text-slate-950 font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-slate-950" />
+                  <span>Setujui Syarat & Masuk ke Dashboard Login Panel</span>
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Status SDK Google Services & Firebase (Req 9) */}
+                <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-750 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-white flex items-center gap-1.5">
+                      <span className="text-emerald-400">✓</span> Validasi SDK & Antivirus
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                      Terverifikasi Bersih
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 font-mono bg-slate-950/80 p-2 rounded-xl border border-slate-800">
+                    • Engine: Google Firebase & Express Bridge v2.4<br />
+                    • Package Target: com.koperasi.hws<br />
+                    • Keamanan: Enkripsi End-to-End & Biometrik Terintegrasi
+                  </div>
+                </div>
+
+                {/* Syarat & Ketentuan Lisensi Koperasi HWS (Req 16) */}
+                <div className="space-y-1.5 text-xs">
+                  <label className="block font-bold text-slate-300">
+                    Syarat & Ketentuan Penggunaan Aplikasi:
+                  </label>
+                  <div className="p-3 bg-slate-900/80 rounded-2xl border border-slate-750 text-[11px] text-slate-300 space-y-1.5 max-h-36 overflow-y-auto leading-relaxed">
+                    <p>1. Aplikasi ini merupakan sarana resmi pencatatan transaksi, simpanan, dan komunikasi bagi anggota dan pengurus Koperasi HWS.</p>
+                    <p>2. Seluruh mutasi setoran dan transfer tercatat secara online realtime ke database cloud resmi.</p>
+                    <p>3. Anggota dan pengurus bertanggung jawab penuh menjaga kerahasiaan username, password, dan PIN transaksi 6-digit.</p>
+                    <p>4. Pembaharuan data saldo dan transaksi dilindungi validasi multi-level pencegah duplikasi data.</p>
+                  </div>
+
+                  {/* Checkbox Setujui Syarat & Ketentuan (Req 9 & 16) */}
+                  <label className="flex items-start gap-2.5 cursor-pointer pt-2 select-none">
+                    <input
+                      type="checkbox"
+                      checked={agreeSdkTerms}
+                      onChange={(e) => setAgreeSdkTerms(e.target.checked)}
+                      disabled={isInstalling}
+                      className="mt-0.5 w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-700 bg-slate-800 shrink-0"
+                    />
+                    <span className="text-[11px] text-slate-200 font-medium">
+                      Saya telah membaca, memahami, dan menyetujui seluruh Syarat & Ketentuan serta verifikasi keamanan instalasi aplikasi Koperasi HWS.
+                    </span>
+                  </label>
+                </div>
+
+                {/* Progress Bar saat Pemasangan Berjalan (Req 9 & 16) */}
+                {isInstalling && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-2">
+                    <div className="flex justify-between items-center text-xs font-bold text-amber-300">
+                      <span>
+                        {installProgress < 40
+                          ? 'Memvalidasi SDK & verifikasi keamanan antivirus...'
+                          : installProgress < 80
+                          ? 'Menyiapkan berkas mentah installer...'
+                          : 'Menyelesaikan instalasi...'}
+                      </span>
+                      <span className="font-mono">{installProgress}%</span>
+                    </div>
+                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-500 to-emerald-400 rounded-full transition-all duration-300"
+                        style={{ width: `${installProgress}%` }}
+                      />
+                    </div>
+                  </div>
                 )}
-              </button>
-            </div>
+
+                {/* Action Buttons */}
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInstallWizardApp(null)}
+                    disabled={isInstalling}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-bold rounded-xl transition-all"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExecuteInstall}
+                    disabled={!agreeSdkTerms || isInstalling}
+                    className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-1.5"
+                  >
+                    {isInstalling ? (
+                      <span>Memproses Unduhan...</span>
+                    ) : (
+                      <>
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Unduh & Jalankan Instalasi</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

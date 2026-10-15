@@ -42,6 +42,8 @@ import {
   Wrench,
   Eye,
   EyeOff,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface SettingModalProps {
@@ -106,9 +108,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
   useEffect(() => {
     if (initialSubModal) {
-      setSubModal(initialSubModal);
+      if (!isSuperAdmin && !isMember && initialSubModal !== 'profil_koperasi') {
+        setSubModal('profil_koperasi');
+      } else {
+        setSubModal(initialSubModal);
+      }
     }
-  }, [initialSubModal]);
+  }, [initialSubModal, isSuperAdmin, isMember]);
+
+  // Copy Rekening State for Non-Superadmin (Req 3, 4, 5)
+  const [copiedRekId, setCopiedRekId] = useState<string | null>(null);
+  const handleCopyRek = (id: string, text: string) => {
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(text);
+      setCopiedRekId(id);
+      setTimeout(() => setCopiedRekId(null), 2000);
+    }
+  };
 
   // Installer Wizard State with SDK Verification & Terms (Req 6, 9, 16)
   const [installWizardApp, setInstallWizardApp] = useState<'apk' | 'exe' | 'ios' | null>(null);
@@ -1437,83 +1453,91 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setSubModal('edit_profile')}
-                className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold text-amber-400 border border-amber-500/20 flex items-center justify-center gap-1.5"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                Ubah Profil & Password Saya
-              </button>
+              {isSuperAdmin ? (
+                <button
+                  type="button"
+                  onClick={() => setSubModal('edit_profile')}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold text-amber-400 border border-amber-500/20 flex items-center justify-center gap-1.5"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  Ubah Profil & Password Saya
+                </button>
+              ) : (
+                <div className="p-2 bg-slate-900/80 rounded-xl border border-slate-700/60 text-center text-[10px] text-slate-400 font-medium">
+                  🔒 Biodata Akun Admin (Mode Lihat Saja)
+                </div>
+              )}
             </div>
           )}
 
           {/* ================= BIOMETRIK & NOTIFIKASI MOBILE (Req 7 & 8) ================= */}
-          <div className="bg-[#162035] p-3.5 rounded-2xl border border-slate-700/80 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-amber-400">🛡️</span>
-                <span className="font-extrabold text-white text-xs">Keamanan Biometrik & Notifikasi Mobile</span>
-              </div>
-              <span className="text-[10px] text-amber-400 font-mono font-bold">Device Sync</span>
-            </div>
-
-            {/* Toggle Biometrik (Req 7) */}
-            <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
-                  biometricEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'
-                }`}>
-                  <Lock className="w-4 h-4" />
+          {(isMember || isSuperAdmin) && (
+            <div className="bg-[#162035] p-3.5 rounded-2xl border border-slate-700/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-amber-400">🛡️</span>
+                  <span className="font-extrabold text-white text-xs">Keamanan Biometrik & Notifikasi Mobile</span>
                 </div>
-                <div>
-                  <div className="font-bold text-white text-xs">Biometrik (Fingerprint / Face ID)</div>
-                  <div className="text-[10px] text-slate-400">
-                    {biometricEnabled ? 'Terintegrasi pada device mobile ini' : 'Klik untuk mengaktifkan pada perangkat'}
+                <span className="text-[10px] text-amber-400 font-mono font-bold">Device Sync</span>
+              </div>
+
+              {/* Toggle Biometrik (Req 7) */}
+              <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
+                    biometricEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'
+                  }`}>
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-white text-xs">Biometrik (Fingerprint / Face ID)</div>
+                    <div className="text-[10px] text-slate-400">
+                      {biometricEnabled ? 'Terintegrasi pada device mobile ini' : 'Klik untuk mengaktifkan pada perangkat'}
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleToggleBiometric}
+                  className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
+                    biometricEnabled
+                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
+                  }`}
+                >
+                  {biometricEnabled ? '✓ Aktif' : 'Aktifkan'}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleToggleBiometric}
-                className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
-                  biometricEnabled
-                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
-                }`}
-              >
-                {biometricEnabled ? '✓ Aktif' : 'Aktifkan'}
-              </button>
-            </div>
 
-            {/* Toggle Notifikasi Mobile (Req 8) */}
-            <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
-              <div className="flex items-center gap-2.5">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
-                  mobileNotifEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
-                }`}>
-                  <Smartphone className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="font-bold text-white text-xs">Notifikasi Mobile (Surat & Chat)</div>
-                  <div className="text-[10px] text-slate-400">
-                    {mobileNotifEnabled ? 'Notifikasi perangkat langsung aktif' : 'Aktifkan saat aplikasi terinstal'}
+              {/* Toggle Notifikasi Mobile (Req 8) */}
+              <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
+                    mobileNotifEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                  }`}>
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-white text-xs">Notifikasi Mobile (Surat & Chat)</div>
+                    <div className="text-[10px] text-slate-400">
+                      {mobileNotifEnabled ? 'Notifikasi perangkat langsung aktif' : 'Aktifkan saat aplikasi terinstal'}
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleToggleMobileNotifications}
+                  className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
+                    mobileNotifEnabled
+                      ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
+                  }`}
+                >
+                  {mobileNotifEnabled ? '✓ Aktif' : 'Aktifkan'}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleToggleMobileNotifications}
-                className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
-                  mobileNotifEnabled
-                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
-                }`}
-              >
-                {mobileNotifEnabled ? '✓ Aktif' : 'Aktifkan'}
-              </button>
             </div>
-          </div>
+          )}
 
           {/* ================= BUTTONS LIST ================= */}
           {isMember ? (
@@ -1589,50 +1613,46 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span className="text-emerald-400">›</span>
               </button>
             </div>
-          ) : (
-            /* Admin Options */
+          ) : isSuperAdmin ? (
+            /* Super Admin Options */
             <div className="space-y-2">
               <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pt-2">
-                {isSuperAdmin ? 'Kelola Pengurus & Sistem' : 'Menu Pengaturan Pengurus'}
+                Kelola Pengurus & Sistem (Super Admin)
               </div>
 
               {/* KHUSUS SUPER ADMIN: Tambah Admin & Kelola Admin */}
-              {isSuperAdmin && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleOpenTambahAdmin}
-                    className="w-full p-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-black text-xs flex items-center justify-between shadow-lg transition-all"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Plus className="w-4 h-4" />
-                      <span>+ Tambah Admin / Pengurus Baru</span>
-                    </div>
-                    <span>›</span>
-                  </button>
+              <button
+                type="button"
+                onClick={handleOpenTambahAdmin}
+                className="w-full p-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-black text-xs flex items-center justify-between shadow-lg transition-all"
+              >
+                <div className="flex items-center gap-2">
+                  <Plus className="w-4 h-4" />
+                  <span>+ Tambah Admin / Pengurus Baru</span>
+                </div>
+                <span>›</span>
+              </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setSubModal('daftar_admin')}
-                    className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all text-left"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Shield className="w-4 h-4 text-sky-400 shrink-0" />
-                      <div>
-                        <div className="font-extrabold text-white">
-                          Kelola Administrator Koperasi ({state.admins.length} Admin)
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-normal">
-                          Super Admin: Edit, tambah, atau hapus akun pengurus
-                        </div>
-                      </div>
+              <button
+                type="button"
+                onClick={() => setSubModal('daftar_admin')}
+                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all text-left"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Shield className="w-4 h-4 text-sky-400 shrink-0" />
+                  <div>
+                    <div className="font-extrabold text-white">
+                      Kelola Administrator Koperasi ({state.admins.length} Admin)
                     </div>
-                    <span>›</span>
-                  </button>
-                </>
-              )}
+                    <div className="text-[10px] text-slate-400 font-normal">
+                      Super Admin: Edit, tambah, atau hapus akun pengurus
+                    </div>
+                  </div>
+                </div>
+                <span>›</span>
+              </button>
 
-              {/* Biodata & Rekening Penampungan Koperasi (Req 3, 4, 5: Admin write, kelola, laporan hanya dapat melihat) */}
+              {/* Biodata & Rekening Penampungan Koperasi */}
               <button
                 onClick={() => setSubModal('profil_koperasi')}
                 className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
@@ -1641,86 +1661,78 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <Building className="w-4 h-4 text-emerald-400" />
                   <div className="text-left">
                     <div className="font-extrabold text-white">Biodata & Rekening Penampungan Koperasi</div>
-                    {!isSuperAdmin && (
-                      <div className="text-[10px] text-emerald-400 font-normal">
-                        Mode Lihat Saja (Informasi Rekening Resmi)
-                      </div>
-                    )}
+                    <div className="text-[10px] text-slate-400 font-normal">
+                      Kelola legalitas, susunan pengurus, dan rekening bank
+                    </div>
                   </div>
                 </div>
                 <span>›</span>
               </button>
 
-              {/* Sesuaikan Saldo Anggota (Hanya Super Admin & Admin Kelola tertentu jika diizinkan) */}
-              {isSuperAdmin && (
-                <button
-                  onClick={() => setSubModal('sesuaikan_saldo')}
-                  className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <DollarSign className="w-4 h-4 text-emerald-400" />
-                    <span>Penyesuaian Saldo Anggota</span>
+              {/* Sesuaikan Saldo Anggota */}
+              <button
+                onClick={() => setSubModal('sesuaikan_saldo')}
+                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <DollarSign className="w-4 h-4 text-emerald-400" />
+                  <span>Penyesuaian Saldo Anggota</span>
+                </div>
+                <span>›</span>
+              </button>
+
+              {/* Analisis Sistem, Firebase, Google Drive, Log Audit */}
+              <button
+                onClick={() => {
+                  setSubModal('analisis_error');
+                  fetchDiagnostics();
+                }}
+                className="w-full p-3 bg-red-950/40 hover:bg-red-900/60 rounded-2xl border border-red-500/50 flex items-center justify-between text-xs font-bold text-red-200 transition-all shadow-md shadow-red-950/50"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Activity className="w-4 h-4 text-red-400 shrink-0" />
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Analisis Sistem & Diagnostik Error (Super Admin)</div>
+                    <div className="text-[10px] text-red-300 font-normal">Device online, storage, speed, SQL Google & Firestore</div>
                   </div>
-                  <span>›</span>
-                </button>
-              )}
+                </div>
+                <span className="text-red-400 font-bold">›</span>
+              </button>
 
-              {/* KHUSUS SUPER ADMIN: Analisis Sistem, Firebase, Google Drive, Log Audit (Req 1, 2) */}
-              {isSuperAdmin && (
-                <>
-                  <button
-                    onClick={() => {
-                      setSubModal('analisis_error');
-                      fetchDiagnostics();
-                    }}
-                    className="w-full p-3 bg-red-950/40 hover:bg-red-900/60 rounded-2xl border border-red-500/50 flex items-center justify-between text-xs font-bold text-red-200 transition-all shadow-md shadow-red-950/50"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Activity className="w-4 h-4 text-red-400 shrink-0" />
-                      <div className="text-left">
-                        <div className="font-extrabold text-white text-xs">Analisis Sistem & Diagnostik Error (Super Admin)</div>
-                        <div className="text-[10px] text-red-300 font-normal">Device online, storage, speed, SQL Google & Firestore</div>
-                      </div>
-                    </div>
-                    <span className="text-red-400 font-bold">›</span>
-                  </button>
+              <button
+                onClick={() => setSubModal('cloud_server')}
+                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Server className="w-4 h-4 text-purple-400" />
+                  <span>Server Firebase Cloud Firestore</span>
+                </div>
+                <span>›</span>
+              </button>
 
-                  <button
-                    onClick={() => setSubModal('cloud_server')}
-                    className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Server className="w-4 h-4 text-purple-400" />
-                      <span>Server Firebase Cloud Firestore</span>
-                    </div>
-                    <span>›</span>
-                  </button>
+              <button
+                onClick={() => setSubModal('google_drive')}
+                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Cloud className="w-4 h-4 text-amber-400" />
+                  <span>Cadangan Google Drive (Backup Cloud)</span>
+                </div>
+                <span>›</span>
+              </button>
 
-                  <button
-                    onClick={() => setSubModal('google_drive')}
-                    className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Cloud className="w-4 h-4 text-amber-400" />
-                      <span>Cadangan Google Drive (Backup Cloud)</span>
-                    </div>
-                    <span>›</span>
-                  </button>
+              <button
+                onClick={() => setSubModal('log_audit')}
+                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
+              >
+                <div className="flex items-center gap-2.5">
+                  <FileText className="w-4 h-4 text-sky-400" />
+                  <span>Log Audit Aktivitas Sistem (60 Hari)</span>
+                </div>
+                <span>›</span>
+              </button>
 
-                  <button
-                    onClick={() => setSubModal('log_audit')}
-                    className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <FileText className="w-4 h-4 text-sky-400" />
-                      <span>Log Audit Aktivitas Sistem (60 Hari)</span>
-                    </div>
-                    <span>›</span>
-                  </button>
-                </>
-              )}
-
-              {/* Menu Instal Aplikasi Koperasi (HANYA ADA: Unduh Android, Unduh iOS, Unduh .EXE per Req 6) */}
+              {/* Menu Instal Aplikasi Koperasi */}
               <button
                 onClick={() => setSubModal('install_pwa')}
                 className="w-full p-3 bg-emerald-950/40 hover:bg-emerald-950/60 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-all"
@@ -1736,6 +1748,96 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
                 <span>›</span>
               </button>
+            </div>
+          ) : (
+            /* Non-Super Admin Options (Req 3, 4, 5: Admin write, kelola, laporan hanya dapat melihat biodata & rekening penampungan) */
+            <div className="space-y-3">
+              <div className="p-3 bg-emerald-950/40 rounded-2xl border border-emerald-500/40 text-emerald-300 text-xs flex items-start gap-2.5">
+                <span className="text-base leading-none">👁️</span>
+                <div>
+                  <div className="font-extrabold text-white">
+                    Hak Akses Pengaturan: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_kelola' || currentAdmin?.role === 'admin_approval' ? 'Admin Kelola' : 'Admin Laporan'}
+                  </div>
+                  <div className="text-[11px] text-emerald-400/90 mt-0.5">
+                    Pada menu pengaturan, Anda hanya dapat melihat data <strong>Biodata Koperasi</strong> dan <strong>Rekening Penampungan</strong> resmi (Mode Lihat Saja).
+                  </div>
+                </div>
+              </div>
+
+              {/* Tombol Buka Biodata Koperasi Lengkap */}
+              <button
+                type="button"
+                onClick={() => setSubModal('profil_koperasi')}
+                className="w-full p-3.5 bg-gradient-to-r from-slate-800 to-slate-850 hover:bg-slate-750 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
+                    <Building className="w-5 h-5" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs group-hover:text-emerald-300 transition-colors">
+                      Biodata & Legalitas Resmi Koperasi
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-normal mt-0.5">
+                      Lihat SK Kemenkumham, NPWP, NIK, alamat kantor, dan susunan pengurus
+                    </div>
+                  </div>
+                </div>
+                <span className="text-emerald-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+              </button>
+
+              {/* Kartu Rekening Penampungan Resmi (View Only dengan tombol Salin) */}
+              <div className="p-3.5 bg-[#162035] rounded-2xl border border-slate-700/80 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-amber-400" />
+                    <span className="font-extrabold text-white text-xs">
+                      Rekening Penampungan Resmi ({state.profile.rekeningPenampungan.length})
+                    </span>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                    Mode Lihat Saja
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {state.profile.rekeningPenampungan.map((rek) => (
+                    <div
+                      key={rek.id}
+                      className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-750 flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="text-xs font-extrabold text-white">{rek.bankName}</div>
+                        <div className="font-mono text-xs font-bold text-amber-400 tracking-wider">
+                          {rek.accountNumber}
+                        </div>
+                        <div className="text-[10px] text-slate-400">a/n {rek.accountHolder}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleCopyRek(rek.id, rek.accountNumber)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all ${
+                          copiedRekId === rek.id
+                            ? 'bg-emerald-500 text-slate-950 font-black'
+                            : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
+                        }`}
+                        title="Salin Nomor Rekening"
+                      >
+                        {copiedRekId === rek.id ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-slate-950" />
+                            <span>Tersalin!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Salin</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1754,7 +1856,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       </div>
 
       {/* ================= SUB-MODAL: EDIT PROFIL ANGGOTA ATAU ADMIN ================= */}
-      {subModal === 'edit_profile' && (
+      {subModal === 'edit_profile' && (isMember || isSuperAdmin) && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
@@ -2034,7 +2136,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: DAFTAR PENGURUS KOPERASI ================= */}
-      {subModal === 'daftar_admin' && (
+      {subModal === 'daftar_admin' && isSuperAdmin && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
@@ -2417,9 +2519,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       required
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioNama}
                       onChange={(e) => setBioNama(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                      className={`w-full p-2 rounded-xl text-white font-bold ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                   <div>
@@ -2427,9 +2533,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       required
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioBadanHukum}
                       onChange={(e) => setBioBadanHukum(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                      className={`w-full p-2 rounded-xl text-white font-mono ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                 </div>
@@ -2439,27 +2549,39 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">NPWP Koperasi</label>
                     <input
                       type="text"
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioNpwp}
                       onChange={(e) => setBioNpwp(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs"
+                      className={`w-full p-2 rounded-xl text-white font-mono text-xs ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-400">NIK Koperasi</label>
                     <input
                       type="text"
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioNik}
                       onChange={(e) => setBioNik(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs"
+                      className={`w-full p-2 rounded-xl text-white font-mono text-xs ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-400">Tanggal Pendirian</label>
                     <input
                       type="text"
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioTglPendirian}
                       onChange={(e) => setBioTglPendirian(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                      className={`w-full p-2 rounded-xl text-white text-xs ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                 </div>
@@ -2469,9 +2591,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <input
                     type="text"
                     required
+                    readOnly={!isSuperAdmin}
+                    disabled={!isSuperAdmin}
                     value={bioAlamat}
                     onChange={(e) => setBioAlamat(e.target.value)}
-                    className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                    className={`w-full p-2 rounded-xl text-white text-xs ${
+                      !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                    }`}
                   />
                 </div>
 
@@ -2480,27 +2606,39 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">No. Telepon / WA</label>
                     <input
                       type="text"
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioTelepon}
                       onChange={(e) => setBioTelepon(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono"
+                      className={`w-full p-2 rounded-xl text-white font-mono ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-400">Email Resmi</label>
                     <input
                       type="email"
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioEmail}
                       onChange={(e) => setBioEmail(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white"
+                      className={`w-full p-2 rounded-xl text-white ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-400">Website</label>
                     <input
                       type="text"
+                      readOnly={!isSuperAdmin}
+                      disabled={!isSuperAdmin}
                       value={bioWebsite}
                       onChange={(e) => setBioWebsite(e.target.value)}
-                      className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white"
+                      className={`w-full p-2 rounded-xl text-white ${
+                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      }`}
                     />
                   </div>
                 </div>
@@ -2509,9 +2647,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <label className="block text-[10px] text-slate-400">Visi Koperasi</label>
                   <input
                     type="text"
+                    readOnly={!isSuperAdmin}
+                    disabled={!isSuperAdmin}
                     value={bioVisi}
                     onChange={(e) => setBioVisi(e.target.value)}
-                    className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                    className={`w-full p-2 rounded-xl text-white text-xs ${
+                      !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                    }`}
                   />
                 </div>
 
@@ -2519,9 +2661,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <label className="block text-[10px] text-slate-400">Misi Koperasi</label>
                   <textarea
                     rows={2}
+                    readOnly={!isSuperAdmin}
+                    disabled={!isSuperAdmin}
                     value={bioMisi}
                     onChange={(e) => setBioMisi(e.target.value)}
-                    className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs"
+                    className={`w-full p-2 rounded-xl text-white text-xs ${
+                      !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                    }`}
                   />
                 </div>
 
@@ -2536,9 +2682,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
+                        readOnly={!isSuperAdmin}
+                        disabled={!isSuperAdmin}
                         value={bioKetua}
                         onChange={(e) => setBioKetua(e.target.value)}
-                        className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                        className={`w-full p-2 rounded-xl text-white font-bold ${
+                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        }`}
                       />
                     </div>
                     <div>
@@ -2546,9 +2696,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
+                        readOnly={!isSuperAdmin}
+                        disabled={!isSuperAdmin}
                         value={bioWakil}
                         onChange={(e) => setBioWakil(e.target.value)}
-                        className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                        className={`w-full p-2 rounded-xl text-white font-bold ${
+                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        }`}
                       />
                     </div>
                     <div>
@@ -2556,9 +2710,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
+                        readOnly={!isSuperAdmin}
+                        disabled={!isSuperAdmin}
                         value={bioSekretaris}
                         onChange={(e) => setBioSekretaris(e.target.value)}
-                        className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                        className={`w-full p-2 rounded-xl text-white font-bold ${
+                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        }`}
                       />
                     </div>
                     <div>
@@ -2566,30 +2724,43 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
+                        readOnly={!isSuperAdmin}
+                        disabled={!isSuperAdmin}
                         value={bioBendahara}
                         onChange={(e) => setBioBendahara(e.target.value)}
-                        className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                        className={`w-full p-2 rounded-xl text-white font-bold ${
+                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        }`}
                       />
                     </div>
                     <div className="col-span-2">
                       <label className="block text-[10px] text-slate-400">Ketua Dewan Pengawas (Opsional)</label>
                       <input
                         type="text"
+                        readOnly={!isSuperAdmin}
+                        disabled={!isSuperAdmin}
                         value={bioPengawas}
                         onChange={(e) => setBioPengawas(e.target.value)}
-                        className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                        className={`w-full p-2 rounded-xl text-white font-bold ${
+                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        }`}
                       />
                     </div>
                   </div>
                 </div>
 
-                {isSuperAdmin && (
+                {isSuperAdmin ? (
                   <button
                     type="submit"
                     className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl transition-all shadow-lg"
                   >
                     Simpan Biodata & Susunan Pengurus Koperasi
                   </button>
+                ) : (
+                  <div className="p-2.5 rounded-xl bg-slate-900/90 border border-emerald-500/30 text-center text-xs text-emerald-400 font-bold flex items-center justify-center gap-1.5">
+                    <span>✓</span>
+                    <span>Biodata & Legalitas Resmi Koperasi HWS (Mode Lihat Saja - Terverifikasi)</span>
+                  </div>
                 )}
               </form>
 
@@ -2663,7 +2834,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                             <div className="text-[10px] text-slate-400">a/n {rek.accountHolder}</div>
                           </div>
 
-                          {isSuperAdmin && (
+                          {isSuperAdmin ? (
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
@@ -2687,6 +2858,29 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleCopyRek(rek.id, rek.accountNumber)}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all ${
+                                copiedRekId === rek.id
+                                  ? 'bg-emerald-500 text-slate-950 font-black'
+                                  : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
+                              }`}
+                              title="Salin Nomor Rekening"
+                            >
+                              {copiedRekId === rek.id ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5 text-slate-950" />
+                                  <span>Tersalin!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>Salin</span>
+                                </>
+                              )}
+                            </button>
                           )}
                         </div>
                       )}
@@ -2770,7 +2964,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: TAMBAH ADMIN BARU ================= */}
-      {subModal === 'tambah_admin' && (
+      {subModal === 'tambah_admin' && isSuperAdmin && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
@@ -3093,7 +3287,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: EDIT AKUN ADMIN (SUPER ADMIN) ================= */}
-      {subModal === 'edit_admin' && selectedAdminToEdit && (
+      {subModal === 'edit_admin' && isSuperAdmin && selectedAdminToEdit && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
@@ -3427,7 +3621,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: LOG AUDIT (60 HARI) ================= */}
-      {subModal === 'log_audit' && (
+      {subModal === 'log_audit' && isSuperAdmin && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-3xl rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-700 mb-3 gap-2">
@@ -3587,7 +3781,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: PENYESUAIAN SALDO ================= */}
-      {subModal === 'sesuaikan_saldo' && (
+      {subModal === 'sesuaikan_saldo' && isSuperAdmin && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-3">
@@ -3785,7 +3979,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: GOOGLE DRIVE MANAGER (WORKSPACE RESMI) ================= */}
-      {subModal === 'google_drive' && (
+      {subModal === 'google_drive' && isSuperAdmin && (
         <GoogleDriveModal
           state={state}
           currentAdmin={currentAdmin}
@@ -3794,7 +3988,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: CLOUD SERVER FIREBASE FIRESTORE ================= */}
-      {subModal === 'cloud_server' && (
+      {subModal === 'cloud_server' && isSuperAdmin && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl text-xs space-y-3">
             <div className="flex justify-between items-center pb-2 border-b border-slate-700">
@@ -4199,7 +4393,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
 
       {/* ================= SUB-MODAL: INSTALL PWA / APLIKASI KOPERASI (REQ 2 & 6: HANYA ANDROID, IOS, DAN PC .EXE) ================= */}
-      {subModal === 'install_pwa' && (
+      {subModal === 'install_pwa' && (isMember || isSuperAdmin) && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-[#0f172a] border border-slate-700/80 w-full max-w-lg rounded-3xl p-5 shadow-2xl text-xs space-y-4 my-4">
             <div className="flex justify-between items-center pb-2.5 border-b border-slate-700">

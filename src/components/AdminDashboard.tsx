@@ -13,6 +13,7 @@ import { LogoHws } from '../lib/logo';
 import { MemberVerificationView } from './MemberVerificationView';
 import { MemberListView } from './MemberListView';
 import { BukuKasView } from './BukuKasView';
+import { PenyesuaianSaldoView } from './PenyesuaianSaldoView';
 import { ZakatQurbanView } from './ZakatQurbanView';
 import { SuratMenyuratView } from './SuratMenyuratView';
 import { ChatOnlineView } from './ChatOnlineView';
@@ -42,6 +43,7 @@ import {
   X,
   Sparkles,
   Activity,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -70,7 +72,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const currentAdmin = state.admins.find((a) => a.id === admin.id) || admin;
 
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'verifikasi' | 'anggota' | 'kas' | 'zakat' | 'surat' | 'chat'
+    'dashboard' | 'verifikasi' | 'anggota' | 'kas' | 'penyesuaian_saldo' | 'zakat' | 'surat' | 'chat'
   >('dashboard');
 
   const [showSettings, setShowSettings] = useState(false);
@@ -104,6 +106,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     new Set(state.chatMessages.map((m) => m.id))
   );
   const isInitialMountRef = useRef<boolean>(true);
+
+  const unreadSuratAdminCount = state.suratList.filter((s) => {
+    const readList = s.readByAdminIds || [];
+    return !readList.includes(currentAdmin.id);
+  }).length;
 
   // Requirement 7: 1x klik kembali ke menu sebelumnya, 3x klik logout
   const backClicksRef = useRef<number>(0);
@@ -270,9 +277,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearTimeout(timer);
   }, [toasts]);
 
-  // Role permissions
+  // Role permissions (Req I)
   const isSuperAdmin = currentAdmin.role === 'super_admin';
-  const isKelola = currentAdmin.role === 'admin_kelola' || currentAdmin.role === 'admin_pembukuan';
+  const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola' || currentAdmin.role === 'admin_pembukuan';
+  const isKelola = isApproval;
   const isWriter = currentAdmin.role === 'admin_write';
   const isLaporan = currentAdmin.role === 'admin_laporan';
 
@@ -631,6 +639,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             Buku Kas & Neraca
           </button>
 
+          {!isLaporan && (
+            <button
+              onClick={() => setActiveTab('penyesuaian_saldo')}
+              className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
+                activeTab === 'penyesuaian_saldo'
+                  ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              Penyesuaian Saldo
+            </button>
+          )}
+
           <button
             onClick={() => setActiveTab('zakat')}
             className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
@@ -653,7 +675,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
             >
               <Mail className="w-3.5 h-3.5" />
-              Surat Menyurat
+              <span>Surat Menyurat</span>
+              {unreadSuratAdminCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[9px] font-black">
+                  {unreadSuratAdminCount}
+                </span>
+              )}
             </button>
           )}
 
@@ -694,6 +721,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {activeTab === 'verifikasi' && 'Verifikasi Setoran'}
               {activeTab === 'anggota' && 'Data Anggota'}
               {activeTab === 'kas' && 'Buku Kas & Neraca'}
+              {activeTab === 'penyesuaian_saldo' && 'Penyesuaian Saldo Anggota'}
               {activeTab === 'zakat' && 'Zakat & Qurban'}
               {activeTab === 'surat' && 'Surat Menyurat'}
               {activeTab === 'chat' && 'Chat Online'}
@@ -797,7 +825,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 <div className="space-y-2 pt-2">
-                  {(isSuperAdmin || isKelola) && (
+                  {isSuperAdmin && (
                     <button
                       type="button"
                       onClick={() => {
@@ -974,6 +1002,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span>›</span>
                 </button>
 
+                {!isLaporan && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('penyesuaian_saldo')}
+                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 hover:border-amber-500/60 text-white flex items-center justify-between text-left transition-all group shadow-md"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-slate-800 text-amber-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                        <SlidersHorizontal className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-extrabold flex items-center gap-1.5">
+                          <span>5. Penyesuaian Saldo Anggota</span>
+                          <span className="text-[9px] bg-amber-500/20 text-amber-300 font-black px-1.5 py-0.2 rounded">Baru</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Koreksi Saldo Manual & Pembagian Hasil (% Pokok / SHU)
+                        </div>
+                      </div>
+                    </div>
+                    <span>›</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setActiveTab('zakat')}
@@ -984,7 +1036,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <HeartHandshake className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-extrabold">5. Zakat & Qurban</div>
+                      <div className="text-xs font-extrabold">6. Zakat & Qurban</div>
                       <div className="text-[10px] text-slate-400">
                         Penyaluran Zakat Fitrah & Tabungan Qurban
                       </div>
@@ -1004,7 +1056,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <Mail className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="text-xs font-extrabold">6. Surat Menyurat</div>
+                        <div className="text-xs font-extrabold flex items-center gap-1.5">
+                          <span>7. Surat Menyurat</span>
+                          {unreadSuratAdminCount > 0 && (
+                            <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black animate-pulse">
+                              {unreadSuratAdminCount}
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[10px] text-slate-400">
                           Terbitkan surat resmi ke WhatsApp & Email
                         </div>
@@ -1025,7 +1084,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <MessageSquare className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="text-xs font-extrabold">7. Chat Online</div>
+                        <div className="text-xs font-extrabold">8. Chat Online</div>
                         <div className="text-[10px] text-slate-400">
                           Obrolan langsung realtime dengan anggota
                         </div>
@@ -1109,6 +1168,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           />
         ) : activeTab === 'kas' ? (
           <BukuKasView
+            state={state}
+            updateState={updateState}
+            currentAdmin={currentAdmin}
+          />
+        ) : activeTab === 'penyesuaian_saldo' ? (
+          <PenyesuaianSaldoView
             state={state}
             updateState={updateState}
             currentAdmin={currentAdmin}

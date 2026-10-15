@@ -1,0 +1,6 @@
+{
+  "summary": "Rencana implementasi lengkap pembaruan Koperasi HWS:\n1. Restorasi dan perlindungan database realtime Firebase & server agar data anggota dan kas tidak tertimpa/terhapus saat pembaruan sistem.\n2. Penambahan menu 'Penyesuaian Saldo Anggota' yang mencakup Koreksi Saldo (Pemasukan/Pengeluaran untuk Seluruh/Perwilayah/Perorangan) dan Pembagian Hasil (% kalkulasi dari Tabungan Pokok dengan pilihan buku kas dan kredit fleksibel).\n3. Perbaikan alur instalasi aplikasi dan pemindahan tombol pasang ke bagian bawah login, verifikasi file installer bersih dari blokir antivirus, serta konfirmasi syarat & ketentuan sebelum masuk login panel.\n4. Komponen antarmuka 'Pengaturan Keamanan' di dashboard anggota & admin untuk toggle aktivasi biometric yang tersimpan di localStorage.\n5. Pengecekan autentikasi biometric di LoginView berdasarkan status aktif di Pengaturan Keamanan.\n6. Laporan keuangan bulanan multi-halaman (Rekap Laba/Rugi di halaman depan dan Perincian Kategori di halaman selanjutnya) serta filter periode fleksibel.\n7. Penyempurnaan logo icon aplikasi versi Android dan iOS.\n8. Penegasan hak akses 4 role admin (Super Admin, Admin Write, Admin Approval, Admin Laporan).",
+  "updatedAt": "2026-10-15T10:09:14.602193465Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

@@ -68,12 +68,13 @@ export interface KoperasiProfile {
 }
 
 export type AdminRole = 
-  | 'super_admin'       // Akses penuh, kelola admin, hapus anggota, approval kas, lihat audit log
-  | 'sekretaris'        // Sekretaris / Super Admin Koperasi
-  | 'admin_kelola'      // Admin kelola: tidak bisa masuk ke server, tidak bisa tambah admin, bisa approval
-  | 'admin_pembukuan'   // Alias kompatibilitas untuk admin_kelola
-  | 'admin_write'       // Admin write: input dan download laporan, semua inputan perlu approval super admin dan admin kelola. Verifikasi setoran.
-  | 'admin_laporan';    // Admin laporan: hanya bisa unduh data qurban dan zakat, data anggota, laporan keuangan, serta buku kas.
+  | 'super_admin'       // 1. Super Admin: Akses penuh semuanya
+  | 'admin_write'       // 2. Admin Write: Input dan unduh laporan, keluar kas, qurban, zakat dan edit anggota persetujuan admin approval, download laporan
+  | 'admin_approval'    // 3. Admin Approval: Tidak dapat input kas; input anggota edit anggota bisa, laporan bisa, qurban zakat hanya approval
+  | 'admin_laporan'     // 4. Admin Laporan: Hanya unduh laporan anggota, laporan zakat qurban, dan laporan kas
+  | 'sekretaris'        // Kompatibilitas
+  | 'admin_kelola'      // Kompatibilitas admin_approval
+  | 'admin_pembukuan';  // Kompatibilitas admin_approval
 
 export interface AdminUser {
   id: string;

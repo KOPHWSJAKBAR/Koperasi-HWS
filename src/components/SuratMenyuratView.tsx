@@ -8,6 +8,7 @@ import {
 import { createAuditLog } from '../lib/storage';
 import { printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
+import { sendRealtimeNotification } from '../lib/fcm';
 import {
   Mail,
   Send,
@@ -18,6 +19,9 @@ import {
   FileText,
   PlusCircle,
   ExternalLink,
+  Eye,
+  CheckCheck,
+  X,
 } from 'lucide-react';
 
 interface SuratMenyuratViewProps {
@@ -51,6 +55,92 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
     return true;
   });
 
+  // Helper check if surat is read by current user (Req 5)
+  const isSuratRead = (surat: SuratResmi) => {
+    if (isMember && currentMember) {
+      return (surat.readByMemberIds || []).includes(currentMember.id);
+    }
+    if (currentAdmin) {
+      return (surat.readByAdminIds || []).includes(currentAdmin.id);
+    }
+    return false;
+  };
+
+  const markSuratAsRead = async (surat: SuratResmi) => {
+    const currentReaderId = isMember ? currentMember?.id : currentAdmin?.id;
+    if (!currentReaderId) return;
+
+    if (isMember) {
+      if ((surat.readByMemberIds || []).includes(currentReaderId)) return;
+      await updateState((prev) => ({
+        ...prev,
+        suratList: prev.suratList.map((s) =>
+          s.id === surat.id
+            ? { ...s, readByMemberIds: Array.from(new Set([...(s.readByMemberIds || []), currentReaderId])) }
+            : s
+        ),
+      }));
+    } else {
+      if ((surat.readByAdminIds || []).includes(currentReaderId)) return;
+      await updateState((prev) => ({
+        ...prev,
+        suratList: prev.suratList.map((s) =>
+          s.id === surat.id
+            ? { ...s, readByAdminIds: Array.from(new Set([...(s.readByAdminIds || []), currentReaderId])) }
+            : s
+        ),
+      }));
+    }
+
+    try {
+      fetch('/api/surat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          suratId: surat.id,
+          readerId: currentReaderId,
+          readerType: isMember ? 'member' : 'admin',
+        }),
+      }).catch(() => {});
+    } catch {}
+  };
+
+  const handleMarkAllRead = async () => {
+    const currentReaderId = isMember ? currentMember?.id : currentAdmin?.id;
+    if (!currentReaderId) return;
+
+    await updateState((prev) => ({
+      ...prev,
+      suratList: prev.suratList.map((s) => {
+        if (isMember) {
+          const isTarget = s.tujuanTipe === 'semua' || s.targetMemberId === currentMember?.id;
+          if (!isTarget) return s;
+          return {
+            ...s,
+            readByMemberIds: Array.from(new Set([...(s.readByMemberIds || []), currentReaderId])),
+          };
+        } else {
+          return {
+            ...s,
+            readByAdminIds: Array.from(new Set([...(s.readByAdminIds || []), currentReaderId])),
+          };
+        }
+      }),
+    }));
+
+    displaySuratList.forEach((s) => {
+      fetch('/api/surat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          suratId: s.id,
+          readerId: currentReaderId,
+          readerType: isMember ? 'member' : 'admin',
+        }),
+      }).catch(() => {});
+    });
+  };
+
   const handleCreateSurat = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentAdmin) return;
@@ -70,6 +160,8 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
       diterbitkanOleh: currentAdmin.nama,
       statusTerkirimWa: true,
       statusTerkirimEmail: true,
+      readByAdminIds: [currentAdmin.id],
+      readByMemberIds: [],
       createdAt: new Date().toISOString(),
     };
 
@@ -86,10 +178,28 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
       auditLogs: [audit, ...prev.auditLogs],
     }));
 
+    // Trigger Realtime Notifications (Req 5 & 1)
+    sendRealtimeNotification({
+      recipientId: tujuanTipe === 'perorangan' ? (targetMemberId || 'all') : 'all',
+      recipientNama: newSurat.targetMemberNama,
+      title: '📬 Surat Resmi Baru Koperasi HWS',
+      body: `Perihal: "${perihal}". Nomor: ${nomorSurat}. Ketuk untuk membaca edaran resmi koperasi.`,
+      type: 'surat_baru',
+      data: { suratId: newSurat.id },
+    }).catch(() => {});
+
+    try {
+      fetch('/api/surat/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ surat: newSurat, adminName: currentAdmin.nama }),
+      }).catch(() => {});
+    } catch {}
+
     setShowComposeModal(false);
     setPerihal('');
     setIsiSurat('');
-    alert('Surat resmi berhasil diterbitkan!');
+    alert('✓ Surat resmi berhasil diterbitkan & notifikasi realtime dikirim ke anggota!');
   };
 
   const handlePrintSurat = (surat: SuratResmi) => {
@@ -185,6 +295,8 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
     window.open(`mailto:${email || ''}?subject=${subject}&body=${body}`, '_blank');
   };
 
+  const unreadCount = displaySuratList.filter((s) => !isSuratRead(s)).length;
+
   return (
     <div className="space-y-6">
       <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl">
@@ -192,77 +304,136 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
           <div>
             <h3 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
               <Mail className="w-5 h-5 text-amber-500" />
-              Surat Menyurat & Edaran Resmi Koperasi
+              <span>Surat Menyurat & Edaran Resmi Koperasi</span>
+              {unreadCount > 0 && (
+                <span className="px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-black animate-pulse">
+                  {unreadCount} Belum Dibaca
+                </span>
+              )}
             </h3>
             <p className="text-xs text-slate-400">
-              Penerbitan surat edaran terintegrasi WhatsApp & Email anggota
+              Penerbitan surat edaran resmi terintegrasi real-time, WhatsApp, & email
             </p>
           </div>
 
-          {!isMember && (
-            <button
-              onClick={() => setShowComposeModal(true)}
-              className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5"
-            >
-              <PlusCircle className="w-4 h-4" />
-              + Terbitkan Surat Baru
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {unreadCount > 0 && (
+              <button
+                type="button"
+                onClick={handleMarkAllRead}
+                className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl border border-slate-650 flex items-center gap-1.5 transition-all shadow-sm"
+                title="Tandai semua surat sebagai sudah dibaca"
+              >
+                <CheckCheck className="w-3.5 h-3.5 text-amber-400" />
+                <span>Tandai Semua Dibaca</span>
+              </button>
+            )}
+
+            {!isMember && (
+              <button
+                onClick={() => setShowComposeModal(true)}
+                className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>+ Terbitkan Surat Baru</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* List of letters */}
         <div className="space-y-3 mt-4">
-          {displaySuratList.map((surat) => (
-            <div
-              key={surat.id}
-              className="p-4 bg-slate-800/60 hover:bg-slate-800/90 rounded-2xl border border-slate-700/60 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-            >
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-amber-400 text-xs font-bold">
-                    {surat.nomorSurat}
-                  </span>
-                  <span className="text-[10px] text-slate-400">• {surat.tanggal}</span>
-                  <span className="text-[10px] bg-sky-500/10 text-sky-400 px-2 py-0.5 rounded-full border border-sky-500/20 font-bold">
-                    {surat.targetMemberNama}
-                  </span>
+          {displaySuratList.map((surat) => {
+            const isRead = isSuratRead(surat);
+            return (
+              <div
+                key={surat.id}
+                onClick={() => {
+                  markSuratAsRead(surat);
+                  setPreviewSurat(surat);
+                }}
+                className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer group ${
+                  !isRead
+                    ? 'bg-gradient-to-r from-amber-500/10 via-slate-800/80 to-slate-800/80 border-amber-500/50 hover:border-amber-400 shadow-md ring-1 ring-amber-500/30'
+                    : 'bg-slate-800/60 hover:bg-slate-800/90 border-slate-700/60'
+                }`}
+              >
+                <div className="space-y-1 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!isRead ? (
+                      <span className="text-[10px] bg-red-500 text-white font-black px-2 py-0.5 rounded-full uppercase tracking-wider animate-pulse shadow-sm">
+                        BARU
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-slate-700 text-slate-400 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <CheckCheck className="w-3 h-3 text-emerald-400" /> Sudah Dibaca
+                      </span>
+                    )}
+                    <span className="font-mono text-amber-400 text-xs font-bold">
+                      {surat.nomorSurat}
+                    </span>
+                    <span className="text-[10px] text-slate-400">• {surat.tanggal}</span>
+                    <span className="text-[10px] bg-sky-500/10 text-sky-400 px-2 py-0.5 rounded-full border border-sky-500/20 font-bold">
+                      {surat.targetMemberNama}
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-extrabold text-white group-hover:text-amber-400 transition-colors">
+                    {surat.perihal}
+                  </h4>
+                  <p className="text-xs text-slate-300 line-clamp-2">{surat.isiSurat}</p>
                 </div>
-                <h4 className="text-sm font-extrabold text-white">{surat.perihal}</h4>
-                <p className="text-xs text-slate-300 line-clamp-2">{surat.isiSurat}</p>
-              </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  onClick={() => handlePrintSurat(surat)}
-                  className="py-1.5 px-3 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1"
+                <div
+                  className="flex items-center gap-1.5 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <Printer className="w-3.5 h-3.5 text-amber-400" />
-                  Cetak Kop
-                </button>
+                  <button
+                    onClick={() => {
+                      markSuratAsRead(surat);
+                      setPreviewSurat(surat);
+                    }}
+                    className="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-650 rounded-xl text-xs font-bold flex items-center gap-1"
+                    title="Buka & Baca Surat"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Baca</span>
+                  </button>
 
-                {!isMember && (
-                  <>
-                    <button
-                      onClick={() => handleSendWa(surat, surat.targetMemberId ? state.members.find(m => m.id === surat.targetMemberId)?.whatsapp : '')}
-                      className="py-1.5 px-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1"
-                      title="Kirim via WhatsApp"
-                    >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      WA
-                    </button>
-                    <button
-                      onClick={() => handleSendEmail(surat, surat.targetMemberId ? state.members.find(m => m.id === surat.targetMemberId)?.email : '')}
-                      className="py-1.5 px-2.5 bg-sky-600/20 hover:bg-sky-600/30 text-sky-400 border border-sky-500/30 rounded-xl text-xs font-bold flex items-center gap-1"
-                      title="Kirim via Email"
-                    >
-                      <Mail className="w-3.5 h-3.5" />
-                      Email
-                    </button>
-                  </>
-                )}
+                  <button
+                    onClick={() => {
+                      markSuratAsRead(surat);
+                      handlePrintSurat(surat);
+                    }}
+                    className="py-1.5 px-3 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Cetak Kop</span>
+                  </button>
+
+                  {!isMember && (
+                    <>
+                      <button
+                        onClick={() => handleSendWa(surat, surat.targetMemberId ? state.members.find(m => m.id === surat.targetMemberId)?.whatsapp : '')}
+                        className="py-1.5 px-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1"
+                        title="Kirim via WhatsApp"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        <span>WA</span>
+                      </button>
+                      <button
+                        onClick={() => handleSendEmail(surat, surat.targetMemberId ? state.members.find(m => m.id === surat.targetMemberId)?.email : '')}
+                        className="py-1.5 px-2.5 bg-sky-600/20 hover:bg-sky-600/30 text-sky-400 border border-sky-500/30 rounded-xl text-xs font-bold flex items-center gap-1"
+                        title="Kirim via Email"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>Email</span>
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {displaySuratList.length === 0 && (
             <div className="text-center py-8 text-slate-500 text-xs">
@@ -271,6 +442,64 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Modal Baca Surat Lengkap (Req 5) */}
+      {previewSurat && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] text-slate-100 border border-slate-700/80 w-full max-w-2xl rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-6">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-lg shrink-0 font-bold border border-amber-500/30">
+                  📬
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-white">
+                    {previewSurat.perihal}
+                  </h3>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {previewSurat.nomorSurat} • {previewSurat.tanggal}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewSurat(null)}
+                className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-3 text-xs">
+              <div className="flex justify-between items-center pb-2 border-b border-slate-800 text-[11px] text-slate-400">
+                <span>Penerima: <strong className="text-amber-300">{previewSurat.targetMemberNama}</strong></span>
+                <span>Diterbitkan Oleh: <strong className="text-white">{previewSurat.diterbitkanOleh}</strong></span>
+              </div>
+              <div className="text-slate-200 leading-relaxed whitespace-pre-wrap font-sans text-xs sm:text-sm">
+                {previewSurat.isiSurat}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <button
+                type="button"
+                onClick={() => handlePrintSurat(previewSurat)}
+                className="py-2 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Cetak Lembar Resmi</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewSurat(null)}
+                className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Terbitkan Surat */}
       {showComposeModal && (
