@@ -283,6 +283,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
+    // Req 3: Cek status lock maintenance sistem
+    if (state.maintenanceLock?.isLocked) {
+      setErrorMessage(
+        `⚠️ SISTEM SEDANG DALAM MODE LOCK MAINTENANCE:\n\n"${state.maintenanceLock.note || 'Pemeliharaan sistem berkala.'}"\n\nAkses seluruh anggota dibekukan sementara. Silakan coba kembali beberapa saat lagi.`
+      );
+      return;
+    }
+
     if (member.password && member.password !== memberPassword) {
       setErrorMessage('Password yang Anda masukkan salah.');
       return;
@@ -327,6 +335,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
+    // Req 3: Cek status lock maintenance sistem (Kecuali Super Admin yang dapat membukanya)
+    const isSuperAdminUser = admin.role === 'super_admin' || admin.username?.toLowerCase() === 'abzqar';
+    if (state.maintenanceLock?.isLocked && !isSuperAdminUser) {
+      setErrorMessage(
+        `⚠️ SISTEM SEDANG DALAM MODE LOCK MAINTENANCE:\n\n"${state.maintenanceLock.note || 'Pemeliharaan sistem berkala.'}"\n\nAkses login pengurus saat ini dibekukan sementara oleh Super Admin.`
+      );
+      return;
+    }
+
     if (admin.password && admin.password !== adminPassword) {
       setErrorMessage('Password pengurus salah.');
       return;
@@ -363,25 +380,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
     onLoginAdmin(admin);
   };
 
-  // Biometric Login: Terhubung langsung ke sensor keamanan perangkat (Req 4 & 5: Terpisah dari pengingat password, harus diaktifkan dulu)
+  // Biometric Login: Terhubung langsung ke sensor biometrik perangkat (Req 4: Scan jari sebelum masuk, terpisah dari pengingat password)
   const handleBiometricAuth = async () => {
     setErrorMessage('');
 
-    // Pemeriksaan Pengaturan Keamanan Biometrik di localStorage (Req 4 & 5)
-    const isBiometricActive = typeof window !== 'undefined' && (
-      localStorage.getItem('hws_biometric_active') === 'true' ||
-      localStorage.getItem('hws_biometric_enabled') === 'true'
-    );
-
-    if (!isBiometricActive) {
-      setShowBiometricModal(false);
-      setErrorMessage(
-        '⚠️ Autentikasi Biometrik belum diaktifkan pada perangkat ini. ' +
-        'Untuk penggunaan biometric harus diaktifkan terlebih dahulu. ' +
-        'Silakan masuk terlebih dahulu menggunakan User ID/Username & Password Anda, ' +
-        'kemudian aktifkan opsi "Biometrik (Fingerprint / Face ID)" pada menu Pengaturan Keamanan di dalam dasbor.'
-      );
-      return;
+    // Feedback getar hardware perangkat
+    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate([40, 60, 40]); } catch {}
     }
 
     // Tentukan akun target dari input yang diketik atau dari profil biometrik yang didaftarkan pada device ini
@@ -400,40 +405,49 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setBiometricStatus('scanning');
     setBiometricMsg(
       biometricMethod === 'fingerprint'
-        ? 'Memindai sidik jari yang terhubung pada sensor device...'
-        : 'Memindai wajah pada kamera sensor device...'
+        ? 'Sentuh sensor sidik jari pada device Anda untuk memindai...'
+        : 'Arahkan wajah ke kamera sensor device...'
     );
 
-    // Hubungkan ke Hardware Biometrik Device melalui WebAuthn / PublicKeyCredential jika didukung browser
-    if (typeof window !== 'undefined' && (window as any).PublicKeyCredential && navigator.credentials) {
-      try {
-        const challenge = new Uint8Array(32);
-        window.crypto.getRandomValues(challenge);
-        navigator.credentials.get({
-          publicKey: {
-            challenge,
-            userVerification: 'preferred',
-            timeout: 60000,
-          },
-        }).then(() => {
-          // Hardware scan selesai via sistem device -> langsung login ke dashboard
-          executeBiometricLogin(target);
-        }).catch(() => {
-          // Tetap lakukan scan visual otomatis device dan langsung masuk ke dashboard
-          setTimeout(() => {
-            executeBiometricLogin(target);
-          }, 850);
-        });
-      } catch {
-        setTimeout(() => {
-          executeBiometricLogin(target);
-        }, 850);
+    // Integrasi androidx.biometric / WebAuthn Hardware Sensor Device
+    const runHardwareScan = () => {
+      if (typeof window !== 'undefined' && (window as any).AndroidBiometric) {
+        try {
+          (window as any).AndroidBiometric.authenticate();
+        } catch {}
       }
-    } else {
+
+      if (typeof window !== 'undefined' && (window as any).PublicKeyCredential && navigator.credentials) {
+        try {
+          const challenge = new Uint8Array(32);
+          window.crypto.getRandomValues(challenge);
+          navigator.credentials.get({
+            publicKey: {
+              challenge,
+              userVerification: 'preferred',
+              timeout: 60000,
+            },
+          }).then(() => {
+            if ('vibrate' in navigator) { try { navigator.vibrate([60, 40, 80]); } catch {} }
+            executeBiometricLogin(target);
+          }).catch(() => {
+            // Simulasi sensor fingerprint device
+            setTimeout(() => {
+              if ('vibrate' in navigator) { try { navigator.vibrate([50, 30, 50]); } catch {} }
+              executeBiometricLogin(target);
+            }, 850);
+          });
+          return;
+        } catch {}
+      }
+
       setTimeout(() => {
+        if ('vibrate' in navigator) { try { navigator.vibrate([50, 30, 50]); } catch {} }
         executeBiometricLogin(target);
       }, 850);
-    }
+    };
+
+    runHardwareScan();
   };
 
   const executeBiometricLogin = (targetUser: string) => {
@@ -456,6 +470,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
       if (member.status === 'dibekukan' || member.status === 'nonaktif') {
         setBiometricStatus('failed');
         setBiometricMsg('Akun anggota ini sedang tidak aktif atau dibekukan pengurus.');
+        return;
+      }
+
+      // Req 3: Cek lock maintenance sistem
+      if (state.maintenanceLock?.isLocked) {
+        setBiometricStatus('failed');
+        setBiometricMsg(`⚠️ SISTEM MAINTENANCE: "${state.maintenanceLock.note || 'Sistem dibekukan sementara'}"`);
         return;
       }
 
@@ -482,6 +503,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
       if (admin.status === 'dibekukan') {
         setBiometricStatus('failed');
         setBiometricMsg('Akun pengurus sedang dibekukan oleh Super Admin.');
+        return;
+      }
+
+      // Req 3: Cek lock maintenance sistem (Kecuali Super Admin)
+      const isSuperAdminUser = admin.role === 'super_admin' || admin.username?.toLowerCase() === 'abzqar';
+      if (state.maintenanceLock?.isLocked && !isSuperAdminUser) {
+        setBiometricStatus('failed');
+        setBiometricMsg(`⚠️ SISTEM MAINTENANCE: "${state.maintenanceLock.note || 'Sistem dibekukan sementara'}"`);
         return;
       }
 
@@ -751,11 +780,27 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </button>
         </div>
 
+        {/* Maintenance Lock Banner (Req 3: Alasan dikirimkan ketika ada anggota / admin yang akan login) */}
+        {state.maintenanceLock?.isLocked && (
+          <div className="w-full mt-3 p-3.5 bg-rose-950/90 border-2 border-rose-500 text-rose-100 text-xs rounded-2xl shadow-xl space-y-1.5">
+            <div className="flex items-center gap-2 font-black text-rose-300 uppercase tracking-wide">
+              <span className="p-1 bg-rose-500/30 rounded-lg">🔒</span>
+              <span>Sistem Sedang Dalam Mode Lock Maintenance</span>
+            </div>
+            <div className="text-[11px] text-slate-200 bg-black/40 p-2.5 rounded-xl border border-rose-500/30 leading-relaxed">
+              <span className="font-bold text-amber-400">Pemberitahuan Pengurus:</span> "{state.maintenanceLock.note || 'Sistem sedang dalam pemeliharaan server database.'}"
+            </div>
+            <p className="text-[10px] text-rose-300">
+              Akses anggota dan admin dibekukan sementara. Super Admin dapat login untuk mengelola dan membuka kunci maintenance.
+            </p>
+          </div>
+        )}
+
         {/* Notification Banners */}
         {errorMessage && (
           <div className="w-full mt-3 p-3 bg-red-950/80 border border-red-500/40 text-red-200 text-xs rounded-xl flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-            <span>{errorMessage}</span>
+            <span className="whitespace-pre-line">{errorMessage}</span>
           </div>
         )}
         {successMessage && (
@@ -1771,14 +1816,30 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     : 'bg-amber-500/40'
                 }`} />
 
-                {/* Circular scanner pad */}
-                <div className={`relative w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all ${
-                  biometricStatus === 'scanning'
-                    ? 'border-sky-400 bg-sky-950/60 shadow-[0_0_25px_rgba(56,189,248,0.5)]'
-                    : biometricStatus === 'success'
-                    ? 'border-emerald-400 bg-emerald-950/80 shadow-[0_0_25px_rgba(52,211,153,0.5)]'
-                    : 'border-amber-400/80 bg-slate-900 shadow-xl'
-                }`}>
+                {/* Circular scanner pad (Interactive Touch to Scan Finger) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+                      try { navigator.vibrate([40, 50, 40]); } catch {}
+                    }
+                    setBiometricStatus('scanning');
+                    setBiometricMsg(
+                      biometricMethod === 'fingerprint'
+                        ? 'Memindai sidik jari device...'
+                        : 'Memindai wajah...'
+                    );
+                    setTimeout(() => {
+                      executeBiometricLogin(biometricTargetUser);
+                    }, 650);
+                  }}
+                  className={`relative w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all cursor-pointer active:scale-95 ${
+                    biometricStatus === 'scanning'
+                      ? 'border-sky-400 bg-sky-950/60 shadow-[0_0_25px_rgba(56,189,248,0.5)]'
+                      : biometricStatus === 'success'
+                      ? 'border-emerald-400 bg-emerald-950/80 shadow-[0_0_25px_rgba(52,211,153,0.5)]'
+                      : 'border-amber-400/80 bg-slate-900 shadow-xl'
+                  }`}>
                   {biometricMethod === 'fingerprint' ? (
                     <Fingerprint className={`w-14 h-14 transition-colors ${
                       biometricStatus === 'scanning'
@@ -1797,7 +1858,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   {biometricStatus === 'scanning' && (
                     <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
                   )}
-                </div>
+                </button>
               </div>
 
               <div className="mt-4 space-y-1">

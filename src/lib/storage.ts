@@ -128,6 +128,9 @@ const defaultInitialState: AppState = {
     googleCloudBackup: true,
     firestoreActive: true,
   },
+  maintenanceLock: {
+    isLocked: false,
+  },
 };
 
 let globalState: AppState = (() => {

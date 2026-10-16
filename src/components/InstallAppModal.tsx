@@ -34,7 +34,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   const [canPrompt, setCanPrompt] = useState(false);
   const [iosGuideOpen, setIosGuideOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedDeviceTab, setSelectedDeviceTab] = useState<'all' | 'android' | 'ios' | 'pc' | 'database'>('all');
+  const [selectedDeviceTab, setSelectedDeviceTab] = useState<'all' | 'android' | 'ios' | 'pc'>('all');
   const [notificationMsg, setNotificationMsg] = useState<{
     text: string;
     type: 'success' | 'info' | 'warn';
@@ -201,17 +201,6 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
             }`}
           >
             <span>🍏 Apple iOS</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedDeviceTab('database')}
-            className={`py-1.5 px-3 rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center gap-1 ${
-              selectedDeviceTab === 'database'
-                ? 'bg-indigo-500 text-white font-black shadow'
-                : 'bg-slate-800 text-slate-400 hover:text-white'
-            }`}
-          >
-            <span>💾 Database</span>
           </button>
         </div>
 
@@ -439,53 +428,6 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                   title="Unduh Script Batch Installer Windows (.BAT)"
                 >
                   <span>.BAT</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* 4. Database & Konfigurasi Card */}
-          {(selectedDeviceTab === 'all' || selectedDeviceTab === 'database') && (
-            <div className="p-3.5 bg-indigo-950/40 hover:bg-indigo-950/60 border border-indigo-500/40 rounded-2xl space-y-2.5 transition-colors">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xl shrink-0 font-bold border border-indigo-500/30">
-                    💾
-                  </div>
-                  <div>
-                    <div className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                      <span>Database & Konfigurasi Server Koperasi</span>
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      Unduh salinan berkas database aktif & google-services.json
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => handleDownload('database')}
-                  className="p-2.5 bg-slate-800/90 hover:bg-slate-800 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center gap-2">
-                    <Database className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Database JSON (koperasi_db.json)</span>
-                  </div>
-                  <Download className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleDownload('google-services')}
-                  className="p-2.5 bg-slate-800/90 hover:bg-slate-800 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center gap-2">
-                    <FileCode className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>google-services.json (Android)</span>
-                  </div>
-                  <Download className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>

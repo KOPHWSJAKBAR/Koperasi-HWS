@@ -281,6 +281,15 @@ export interface AuditLog {
   targetId?: string;
 }
 
+export interface MaintenanceLock {
+  isLocked: boolean;
+  lockedAt?: string;
+  lockedByName?: string;
+  note?: string; // Catatan alasan pembekuan sistem
+  unlockedAt?: string;
+  unlockedByName?: string;
+}
+
 export interface AppState {
   profile: KoperasiProfile;
   admins: AdminUser[];
@@ -305,4 +314,6 @@ export interface AppState {
     filesProtected?: boolean;
     permanentStorage?: boolean;
   };
+  maintenanceLock?: MaintenanceLock;
 }
+

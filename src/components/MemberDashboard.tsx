@@ -581,16 +581,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowInstallModal(true)}
-                className="py-1.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
-                title="Pasang Aplikasi ke Perangkat"
-              >
-                <Smartphone className="w-4 h-4 text-emerald-400" />
-                <span>Pasang Aplikasi</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setShowSettings(true)}
                 className="py-1.5 px-3 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
               >
@@ -615,16 +605,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   {unreadChatCount}
                 </span>
               )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowInstallModal(true)}
-              className="py-1.5 px-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1 transition-all shadow-sm"
-              title="Pasang Aplikasi"
-            >
-              <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Pasang</span>
             </button>
 
             <button

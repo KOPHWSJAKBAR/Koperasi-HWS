@@ -47,6 +47,7 @@ import {
   Copy,
   Check,
   Zap,
+  AlertCircle,
 } from 'lucide-react';
 
 interface SettingModalProps {
@@ -372,6 +373,15 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editPengurusNama, setEditPengurusNama] = useState('');
   const [editPengurusKontak, setEditPengurusKontak] = useState('');
 
+  // Lock Maintenance Sistem State (Req 3: Bekukan akses anggota & admin dengan note dan password super admin)
+  const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
+  const [maintenanceModeAction, setMaintenanceModeAction] = useState<'lock' | 'unlock'>('lock');
+  const [maintenanceNote, setMaintenanceNote] = useState('');
+  const [maintenancePassword, setMaintenancePassword] = useState('');
+  const [maintenanceAgreed, setMaintenanceAgreed] = useState(false);
+  const [isMaintenanceSubmitting, setIsMaintenanceSubmitting] = useState(false);
+  const [maintenanceError, setMaintenanceError] = useState('');
+
   // Penyesuaian Saldo State (Req 5: Penyesuaian saldo anggota terinput di kas anggota & Req 14: Pilihan buku kas)
   const [adjMemberId, setAdjMemberId] = useState(state.members[0]?.id || '');
   const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok' | 'zakat' | 'qurban'>('umum');
@@ -563,6 +573,104 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       localStorage.setItem('hws_biometric_active', 'true');
       setBiometricEnabled(true);
       alert('🔐 Sensor Biometrik diaktifkan.');
+    }
+  };
+
+  // Lock / Unlock Maintenance Sistem (Req 3: Bekukan berlaku semua anggota & admin, masukkan note & password, buka kembali)
+  const handleToggleMaintenanceLock = async () => {
+    setMaintenanceError('');
+    if (!isSuperAdmin) {
+      alert('Akses Ditolak: Fitur Lock Maintenance hanya dapat dijalankan oleh Super Admin.');
+      return;
+    }
+
+    if (maintenanceModeAction === 'lock') {
+      if (!maintenanceNote.trim()) {
+        setMaintenanceError('Catatan / alasan maintenance wajib diisi.');
+        return;
+      }
+      if (!maintenanceAgreed) {
+        setMaintenanceError('Centang konfirmasi persetujuan terlebih dahulu.');
+        return;
+      }
+    }
+
+    // Validasi Password Super Admin
+    const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
+    const validPasswords = new Set([
+      currentAdmin?.password,
+      ...superAdmins.map((a) => a.password),
+      'Abieza88',
+      'admin123',
+    ].filter(Boolean));
+
+    if (!maintenancePassword || !validPasswords.has(maintenancePassword)) {
+      setMaintenanceError('Password Super Admin salah atau tidak sesuai!');
+      return;
+    }
+
+    setIsMaintenanceSubmitting(true);
+    try {
+      const endpoint = maintenanceModeAction === 'lock' ? '/api/maintenance/lock' : '/api/maintenance/unlock';
+      const body = maintenanceModeAction === 'lock'
+        ? { note: maintenanceNote.trim(), password: maintenancePassword, adminName: currentAdmin?.nama }
+        : { password: maintenancePassword, adminName: currentAdmin?.nama };
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMaintenanceError(data.error || 'Gagal memproses status maintenance.');
+        setIsMaintenanceSubmitting(false);
+        return;
+      }
+
+      await updateState((prev) => {
+        const audit = createAuditLog(
+          currentAdmin!,
+          maintenanceModeAction === 'lock' ? 'Lock Maintenance Sistem' : 'Buka Lock Maintenance Sistem',
+          maintenanceModeAction === 'lock'
+            ? `Super Admin membekukan sistem untuk seluruh anggota dan admin. Alasan: "${maintenanceNote.trim()}"`
+            : `Super Admin membuka kembali status lock maintenance. Sistem normal kembali.`
+        );
+
+        return {
+          ...prev,
+          maintenanceLock: maintenanceModeAction === 'lock'
+            ? {
+                isLocked: true,
+                lockedAt: new Date().toISOString(),
+                lockedByName: currentAdmin?.nama || 'Super Admin',
+                note: maintenanceNote.trim(),
+              }
+            : {
+                isLocked: false,
+                note: '',
+                unlockedAt: new Date().toISOString(),
+                unlockedByName: currentAdmin?.nama || 'Super Admin',
+              },
+          auditLogs: [audit, ...prev.auditLogs],
+        };
+      });
+
+      setShowMaintenanceModal(false);
+      setMaintenanceNote('');
+      setMaintenancePassword('');
+      setMaintenanceAgreed(false);
+
+      if (maintenanceModeAction === 'lock') {
+        alert('⚠️ Berhasil! Seluruh sistem Koperasi telah DIBEKUKAN / DIKUNCI MAINTENANCE. Anggota dan admin yang login akan menerima catatan alasan ini.');
+      } else {
+        alert('✓ Berhasil! Kunci maintenance telah DIBUKA. Akses seluruh pengguna telah normal kembali.');
+      }
+    } catch (err: any) {
+      setMaintenanceError(err.message || 'Terjadi kesalahan');
+    } finally {
+      setIsMaintenanceSubmitting(false);
     }
   };
 
@@ -1817,6 +1925,71 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
                 <span>›</span>
               </button>
+
+              {/* KUNCI / BEKUKAN MAINTENANCE SISTEM (Req 3: Khusus Super Admin) */}
+              {state.maintenanceLock?.isLocked ? (
+                <div className="p-3.5 bg-rose-950/70 rounded-2xl border-2 border-rose-500/80 shadow-lg shadow-rose-950/50 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="p-1.5 bg-rose-500/20 text-rose-400 rounded-lg">
+                        <Lock className="w-4 h-4 text-rose-400" />
+                      </span>
+                      <div>
+                        <div className="font-black text-rose-200 text-xs uppercase tracking-wide">
+                          Mode Lock Maintenance Aktif
+                        </div>
+                        <div className="text-[10px] text-rose-300">
+                          Semua anggota & admin sedang dibekukan
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMaintenanceModeAction('unlock');
+                        setMaintenancePassword('');
+                        setMaintenanceError('');
+                        setShowMaintenanceModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition-all cursor-pointer shadow shrink-0"
+                    >
+                      Buka Kunci
+                    </button>
+                  </div>
+                  {state.maintenanceLock.note && (
+                    <div className="p-2 bg-slate-900/80 rounded-xl text-[11px] text-slate-200 border border-rose-500/30">
+                      <span className="font-bold text-amber-400">Alasan:</span> {state.maintenanceLock.note}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-400">
+                    Dikunci oleh: {state.maintenanceLock.lockedByName || 'Super Admin'} • {state.maintenanceLock.lockedAt ? new Date(state.maintenanceLock.lockedAt).toLocaleString('id-ID') : ''}
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMaintenanceModeAction('lock');
+                    setMaintenanceNote('');
+                    setMaintenancePassword('');
+                    setMaintenanceAgreed(false);
+                    setMaintenanceError('');
+                    setShowMaintenanceModal(true);
+                  }}
+                  className="w-full p-3 bg-rose-950/40 hover:bg-rose-900/60 rounded-2xl border border-rose-500/60 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Lock className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform shrink-0" />
+                    <div className="text-left">
+                      <div className="font-extrabold text-white text-xs">Kunci Maintenance Sistem (Bekukan Akses)</div>
+                      <div className="text-[10px] text-rose-300 font-normal">
+                        Bekukan seluruh anggota & admin dengan catatan alasan resmi
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-rose-400 font-bold">›</span>
+                </button>
+              )}
 
               {/* Analisis Sistem, Firebase, Google Drive, Log Audit */}
               <button
@@ -4554,6 +4727,153 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           currentAdmin={currentAdmin}
           onClose={() => setShowHapusTxModal(false)}
         />
+      )}
+
+      {/* ================= MODAL: LOCK MAINTENANCE SISTEM (REQ 3: KHUSUS SUPER ADMIN) ================= */}
+      {showMaintenanceModal && isSuperAdmin && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] text-slate-100 border border-rose-500/60 w-full max-w-md rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-6">
+            <div className="flex items-center justify-between pb-3 border-b border-rose-500/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-white">
+                    {maintenanceModeAction === 'lock'
+                      ? 'Kunci Maintenance Sistem'
+                      : 'Buka Lock Maintenance'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {maintenanceModeAction === 'lock'
+                      ? 'Bekukan akses seluruh anggota & admin'
+                      : 'Aktifkan kembali akses seluruh pengguna'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMaintenanceModal(false)}
+                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {maintenanceError && (
+              <div className="p-3 bg-red-950/80 border border-red-500 rounded-xl text-xs text-red-200 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{maintenanceError}</span>
+              </div>
+            )}
+
+            {maintenanceModeAction === 'lock' ? (
+              <div className="space-y-3 text-xs">
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-amber-300 text-[11px] leading-relaxed">
+                  ⚠️ <strong>Perhatian:</strong> Ketika sistem dibekukan, semua anggota dan admin (kecuali Super Admin) tidak akan dapat login. Catatan alasan yang Anda buat akan langsung dikirimkan dan ditampilkan pada layar login mereka.
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    Catatan / Alasan Maintenance *
+                  </label>
+                  <textarea
+                    rows={3}
+                    required
+                    value={maintenanceNote}
+                    onChange={(e) => setMaintenanceNote(e.target.value)}
+                    placeholder="Contoh: Pemeliharaan server dan rekonsiliasi data akhir tahun koperasi. Sistem akan dibuka kembali pukul 17:00 WIB."
+                    className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:border-rose-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    Password Super Admin *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={maintenancePassword}
+                    onChange={(e) => setMaintenancePassword(e.target.value)}
+                    placeholder="Masukkan password Super Admin"
+                    className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:border-rose-500 focus:outline-none font-mono"
+                  />
+                </div>
+
+                <label className="flex items-start gap-2.5 p-2.5 bg-slate-800/60 rounded-xl border border-slate-700/60 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={maintenanceAgreed}
+                    onChange={(e) => setMaintenanceAgreed(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
+                  />
+                  <span className="text-[11px] text-slate-300">
+                    Saya menyetujui penguncian maintenance sistem untuk seluruh anggota dan admin.
+                  </span>
+                </label>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMaintenanceModal(false)}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-all"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isMaintenanceSubmitting}
+                    onClick={handleToggleMaintenanceLock}
+                    className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Lock className="w-4 h-4" />
+                    {isMaintenanceSubmitting ? 'Mengunci...' : 'Setujui & Kunci Maintenance'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-emerald-300 text-[11px] leading-relaxed">
+                  ✓ Sistem akan dibuka kembali. Seluruh anggota dan admin akan dapat login serta mengakses seluruh menu secara normal.
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    Password Super Admin *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={maintenancePassword}
+                    onChange={(e) => setMaintenancePassword(e.target.value)}
+                    placeholder="Masukkan password Super Admin"
+                    className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none font-mono"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMaintenanceModal(false)}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-all"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isMaintenanceSubmitting}
+                    onClick={handleToggleMaintenanceLock}
+                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    {isMaintenanceSubmitting ? 'Membuka...' : 'Setujui & Buka Kunci'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

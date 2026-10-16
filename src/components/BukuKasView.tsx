@@ -5,7 +5,13 @@ import {
   KasEntry,
 } from '../types';
 import { formatRupiah, createAuditLog } from '../lib/storage';
-import { downloadExcelCsv, printDocumentHtml, printTandaTerimaKas } from '../lib/exportPdf';
+import {
+  downloadExcelCsv,
+  printDocumentHtml,
+  printTandaTerimaKas,
+  exportBukuKasPdf,
+  exportBukuKasExcel,
+} from '../lib/exportPdf';
 import {
   BookOpen,
   Building,
@@ -467,83 +473,37 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     }));
   };
 
-  // Export Kas Report to CSV / PDF with Watermark per User Req
+  // Export Kas Report to Excel / PDF dengan Jurnal Halaman Depan & Perincian Kategori (Req 1)
   const handleExportKas = (format: 'pdf' | 'excel') => {
+    const periodeLabel =
+      filterStartDate && filterEndDate
+        ? `${filterStartDate} s/d ${filterEndDate}`
+        : filterStartDate
+        ? `Sejak ${filterStartDate}`
+        : filterEndDate
+        ? `Sampai ${filterEndDate}`
+        : 'Semua Periode';
+
+    // Ambil transaksi yang sesuai dengan tab dan filter aktif
+    const exportEntries =
+      activeKasTab === 'neraca'
+        ? state.kasList.filter((k) => k.status === 'approved')
+        : currentList.filter((k) => k.status === 'approved');
+
+    const payload = {
+      bukuKasType: activeKasTab,
+      kasEntries: exportEntries,
+      periodeLabel,
+      allMembers: state.members,
+      categoriesKoperasi: state.categoriesKasKoperasi,
+      saldoKasAnggota,
+      saldoKasKoperasi,
+    };
+
     if (format === 'excel') {
-      const rows = currentList.map((k) => ({
-        'Koperasi': 'Koperasi Himpunan Wirausaha Sejahtera',
-        Tanggal: k.tanggal,
-        'Buku Kas': k.bukuKas === 'anggota' ? 'Kas Anggota' : 'Kas Koperasi',
-        Kategori: isLaporan ? 'Umum' : k.kategori,
-        Keterangan: k.keterangan,
-        Tipe: k.tipe === 'masuk' ? 'MASUK (CR)' : 'KELUAR (DB)',
-        Nominal: k.nominal,
-        'Dibuat Oleh': k.inputBy,
-        Status: k.status,
-      }));
-      downloadExcelCsv(rows, `Buku_Kas_${activeKasTab}_${Date.now()}`);
+      exportBukuKasExcel(payload);
     } else {
-      const tableRows = currentList
-        .map(
-          (k) => `
-        <tr style="border-bottom: 1px solid #ddd; font-size: 11px;">
-          <td style="padding: 6px;">${k.tanggal}</td>
-          <td style="padding: 6px; font-weight: 700;">${isLaporan ? 'Umum' : k.kategori}</td>
-          <td style="padding: 6px;">${k.keterangan}</td>
-          <td style="padding: 6px; text-align: right; color: ${k.tipe === 'masuk' ? '#047857' : '#b91c1c'}; font-weight: 700;">
-            ${formatRupiah(k.nominal)} ${k.tipe === 'masuk' ? 'CR' : 'DB'}
-          </td>
-          <td style="padding: 6px;">${k.inputBy}</td>
-        </tr>
-      `
-        )
-        .join('');
-
-      const html = `
-        <div style="position: relative; padding: 15px;">
-          <!-- Watermark Koperasi HWS di PDF -->
-          <div style="position: absolute; inset: 0; pointer-events: none; opacity: 0.05; display: grid; grid-template-columns: repeat(3, 1fr); gap: 60px; align-items: center; justify-items: center; z-index: 0;">
-            ${Array.from({ length: 12 })
-              .map(
-                () => `
-              <div style="text-align: center; font-weight: 900; font-size: 18px; transform: rotate(-25deg); color: #000;">
-                KOPERASI HWS
-              </div>
-            `
-              )
-              .join('')}
-          </div>
-
-          <div style="position: relative; z-index: 10;">
-            <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #000; padding-bottom: 8px;">
-              <div>
-                <h2 style="font-size: 16px; font-weight: 900; margin: 0;">KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA</h2>
-                <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: #b45309; margin-top: 2px;">
-                  Laporan ${activeKasTab === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi'}
-                </div>
-                ${filterStartDate || filterEndDate ? `<div style="font-size: 10px; color: #555;">Periode: ${filterStartDate || 'Awal'} s/d ${filterEndDate || 'Sekarang'}</div>` : ''}
-              </div>
-              <div style="font-size: 10px; text-align: right;">
-                <div>Dicetak: ${new Date().toLocaleDateString('id-ID')}</div>
-                <div style="font-weight: 700; color: #047857;">Dokumen Resmi Koperasi HWS</div>
-              </div>
-            </div>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 14px; border: 1px solid #ddd;">
-              <thead>
-                <tr style="background: #f3f4f6; font-size: 11px; text-align: left; border-bottom: 1px solid #ddd;">
-                  <th style="padding: 6px;">Tanggal</th>
-                  <th style="padding: 6px;">Kategori</th>
-                  <th style="padding: 6px;">Keterangan</th>
-                  <th style="padding: 6px; text-align: right;">Mutasi</th>
-                  <th style="padding: 6px;">Petugas</th>
-                </tr>
-              </thead>
-              <tbody>${tableRows}</tbody>
-            </table>
-          </div>
-        </div>
-      `;
-      printDocumentHtml(html, `Laporan_Buku_Kas_${activeKasTab}`);
+      exportBukuKasPdf(payload);
     }
   };
 
@@ -849,38 +809,149 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             </h4>
 
             <div className="space-y-4 text-xs">
+              {/* TAMPILKAN SEMUA KATEGORI PENDAPATAN & PENERIMAAN (Req 1) */}
               <div>
-                <div className="font-bold text-emerald-400 mb-1">PENDAPATAN & PENERIMAAN:</div>
-                <div className="space-y-1.5 pl-2">
-                  <div className="flex justify-between text-slate-300">
-                    <span>Penerimaan Zakat & Qurban</span>
-                    <span className="font-mono">{formatRupiah(saldoKasKoperasi > 0 ? saldoKasKoperasi : 0)}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-300">
-                    <span>Pendapatan Jasa & Administrasi</span>
-                    <span className="font-mono">{formatRupiah(0)}</span>
-                  </div>
+                <div className="font-bold text-emerald-400 mb-1 flex items-center justify-between">
+                  <span>PENDAPATAN & PENERIMAAN:</span>
+                  <span className="font-mono text-emerald-300">
+                    {formatRupiah(
+                      Array.from(
+                        new Set([
+                          ...state.categoriesKasKoperasi.pemasukan,
+                          ...state.kasList.filter((k) => k.tipe === 'masuk').map((k) => k.kategori),
+                        ])
+                      ).reduce((sum, cat) => {
+                        return (
+                          sum +
+                          state.kasList
+                            .filter((k) => k.status === 'approved' && k.tipe === 'masuk' && k.kategori === cat)
+                            .reduce((s, k) => s + k.nominal, 0)
+                        );
+                      }, 0)
+                    )}
+                  </span>
+                </div>
+                <div className="space-y-1.5 pl-2 max-h-56 overflow-y-auto pr-1">
+                  {Array.from(
+                    new Set([
+                      ...state.categoriesKasKoperasi.pemasukan,
+                      ...state.kasList.filter((k) => k.tipe === 'masuk').map((k) => k.kategori),
+                    ])
+                  ).map((cat) => {
+                    const catTotal = state.kasList
+                      .filter((k) => k.status === 'approved' && k.tipe === 'masuk' && k.kategori === cat)
+                      .reduce((s, k) => s + k.nominal, 0);
+                    const txCount = state.kasList.filter(
+                      (k) => k.status === 'approved' && k.tipe === 'masuk' && k.kategori === cat
+                    ).length;
+                    return (
+                      <div key={cat} className="flex justify-between items-center text-slate-300 py-0.5 border-b border-slate-800/60">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-emerald-400 font-bold">•</span>
+                          <span>{cat}</span>
+                          {txCount > 0 && (
+                            <span className="text-[10px] text-slate-400">({txCount}x)</span>
+                          )}
+                        </span>
+                        <span className="font-mono font-bold text-emerald-400">{formatRupiah(catTotal)}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
+              {/* TAMPILKAN SEMUA KATEGORI BEBAN & PENGELUARAN OVERHEAD (Req 1) */}
               <div>
-                <div className="font-bold text-red-400 mb-1">BEBAN & PENGELUARAN OVERHEAD:</div>
-                <div className="space-y-1.5 pl-2">
-                  <div className="flex justify-between text-slate-300">
-                    <span>Beban Operasional & ATK</span>
-                    <span className="font-mono">{formatRupiah(0)}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-300">
-                    <span>Sewa Kantor & Utilitas</span>
-                    <span className="font-mono">{formatRupiah(0)}</span>
-                  </div>
+                <div className="font-bold text-red-400 mb-1 flex items-center justify-between">
+                  <span>BEBAN & PENGELUARAN OVERHEAD:</span>
+                  <span className="font-mono text-rose-300">
+                    {formatRupiah(
+                      Array.from(
+                        new Set([
+                          ...state.categoriesKasKoperasi.pengeluaran,
+                          ...state.kasList.filter((k) => k.tipe === 'keluar').map((k) => k.kategori),
+                        ])
+                      ).reduce((sum, cat) => {
+                        return (
+                          sum +
+                          state.kasList
+                            .filter((k) => k.status === 'approved' && k.tipe === 'keluar' && k.kategori === cat)
+                            .reduce((s, k) => s + k.nominal, 0)
+                        );
+                      }, 0)
+                    )}
+                  </span>
+                </div>
+                <div className="space-y-1.5 pl-2 max-h-56 overflow-y-auto pr-1">
+                  {Array.from(
+                    new Set([
+                      ...state.categoriesKasKoperasi.pengeluaran,
+                      ...state.kasList.filter((k) => k.tipe === 'keluar').map((k) => k.kategori),
+                    ])
+                  ).map((cat) => {
+                    const catTotal = state.kasList
+                      .filter((k) => k.status === 'approved' && k.tipe === 'keluar' && k.kategori === cat)
+                      .reduce((s, k) => s + k.nominal, 0);
+                    const txCount = state.kasList.filter(
+                      (k) => k.status === 'approved' && k.tipe === 'keluar' && k.kategori === cat
+                    ).length;
+                    return (
+                      <div key={cat} className="flex justify-between items-center text-slate-300 py-0.5 border-b border-slate-800/60">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-red-400 font-bold">•</span>
+                          <span>{cat}</span>
+                          {txCount > 0 && (
+                            <span className="text-[10px] text-slate-400">({txCount}x)</span>
+                          )}
+                        </span>
+                        <span className="font-mono font-bold text-rose-400">{formatRupiah(catTotal)}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-slate-700 flex justify-between font-bold text-sm">
-                <span className="text-white">SURPLUS / HASIL USAHA BERJALAN:</span>
-                <span className="text-emerald-400 font-mono font-black">{formatRupiah(saldoKasKoperasi)}</span>
-              </div>
+              {/* SURPLUS / HASIL USAHA BERJALAN = TOTAL PEMASUKAN - TOTAL PENGELUARAN */}
+              {(() => {
+                const totMasuk = Array.from(
+                  new Set([
+                    ...state.categoriesKasKoperasi.pemasukan,
+                    ...state.kasList.filter((k) => k.tipe === 'masuk').map((k) => k.kategori),
+                  ])
+                ).reduce((sum, cat) => {
+                  return (
+                    sum +
+                    state.kasList
+                      .filter((k) => k.status === 'approved' && k.tipe === 'masuk' && k.kategori === cat)
+                      .reduce((s, k) => s + k.nominal, 0)
+                  );
+                }, 0);
+
+                const totKeluar = Array.from(
+                  new Set([
+                    ...state.categoriesKasKoperasi.pengeluaran,
+                    ...state.kasList.filter((k) => k.tipe === 'keluar').map((k) => k.kategori),
+                  ])
+                ).reduce((sum, cat) => {
+                  return (
+                    sum +
+                    state.kasList
+                      .filter((k) => k.status === 'approved' && k.tipe === 'keluar' && k.kategori === cat)
+                      .reduce((s, k) => s + k.nominal, 0)
+                  );
+                }, 0);
+
+                const hasilUsaha = totMasuk - totKeluar;
+
+                return (
+                  <div className="pt-3 border-t border-slate-700 flex justify-between font-bold text-sm">
+                    <span className="text-white">SURPLUS / HASIL USAHA BERJALAN:</span>
+                    <span className={`font-mono font-black ${hasilUsaha >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {formatRupiah(hasilUsaha)}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

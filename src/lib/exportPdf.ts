@@ -741,3 +741,822 @@ export function printTandaTerimaKas(entry: KasEntry, profile: any) {
 
   printDocumentHtml(html, `Tanda_Terima_${isMasuk ? 'Masuk' : 'Keluar'}_${noKuitansi.replace(/\//g, '_')}`);
 }
+
+// Helper: Download HTML table content as Native Excel (.xls) file
+export function downloadExcelHtml(htmlContent: string, filename: string) {
+  const excelTemplate = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Laporan Buku Kas</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+      <meta http-equiv="content-type" content="text/plain; charset=UTF-8"/>
+      <style>
+        body { font-family: Arial, sans-serif; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 25px; }
+        th { background-color: #0f172a; color: #ffffff; font-weight: bold; padding: 8px; border: 1px solid #000; text-align: left; }
+        td { padding: 6px 8px; border: 1px solid #ddd; }
+        .num { text-align: right; font-family: monospace; }
+        .center { text-align: center; }
+        .header-title { font-size: 16pt; font-weight: bold; color: #0f172a; }
+        .sub-title { font-size: 11pt; font-weight: bold; color: #b45309; }
+        .section-header { background-color: #f1f5f9; font-weight: bold; font-size: 11pt; }
+        .total-row { background-color: #0f172a; color: #fbbf24; font-weight: bold; font-size: 11pt; }
+        .cat-title { background-color: #1e293b; color: #ffffff; font-weight: bold; font-size: 11pt; }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+  const blob = new Blob(['\uFEFF' + excelTemplate], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `${filename}.xls`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+export interface BukuKasExportPayload {
+  bukuKasType: 'anggota' | 'koperasi' | 'neraca';
+  kasEntries: KasEntry[];
+  periodeLabel: string;
+  allMembers?: MemberUser[];
+  categoriesKoperasi?: { pemasukan: string[]; pengeluaran: string[] };
+  saldoKasAnggota?: number;
+  saldoKasKoperasi?: number;
+}
+
+// User Req 1: Buku kas anggota, koperasi / konsolidasi download PDF
+// - Jurnal pada halaman depan:
+//   PEMASUKAN = TAMPILKAN SEMUA KATEGORI, JUMLAH
+//   PENGELUARAN = TAMPILKAN SEMUA KATEGORI, JUMLAH
+//   TOTAL = PEMASUKAN - PENGELUARAN
+// - Pada halaman selanjutnya adalah perincian kategori dengan judul kategori tampilkan tanggal, keterangan, serta jumlah
+// - Pada buku kas 3 neraca dan konsolidasi:
+//   Tampilkan semua kategori pada pendapatan dan penerimaan, jumlah sesuai kategori
+// Helper untuk mengelompokkan kategori sesuai spesifikasi User Req 1:
+// - Buku kas anggota, buku kas koperasi dan konsolidasi
+// - Jurnal pada halaman depan:
+//   PEMASUKAN = TAMPILKAN SEMUA KATEGORI, JUMLAH
+//   PENGELUARAN = TAMPILKAN SEMUA KATEGORI, JUMLAH
+//   TOTAL = PEMASUKAN - PENGELUARAN
+// - Pada halaman selanjutnya adalah perincian kategori dengan judul kategori tampilkan tanggal, keterangan, serta jumlah
+// - Pada buku kas 3 neraca dan konsolidasi:
+//   Tampilkan semua kategori pada pendapatan dan penerimaan, jumlah sesuai kategori
+//   Tampilkan semua kategori pada beban dan pengeluaran overhead, jumlah sesuai kategori
+export function getBukuKasCategoryMaps(
+  bukuKasType: 'anggota' | 'koperasi' | 'neraca',
+  kasEntries: KasEntry[],
+  categoriesKoperasi?: { pemasukan: string[]; pengeluaran: string[] }
+) {
+  const catMasukMap = new Map<string, { total: number; entries: KasEntry[] }>();
+  const catKeluarMap = new Map<string, { total: number; entries: KasEntry[] }>();
+
+  if (bukuKasType === 'anggota') {
+    const defaultAnggotaMasuk = [
+      'Simpanan Pokok Anggota',
+      'Simpanan Wajib Anggota',
+      'Simpanan Sukarela Anggota',
+      'Simpanan Umum Anggota',
+      'Titipan Zakat Fitrah',
+      'Tabungan Qurban',
+      'Pemasukan Kas Anggota Lainnya',
+    ];
+    const defaultAnggotaKeluar = [
+      'Penarikan Simpanan Pokok',
+      'Penarikan Simpanan Wajib',
+      'Penarikan Simpanan Sukarela / Umum',
+      'Penyaluran Zakat Fitrah',
+      'Penyaluran Qurban',
+      'Pengembalian Simpanan',
+      'Pengeluaran Kas Anggota Lainnya',
+    ];
+    defaultAnggotaMasuk.forEach((c) => catMasukMap.set(c, { total: 0, entries: [] }));
+    defaultAnggotaKeluar.forEach((c) => catKeluarMap.set(c, { total: 0, entries: [] }));
+  } else if (bukuKasType === 'neraca') {
+    // Pada buku kas 3 neraca dan konsolidasi:
+    // Tampilkan semua kategori pada pendapatan dan penerimaan
+    const standardPendapatan = [
+      ...(categoriesKoperasi?.pemasukan || []),
+      'Pendapatan Operasional Koperasi',
+      'Pendapatan Jasa & Administrasi',
+      'Pendapatan Bagi Hasil Simpan Pinjam',
+      'Penerimaan Infaq & Sumbangan',
+      'Penerimaan Operasional Lainnya',
+    ];
+    // Tampilkan semua kategori pada beban dan pengeluaran overhead
+    const standardBeban = [
+      ...(categoriesKoperasi?.pengeluaran || []),
+      'Beban Operasional & Kantor',
+      'Beban ATK, Dokumen & Cetak',
+      'Beban Listrik, Air & Internet',
+      'Beban Transportasi & Bahan Bakar',
+      'Beban Konsumsi & Rapat Pengurus',
+      'Beban Gaji & Honor Pengurus',
+      'Beban Pemeliharaan Fasilitas',
+      'Beban Pengeluaran Overhead Lainnya',
+    ];
+    Array.from(new Set(standardPendapatan)).forEach((c) => catMasukMap.set(c, { total: 0, entries: [] }));
+    Array.from(new Set(standardBeban)).forEach((c) => catKeluarMap.set(c, { total: 0, entries: [] }));
+  } else {
+    // Buku Kas Koperasi
+    if (categoriesKoperasi?.pemasukan) {
+      categoriesKoperasi.pemasukan.forEach((c) => catMasukMap.set(c, { total: 0, entries: [] }));
+    }
+    if (categoriesKoperasi?.pengeluaran) {
+      categoriesKoperasi.pengeluaran.forEach((c) => catKeluarMap.set(c, { total: 0, entries: [] }));
+    }
+  }
+
+  // Masukkan kas entries ke kategori masing-masing
+  kasEntries.forEach((k) => {
+    if (k.tipe === 'masuk') {
+      const cat = k.kategori || (bukuKasType === 'neraca' ? 'Penerimaan Operasional Lainnya' : 'Pemasukan Lainnya');
+      const curr = catMasukMap.get(cat) || { total: 0, entries: [] };
+      curr.total += k.nominal;
+      curr.entries.push(k);
+      catMasukMap.set(cat, curr);
+    } else if (k.tipe === 'keluar') {
+      const cat = k.kategori || (bukuKasType === 'neraca' ? 'Beban Pengeluaran Overhead Lainnya' : 'Pengeluaran Lainnya');
+      const curr = catKeluarMap.get(cat) || { total: 0, entries: [] };
+      curr.total += k.nominal;
+      curr.entries.push(k);
+      catKeluarMap.set(cat, curr);
+    }
+  });
+
+  return { catMasukMap, catKeluarMap };
+}
+
+export function exportBukuKasPdf(payload: BukuKasExportPayload) {
+  const {
+    bukuKasType,
+    kasEntries,
+    periodeLabel,
+    allMembers = [],
+    categoriesKoperasi,
+    saldoKasAnggota = 0,
+    saldoKasKoperasi = 0,
+  } = payload;
+
+  const titleBuku =
+    bukuKasType === 'anggota'
+      ? 'BUKU KAS 1: REKAPITULASI KAS ANGGOTA'
+      : bukuKasType === 'koperasi'
+      ? 'BUKU KAS 2: OPERASIONAL KAS KOPERASI'
+      : 'BUKU KAS 3: NERACA & KONSOLIDASI KEUANGAN';
+
+  const { catMasukMap, catKeluarMap } = getBukuKasCategoryMaps(
+    bukuKasType,
+    kasEntries,
+    categoriesKoperasi
+  );
+
+  const totalMasuk = Array.from(catMasukMap.values()).reduce((sum, item) => sum + item.total, 0);
+  const totalKeluar = Array.from(catKeluarMap.values()).reduce((sum, item) => sum + item.total, 0);
+  const totalSaldoBersih = totalMasuk - totalKeluar;
+
+  const labelPemasukanHeader =
+    bukuKasType === 'neraca'
+      ? 'PENDAPATAN & PENERIMAAN = SEMUA KATEGORI & JUMLAH'
+      : bukuKasType === 'anggota'
+      ? 'PEMASUKAN KAS ANGGOTA = SEMUA KATEGORI & JUMLAH'
+      : 'PEMASUKAN KAS KOPERASI = SEMUA KATEGORI & JUMLAH';
+
+  const labelPengeluaranHeader =
+    bukuKasType === 'neraca'
+      ? 'BEBAN & PENGELUARAN OVERHEAD = SEMUA KATEGORI & JUMLAH'
+      : bukuKasType === 'anggota'
+      ? 'PENGELUARAN KAS ANGGOTA = SEMUA KATEGORI & JUMLAH'
+      : 'PENGELUARAN KAS KOPERASI = SEMUA KATEGORI & JUMLAH';
+
+  const labelSubtotalMasuk =
+    bukuKasType === 'neraca' ? 'SUBTOTAL PENDAPATAN & PENERIMAAN' : 'SUBTOTAL PEMASUKAN';
+
+  const labelSubtotalKeluar =
+    bukuKasType === 'neraca' ? 'SUBTOTAL BEBAN & PENGELUARAN OVERHEAD' : 'SUBTOTAL PENGELUARAN';
+
+  // Halaman Depan: JURNAL REKAPITULASI
+  const rowsPemasukan = Array.from(catMasukMap.entries()).map(([cat, data], idx) => `
+    <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+      <td style="padding: 6px 8px; width: 6%; text-align: center; color: #64748b;">${idx + 1}</td>
+      <td style="padding: 6px 10px; font-weight: 700; color: #047857;">[+] ${cat}</td>
+      <td style="padding: 6px 10px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #065f46;">
+        ${formatRupiah(data.total)}
+      </td>
+      <td style="padding: 6px 8px; width: 14%; text-align: center; font-size: 10px; color: #475569;">
+        ${data.entries.length} Transaksi
+      </td>
+    </tr>
+  `).join('');
+
+  const rowsPengeluaran = Array.from(catKeluarMap.entries()).map(([cat, data], idx) => `
+    <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+      <td style="padding: 6px 8px; width: 6%; text-align: center; color: #64748b;">${idx + 1}</td>
+      <td style="padding: 6px 10px; font-weight: 700; color: #b91c1c;">[-] ${cat}</td>
+      <td style="padding: 6px 10px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #991b1b;">
+        ${formatRupiah(data.total)}
+      </td>
+      <td style="padding: 6px 8px; width: 14%; text-align: center; font-size: 10px; color: #475569;">
+        ${data.entries.length} Transaksi
+      </td>
+    </tr>
+  `).join('');
+
+  // Halaman Selanjutnya: PERINCIAN KATEGORI DENGAN JUDUL KATEGORI
+  // Susun semua kategori (tampilkan tanggal, keterangan, serta jumlah)
+  const allCategoryDetails: { cat: string; tipe: 'masuk' | 'keluar'; entries: KasEntry[]; total: number }[] = [];
+  catMasukMap.forEach((data, cat) => {
+    allCategoryDetails.push({ cat, tipe: 'masuk', entries: data.entries, total: data.total });
+  });
+  catKeluarMap.forEach((data, cat) => {
+    allCategoryDetails.push({ cat, tipe: 'keluar', entries: data.entries, total: data.total });
+  });
+
+  const categoryDetailSections = allCategoryDetails.map((sec, secIdx) => {
+    const sortedEntries = [...sec.entries].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    const entriesRows =
+      sortedEntries.length > 0
+        ? sortedEntries.map((e, eIdx) => `
+            <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+              <td style="padding: 5px 8px; width: 5%; text-align: center; color: #64748b;">${eIdx + 1}</td>
+              <td style="padding: 5px 8px; width: 15%; font-family: 'JetBrains Mono', monospace; color: #1e293b;">${e.tanggal}</td>
+              <td style="padding: 5px 8px; color: #0f172a; font-weight: 500;">${e.keterangan || '-'}</td>
+              <td style="padding: 5px 8px; width: 22%; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: ${sec.tipe === 'masuk' ? '#047857' : '#b91c1c'};">
+                ${formatRupiah(e.nominal)} ${sec.tipe === 'masuk' ? '(CR)' : '(DB)'}
+              </td>
+              <td style="padding: 5px 8px; width: 15%; color: #475569; font-size: 10px;">${e.inputBy || 'Petugas'}</td>
+            </tr>
+          `).join('')
+        : `
+            <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+              <td colspan="5" style="padding: 8px 10px; text-align: center; color: #64748b; font-style: italic;">
+                Belum ada transaksi pada kategori ini untuk periode yang dipilih (Jumlah: Rp 0)
+              </td>
+            </tr>
+          `;
+
+    const tipeBadge =
+      sec.tipe === 'masuk'
+        ? (bukuKasType === 'neraca' ? 'PENDAPATAN / PENERIMAAN' : 'PEMASUKAN')
+        : (bukuKasType === 'neraca' ? 'BEBAN / PENGELUARAN OVERHEAD' : 'PENGELUARAN');
+
+    return `
+      <div style="margin-bottom: 22px; page-break-inside: avoid; border: 1.5px solid #cbd5e1; border-radius: 8px; overflow: hidden;">
+        <div style="background: ${sec.tipe === 'masuk' ? '#047857' : '#991b1b'}; color: #ffffff; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="font-weight: 800; font-size: 12px; text-transform: uppercase;">
+            ${secIdx + 1}. JUDUL KATEGORI: ${sec.cat.toUpperCase()} (${tipeBadge})
+          </div>
+          <div style="font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace;">
+            Total Kategori: ${formatRupiah(sec.total)}
+          </div>
+        </div>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background: #f8fafc; font-size: 10px; font-weight: 800; color: #475569; text-transform: uppercase; border-bottom: 1.5px solid #cbd5e1;">
+              <th style="padding: 6px 8px; text-align: center;">NO</th>
+              <th style="padding: 6px 8px; text-align: left;">TANGGAL</th>
+              <th style="padding: 6px 8px; text-align: left;">KETERANGAN</th>
+              <th style="padding: 6px 8px; text-align: right;">JUMLAH</th>
+              <th style="padding: 6px 8px; text-align: left;">PETUGAS</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entriesRows}
+            <tr style="background: #f1f5f9; font-weight: 800; font-size: 11px; border-top: 1.5px solid #cbd5e1;">
+              <td colspan="3" style="padding: 6px 10px; text-align: right; text-transform: uppercase;">
+                SUBTOTAL KATEGORI [${sec.cat}]:
+              </td>
+              <td style="padding: 6px 8px; text-align: right; font-family: 'JetBrains Mono', monospace; color: ${sec.tipe === 'masuk' ? '#047857' : '#b91c1c'};">
+                ${formatRupiah(sec.total)}
+              </td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  }).join('');
+
+  // Bagian Tambahan Khusus Buku Kas 3 Neraca & Konsolidasi Keuangan
+  let neracaExtraHtml = '';
+  if (bukuKasType === 'neraca') {
+    const totalSimpananPokok = allMembers.reduce((sum, m) => sum + (m.saldoPokok || 0), 0);
+    const totalSimpananUmum = allMembers.reduce((sum, m) => sum + (m.saldoUmum || 0), 0);
+    const totalZakatQurban = allMembers.reduce((sum, m) => sum + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0), 0);
+    const totalAsetLancar = saldoKasAnggota + saldoKasKoperasi;
+
+    neracaExtraHtml = `
+      <div style="margin-top: 18px; border: 1.5px solid #0f172a; border-radius: 8px; overflow: hidden;">
+        <div style="background: #0f172a; color: #ffffff; padding: 7px 12px; font-weight: 900; font-size: 12px;">
+          POSISI KONSOLIDASI NERACA KEUANGAN (KAS & BANK)
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0;">
+          <div style="padding: 10px 14px; border-right: 1px solid #cbd5e1;">
+            <div style="font-weight: 800; font-size: 11px; color: #b45309; margin-bottom: 6px;">ASET LANCAR (KAS & BANK):</div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+              <span>Kas di Bank (Kas Anggota)</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(saldoKasAnggota)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+              <span>Kas di Bank (Kas Koperasi)</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(saldoKasKoperasi)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 900; border-top: 1px dashed #cbd5e1; padding-top: 4px; color: #047857;">
+              <span>TOTAL ASET LANCAR</span>
+              <span style="font-family: 'JetBrains Mono', monospace;">${formatRupiah(totalAsetLancar)}</span>
+            </div>
+          </div>
+
+          <div style="padding: 10px 14px;">
+            <div style="font-weight: 800; font-size: 11px; color: #0369a1; margin-bottom: 6px;">KEWAJIBAN & EKUITAS:</div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+              <span>Simpanan Pokok Anggota</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(totalSimpananPokok)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+              <span>Simpanan Umum Anggota</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(totalSimpananUmum)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+              <span>Titipan Zakat & Qurban</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(totalZakatQurban)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 900; border-top: 1px dashed #cbd5e1; padding-top: 4px; color: #0369a1;">
+              <span>TOTAL KEWAJIBAN & EKUITAS</span>
+              <span style="font-family: 'JetBrains Mono', monospace;">${formatRupiah(totalSimpananPokok + totalSimpananUmum + totalZakatQurban)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const html = `
+    <div class="watermark-container">
+      <!-- Watermark Background -->
+      <div class="watermark-bg" style="display: flex; align-items: center; justify-content: center; pointer-events: none;">
+        <div style="font-size: 70px; font-weight: 900; color: #000; opacity: 0.04; transform: rotate(-30deg); text-align: center; line-height: 1.2;">
+          KOPERASI HWS<br><span style="font-size: 28px;">DOKUMEN RESMI</span>
+        </div>
+      </div>
+
+      <div class="content-layer">
+        <!-- ================= HALAMAN DEPAN: JURNAL & REKAPITULASI (PAGE 1) ================= -->
+        <div style="page-break-after: always; break-after: page; min-height: 94vh; display: flex; flex-direction: column; justify-content: space-between;">
+          <div>
+            <!-- Header Dokumen -->
+            <div style="border-bottom: 2.5px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end;">
+              <div>
+                <h1 style="font-size: 18px; font-weight: 900; color: #0f172a; margin-bottom: 2px;">
+                  KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA
+                </h1>
+                <div style="font-size: 12px; font-weight: 800; color: #b45309; text-transform: uppercase; letter-spacing: 0.5px;">
+                  ${titleBuku}
+                </div>
+                <div style="font-size: 10px; color: #475569; margin-top: 3px;">
+                  Badan Hukum: AHU-0004921.AH.01.29.TAHUN 2024 • Wilayah: Cengkareng, Kalideres, Kembangan, Kebon Jeruk
+                </div>
+              </div>
+              <div style="text-align: right; font-size: 10px;">
+                <div style="color: #64748b;">Periode Laporan:</div>
+                <div style="font-weight: 800; color: #0f172a; font-size: 11px;">${periodeLabel.toUpperCase()}</div>
+                <div style="margin-top: 2px; color: #047857; font-weight: 700;">Dokumen Resmi Sah</div>
+              </div>
+            </div>
+
+            <!-- Jurnal Section Header -->
+            <div style="background: #0f172a; color: #ffffff; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 900; letter-spacing: 0.5px; margin-bottom: 14px; display: flex; justify-content: space-between;">
+              <span>HALAMAN 1: JURNAL REKAPITULASI BUKU KAS</span>
+              <span>Dicetak: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'long' })}</span>
+            </div>
+
+            <!-- Tabel 1: PEMASUKAN = TAMPILKAN SEMUA KATEGORI, JUMLAH -->
+            <div style="margin-bottom: 16px; border: 1.5px solid #cbd5e1; border-radius: 8px; overflow: hidden;">
+              <div style="background: #047857; color: #ffffff; padding: 7px 12px; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between;">
+                <span>${labelPemasukanHeader}</span>
+                <span style="font-family: 'JetBrains Mono', monospace;">Total: ${formatRupiah(totalMasuk)}</span>
+              </div>
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="background: #f8fafc; font-size: 10px; color: #475569; font-weight: 800; text-transform: uppercase; border-bottom: 1px solid #cbd5e1;">
+                    <th style="padding: 6px 8px; text-align: center;">NO</th>
+                    <th style="padding: 6px 10px; text-align: left;">${bukuKasType === 'neraca' ? 'KATEGORI PENDAPATAN & PENERIMAAN' : 'KATEGORI PEMASUKAN'}</th>
+                    <th style="padding: 6px 10px; text-align: right;">JUMLAH (NOMINAL)</th>
+                    <th style="padding: 6px 8px; text-align: center;">FREKUENSI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsPemasukan || '<tr><td colspan="4" style="padding: 10px; text-align: center; color: #64748b; font-size: 11px;">Tidak ada transaksi pemasukan pada periode ini.</td></tr>'}
+                  <tr style="background: #ecfdf5; font-weight: 900; font-size: 11px; border-top: 1.5px solid #047857;">
+                    <td colspan="2" style="padding: 8px 10px; color: #047857;">${labelSubtotalMasuk}</td>
+                    <td style="padding: 8px 10px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #047857;">
+                      ${formatRupiah(totalMasuk)}
+                    </td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Tabel 2: PENGELUARAN = TAMPILKAN SEMUA KATEGORI, JUMLAH -->
+            <div style="margin-bottom: 16px; border: 1.5px solid #cbd5e1; border-radius: 8px; overflow: hidden;">
+              <div style="background: #b91c1c; color: #ffffff; padding: 7px 12px; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between;">
+                <span>${labelPengeluaranHeader}</span>
+                <span style="font-family: 'JetBrains Mono', monospace;">Total: ${formatRupiah(totalKeluar)}</span>
+              </div>
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="background: #f8fafc; font-size: 10px; color: #475569; font-weight: 800; text-transform: uppercase; border-bottom: 1px solid #cbd5e1;">
+                    <th style="padding: 6px 8px; text-align: center;">NO</th>
+                    <th style="padding: 6px 10px; text-align: left;">${bukuKasType === 'neraca' ? 'KATEGORI BEBAN & OVERHEAD' : 'KATEGORI PENGELUARAN'}</th>
+                    <th style="padding: 6px 10px; text-align: right;">JUMLAH (NOMINAL)</th>
+                    <th style="padding: 6px 8px; text-align: center;">FREKUENSI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsPengeluaran || '<tr><td colspan="4" style="padding: 10px; text-align: center; color: #64748b; font-size: 11px;">Tidak ada transaksi pengeluaran pada periode ini.</td></tr>'}
+                  <tr style="background: #fef2f2; font-weight: 900; font-size: 11px; border-top: 1.5px solid #b91c1c;">
+                    <td colspan="2" style="padding: 8px 10px; color: #b91c1c;">${labelSubtotalKeluar}</td>
+                    <td style="padding: 8px 10px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #b91c1c;">
+                      ${formatRupiah(totalKeluar)}
+                    </td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Tabel 3: TOTAL = PEMASUKAN - PENGELUARAN -->
+            <div style="background: #0f172a; color: #ffffff; padding: 12px 16px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+              <div>
+                <div style="font-size: 12px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase;">
+                  TOTAL = PEMASUKAN - PENGELUARAN
+                </div>
+                <div style="font-size: 10px; color: #94a3b8;">
+                  ${bukuKasType === 'neraca' ? 'Surplus / Hasil Usaha Berjalan Koperasi (Pendapatan - Beban Overhead)' : 'Saldo Bersih Kas Berjalan Periode Ini'}
+                </div>
+              </div>
+              <div style="font-size: 18px; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #fbbf24;">
+                ${formatRupiah(totalSaldoBersih)}
+              </div>
+            </div>
+
+            ${neracaExtraHtml}
+          </div>
+
+          <!-- Footer Tanda Tangan Halaman 1 -->
+          <div style="margin-top: 25px; padding-top: 12px; border-top: 1px dashed #cbd5e1; display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; font-size: 10px;">
+            <div>
+              <div style="color: #64748b; margin-bottom: 45px;">Dibuat Oleh (Admin Kasir),</div>
+              <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 130px;">
+                ( Petugas Koperasi )
+              </div>
+            </div>
+            <div>
+              <div style="color: #64748b; margin-bottom: 45px;">Diperiksa Oleh (Pembukuan),</div>
+              <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 130px;">
+                ( Robi Darwis )
+              </div>
+            </div>
+            <div>
+              <div style="color: #64748b; margin-bottom: 45px;">Mengetahui (Ketua / Pengawas),</div>
+              <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 130px;">
+                ( Abzqar )
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= HALAMAN SELANJUTNYA: PERINCIAN KATEGORI (PAGE 2+) ================= -->
+        <div style="page-break-before: always; break-before: page; padding-top: 10px;">
+          <!-- Header Halaman 2 -->
+          <div style="border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: flex-end;">
+            <div>
+              <h2 style="font-size: 15px; font-weight: 900; color: #0f172a;">
+                HALAMAN 2: PERINCIAN KATEGORI DENGAN JUDUL KATEGORI
+              </h2>
+              <div style="font-size: 11px; font-weight: 700; color: #b45309;">
+                ${titleBuku} • ${periodeLabel.toUpperCase()}
+              </div>
+            </div>
+            <div style="font-size: 10px; color: #64748b; text-align: right;">
+              <div>Dokumen Terperinci</div>
+              <div style="font-weight: 800; color: #0f172a;">Koperasi HWS</div>
+            </div>
+          </div>
+
+          <!-- Daftar Perincian per Kategori -->
+          ${categoryDetailSections || '<div style="padding: 30px; text-align: center; color: #64748b; font-size: 12px;">Tidak ada perincian transaksi untuk ditampilkan.</div>'}
+
+          <!-- Total Akhir Perincian -->
+          <div style="background: #0f172a; color: #ffffff; padding: 12px 16px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+            <div style="font-weight: 900; font-size: 12px; text-transform: uppercase;">
+              TOTAL AKUMULASI SELURUH KATEGORI (${allCategoryDetails.length} KATEGORI):
+            </div>
+            <div style="font-weight: 900; font-size: 16px; font-family: 'JetBrains Mono', monospace; color: #fbbf24;">
+              ${formatRupiah(totalSaldoBersih)}
+            </div>
+          </div>
+
+          <div style="margin-top: 24px; font-size: 9px; color: #64748b; text-align: center; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+            Laporan Perincian Buku Kas Resmi Koperasi Himpunan Wirausaha Sejahtera. Watermark logo tertanam untuk menjamin keabsahan dokumen.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  printDocumentHtml(html, `Laporan_Buku_Kas_${bukuKasType}_${periodeLabel.replace(/\s+/g, '_')}`);
+}
+
+// User Req 1: Buku kas anggota, koperasi / konsolidasi download Excel
+export function exportBukuKasExcel(payload: BukuKasExportPayload) {
+  const {
+    bukuKasType,
+    kasEntries,
+    periodeLabel,
+    allMembers = [],
+    categoriesKoperasi,
+    saldoKasAnggota = 0,
+    saldoKasKoperasi = 0,
+  } = payload;
+
+  const titleBuku =
+    bukuKasType === 'anggota'
+      ? 'BUKU KAS 1: REKAPITULASI KAS ANGGOTA'
+      : bukuKasType === 'koperasi'
+      ? 'BUKU KAS 2: OPERASIONAL KAS KOPERASI'
+      : 'BUKU KAS 3: NERACA & KONSOLIDASI KEUANGAN';
+
+  const { catMasukMap, catKeluarMap } = getBukuKasCategoryMaps(
+    bukuKasType,
+    kasEntries,
+    categoriesKoperasi
+  );
+
+  const totalMasuk = Array.from(catMasukMap.values()).reduce((sum, item) => sum + item.total, 0);
+  const totalKeluar = Array.from(catKeluarMap.values()).reduce((sum, item) => sum + item.total, 0);
+  const totalSaldoBersih = totalMasuk - totalKeluar;
+
+  const labelPemasukanHeader =
+    bukuKasType === 'neraca'
+      ? 'PENDAPATAN & PENERIMAAN = SEMUA KATEGORI & JUMLAH'
+      : bukuKasType === 'anggota'
+      ? 'PEMASUKAN KAS ANGGOTA = SEMUA KATEGORI & JUMLAH'
+      : 'PEMASUKAN KAS KOPERASI = SEMUA KATEGORI & JUMLAH';
+
+  const labelPengeluaranHeader =
+    bukuKasType === 'neraca'
+      ? 'BEBAN & PENGELUARAN OVERHEAD = SEMUA KATEGORI & JUMLAH'
+      : bukuKasType === 'anggota'
+      ? 'PENGELUARAN KAS ANGGOTA = SEMUA KATEGORI & JUMLAH'
+      : 'PENGELUARAN KAS KOPERASI = SEMUA KATEGORI & JUMLAH';
+
+  const labelSubtotalMasuk =
+    bukuKasType === 'neraca' ? 'SUBTOTAL PENDAPATAN & PENERIMAAN' : 'SUBTOTAL PEMASUKAN';
+
+  const labelSubtotalKeluar =
+    bukuKasType === 'neraca' ? 'SUBTOTAL BEBAN & PENGELUARAN OVERHEAD' : 'SUBTOTAL PENGELUARAN';
+
+  // Build HTML Table for Excel
+  let excelHtml = `
+    <!-- HEADER LAPORAN -->
+    <table>
+      <tr>
+        <td colspan="5" class="header-title">KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA</td>
+      </tr>
+      <tr>
+        <td colspan="5" class="sub-title">${titleBuku}</td>
+      </tr>
+      <tr>
+        <td colspan="5">Periode Laporan: <b>${periodeLabel.toUpperCase()}</b> • Tanggal Unduh: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}</td>
+      </tr>
+      <tr>
+        <td colspan="5">Badan Hukum: AHU-0004921.AH.01.29.TAHUN 2024</td>
+      </tr>
+    </table>
+
+    <br/>
+
+    <!-- ================= HALAMAN DEPAN: JURNAL & REKAPITULASI ================= -->
+    <table>
+      <tr>
+        <th colspan="4" style="background-color: #0f172a; color: #ffffff; font-size: 13pt;">
+          HALAMAN DEPAN: JURNAL REKAPITULASI BUKU KAS
+        </th>
+      </tr>
+      <tr class="section-header" style="background-color: #047857; color: #ffffff;">
+        <td colspan="4"><b>${labelPemasukanHeader}</b></td>
+      </tr>
+      <tr style="background-color: #f1f5f9; font-weight: bold;">
+        <td class="center" style="width: 8%;">NO</td>
+        <td style="width: 52%;">${bukuKasType === 'neraca' ? 'KATEGORI PENDAPATAN & PENERIMAAN' : 'KATEGORI PEMASUKAN'}</td>
+        <td class="num" style="width: 25%;">JUMLAH (NOMINAL)</td>
+        <td class="center" style="width: 15%;">FREKUENSI</td>
+      </tr>
+  `;
+
+  let noM = 1;
+  catMasukMap.forEach((data, cat) => {
+    excelHtml += `
+      <tr>
+        <td class="center">${noM++}</td>
+        <td>${cat}</td>
+        <td class="num">${formatRupiah(data.total)}</td>
+        <td class="center">${data.entries.length} Transaksi</td>
+      </tr>
+    `;
+  });
+
+  excelHtml += `
+    <tr style="background-color: #ecfdf5; font-weight: bold;">
+      <td colspan="2">${labelSubtotalMasuk}</td>
+      <td class="num">${formatRupiah(totalMasuk)}</td>
+      <td></td>
+    </tr>
+
+    <!-- Spacer -->
+    <tr><td colspan="4" style="background-color: #ffffff; height: 12px; border: none;"></td></tr>
+
+    <tr class="section-header" style="background-color: #b91c1c; color: #ffffff;">
+      <td colspan="4"><b>${labelPengeluaranHeader}</b></td>
+    </tr>
+    <tr style="background-color: #f1f5f9; font-weight: bold;">
+      <td class="center">NO</td>
+      <td>${bukuKasType === 'neraca' ? 'KATEGORI BEBAN & OVERHEAD' : 'KATEGORI PENGELUARAN'}</td>
+      <td class="num">JUMLAH (NOMINAL)</td>
+      <td class="center">FREKUENSI</td>
+    </tr>
+  `;
+
+  let noK = 1;
+  catKeluarMap.forEach((data, cat) => {
+    excelHtml += `
+      <tr>
+        <td class="center">${noK++}</td>
+        <td>${cat}</td>
+        <td class="num">${formatRupiah(data.total)}</td>
+        <td class="center">${data.entries.length} Transaksi</td>
+      </tr>
+    `;
+  });
+
+  excelHtml += `
+    <tr style="background-color: #fef2f2; font-weight: bold;">
+      <td colspan="2">${labelSubtotalKeluar}</td>
+      <td class="num">${formatRupiah(totalKeluar)}</td>
+      <td></td>
+    </tr>
+
+    <!-- Spacer -->
+    <tr><td colspan="4" style="background-color: #ffffff; height: 12px; border: none;"></td></tr>
+
+    <tr class="total-row">
+      <td colspan="2">TOTAL = PEMASUKAN - PENGELUARAN ${bukuKasType === 'neraca' ? '(SURPLUS / HASIL USAHA BERJALAN)' : ''}</td>
+      <td class="num" style="font-size: 12pt; color: #fbbf24;">${formatRupiah(totalSaldoBersih)}</td>
+      <td></td>
+    </tr>
+  </table>
+  `;
+
+  // Khusus Neraca: Tambahkan Aset Lancar & Ekuitas
+  if (bukuKasType === 'neraca') {
+    const totalSimpananPokok = allMembers.reduce((sum, m) => sum + (m.saldoPokok || 0), 0);
+    const totalSimpananUmum = allMembers.reduce((sum, m) => sum + (m.saldoUmum || 0), 0);
+    const totalZakatQurban = allMembers.reduce((sum, m) => sum + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0), 0);
+    const totalAsetLancar = saldoKasAnggota + saldoKasKoperasi;
+
+    excelHtml += `
+      <br/>
+      <table>
+        <tr>
+          <th colspan="4" style="background-color: #0f172a; color: #ffffff; font-size: 12pt;">
+            POSISI KONSOLIDASI NERACA KEUANGAN (KAS & BANK)
+          </th>
+        </tr>
+        <tr class="section-header">
+          <td colspan="2"><b>ASET LANCAR (KAS & BANK)</b></td>
+          <td colspan="2"><b>KEWAJIBAN & EKUITAS</b></td>
+        </tr>
+        <tr>
+          <td>Kas di Bank (Kas Anggota)</td>
+          <td class="num">${formatRupiah(saldoKasAnggota)}</td>
+          <td>Simpanan Pokok Anggota</td>
+          <td class="num">${formatRupiah(totalSimpananPokok)}</td>
+        </tr>
+        <tr>
+          <td>Kas di Bank (Kas Koperasi)</td>
+          <td class="num">${formatRupiah(saldoKasKoperasi)}</td>
+          <td>Simpanan Umum Anggota</td>
+          <td class="num">${formatRupiah(totalSimpananUmum)}</td>
+        </tr>
+        <tr>
+          <td>-</td>
+          <td class="num">-</td>
+          <td>Titipan Zakat & Qurban</td>
+          <td class="num">${formatRupiah(totalZakatQurban)}</td>
+        </tr>
+        <tr class="total-row">
+          <td>TOTAL ASET LANCAR</td>
+          <td class="num">${formatRupiah(totalAsetLancar)}</td>
+          <td>TOTAL KEWAJIBAN & EKUITAS</td>
+          <td class="num">${formatRupiah(totalSimpananPokok + totalSimpananUmum + totalZakatQurban)}</td>
+        </tr>
+      </table>
+    `;
+  }
+
+  // ================= HALAMAN SELANJUTNYA: PERINCIAN KATEGORI =================
+  excelHtml += `
+    <br/><br/>
+    <table>
+      <tr>
+        <th colspan="5" style="background-color: #1e293b; color: #ffffff; font-size: 13pt;">
+          HALAMAN SELANJUTNYA: PERINCIAN KATEGORI DENGAN JUDUL KATEGORI
+        </th>
+      </tr>
+    </table>
+  `;
+
+  // Susun perincian kategori (semua kategori ditampilkan)
+  const allDetails: { cat: string; tipe: 'masuk' | 'keluar'; entries: KasEntry[]; total: number }[] = [];
+  catMasukMap.forEach((data, cat) => {
+    allDetails.push({ cat, tipe: 'masuk', entries: data.entries, total: data.total });
+  });
+  catKeluarMap.forEach((data, cat) => {
+    allDetails.push({ cat, tipe: 'keluar', entries: data.entries, total: data.total });
+  });
+
+  allDetails.forEach((sec, idx) => {
+    const sorted = [...sec.entries].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    const tipeBadge =
+      sec.tipe === 'masuk'
+        ? (bukuKasType === 'neraca' ? 'PENDAPATAN / PENERIMAAN' : 'PEMASUKAN')
+        : (bukuKasType === 'neraca' ? 'BEBAN / PENGELUARAN OVERHEAD' : 'PENGELUARAN');
+
+    excelHtml += `
+      <br/>
+      <table>
+        <tr class="cat-title" style="background-color: ${sec.tipe === 'masuk' ? '#047857' : '#991b1b'}; color: #ffffff;">
+          <td colspan="5">
+            <b>${idx + 1}. JUDUL KATEGORI: ${sec.cat.toUpperCase()} (${tipeBadge})</b>
+          </td>
+        </tr>
+        <tr style="background-color: #f1f5f9; font-weight: bold;">
+          <td class="center" style="width: 6%;">NO</td>
+          <td style="width: 15%;">TANGGAL</td>
+          <td style="width: 44%;">KETERANGAN</td>
+          <td class="num" style="width: 20%;">JUMLAH (NOMINAL)</td>
+          <td style="width: 15%;">PETUGAS</td>
+        </tr>
+    `;
+
+    if (sorted.length > 0) {
+      sorted.forEach((e, eIdx) => {
+        excelHtml += `
+          <tr>
+            <td class="center">${eIdx + 1}</td>
+            <td>${e.tanggal}</td>
+            <td>${e.keterangan || '-'}</td>
+            <td class="num">${formatRupiah(e.nominal)} ${sec.tipe === 'masuk' ? '(CR)' : '(DB)'}</td>
+            <td>${e.inputBy || 'Petugas'}</td>
+          </tr>
+        `;
+      });
+    } else {
+      excelHtml += `
+        <tr>
+          <td colspan="5" style="text-align: center; color: #64748b; font-style: italic;">
+            Belum ada transaksi pada kategori ini untuk periode yang dipilih (Jumlah: Rp 0)
+          </td>
+        </tr>
+      `;
+    }
+
+    excelHtml += `
+        <tr style="background-color: #f8fafc; font-weight: bold;">
+          <td colspan="3" style="text-align: right;">SUBTOTAL KATEGORI [${sec.cat.toUpperCase()}]:</td>
+          <td class="num" style="color: ${sec.tipe === 'masuk' ? '#047857' : '#b91c1c'};">${formatRupiah(sec.total)}</td>
+          <td></td>
+        </tr>
+      </table>
+    `;
+  });
+
+  excelHtml += `
+    <br/>
+    <table>
+      <tr class="total-row">
+        <td colspan="3">GRAND TOTAL KESELURUHAN PERINCIAN (${allDetails.length} KATEGORI)</td>
+        <td class="num" style="font-size: 13pt; color: #fbbf24;">${formatRupiah(totalSaldoBersih)}</td>
+        <td></td>
+      </tr>
+    </table>
+  `;
+
+  downloadExcelHtml(excelHtml, `Laporan_Buku_Kas_${bukuKasType}_${periodeLabel.replace(/\s+/g, '_')}`);
+}
+

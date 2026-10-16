@@ -563,18 +563,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
             </div>
 
-            {/* Tombol Unduh & Pasang Aplikasi */}
-            <button
-              type="button"
-              onClick={() => setShowInstallModal(true)}
-              className="py-1.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-black flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-              title="Pasang / Unduh Aplikasi Koperasi HWS ke Perangkat Ini (Android, PC, iOS)"
-            >
-              <Smartphone className="w-4 h-4 text-emerald-400" />
-              <span>Unduh & Pasang</span>
-            </button>
-
-            {/* Menu Setting: Memuat Keamanan Biometrik, Pasang Aplikasi, dan Kelola Admin */}
+            {/* Menu Setting: Memuat Keamanan Biometrik, Kelola Admin, dan Profil */}
             <button
               type="button"
               onClick={() => {
