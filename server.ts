@@ -1641,6 +1641,14 @@ async function startServer() {
     res.status(404).send('File google-services.json tidak ditemukan');
   });
 
+  // Download Current Database State (koperasi_db.json)
+  app.get('/api/download/database', (req: Request, res: Response) => {
+    res.setHeader('Content-Disposition', 'attachment; filename="koperasi_db.json"');
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(JSON.stringify(currentState, null, 2));
+  });
+
   // Download Official PC Desktop Executable (.exe) (Real PE32 Windows executable launcher)
   app.get('/api/download/exe', (req: Request, res: Response) => {
     const hostUrl = `${req.protocol}://${req.get('host')}`;

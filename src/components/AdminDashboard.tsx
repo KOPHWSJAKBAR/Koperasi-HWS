@@ -318,12 +318,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Pending Tabungan Pokok Lock / Unlock requests (Req 7)
   const pendingLockPokokCount = state.members.filter((m) => !!m.lockPokokRequest).length;
 
+  // Pending Buku Kas Koperasi Approval (Input, Edit, Hapus)
+  const pendingKasCount = state.kasList.filter((k) => k.status === 'pending_approval').length;
+
   // Unread chat messages from members
   const unreadChatCount = state.chatMessages.filter(
     (m) => m.senderType === 'member' && !m.isReadByAdmin
   ).length;
 
-  const totalNotifCount = pendingDepositsCount + unreadChatCount + ((isSuperAdmin || isApproval) ? pendingLockPokokCount : 0);
+  const totalNotifCount =
+    pendingDepositsCount +
+    unreadChatCount +
+    ((isSuperAdmin || isApproval) ? pendingLockPokokCount + pendingKasCount : 0);
 
   // Print summary report
   const handlePrintSummary = () => {
@@ -557,6 +563,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
             </div>
 
+            {/* Tombol Unduh & Pasang Aplikasi */}
+            <button
+              type="button"
+              onClick={() => setShowInstallModal(true)}
+              className="py-1.5 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-black flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+              title="Pasang / Unduh Aplikasi Koperasi HWS ke Perangkat Ini (Android, PC, iOS)"
+            >
+              <Smartphone className="w-4 h-4 text-emerald-400" />
+              <span>Unduh & Pasang</span>
+            </button>
+
             {/* Menu Setting: Memuat Keamanan Biometrik, Pasang Aplikasi, dan Kelola Admin */}
             <button
               type="button"
@@ -632,10 +649,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            Buku Kas & Neraca
+            <span>Buku Kas & Neraca</span>
+            {pendingKasCount > 0 && (isSuperAdmin || isApproval) && (
+              <span className="px-1.5 py-0.5 bg-amber-500 text-slate-950 rounded-full font-black text-[10px] animate-pulse">
+                {pendingKasCount} Approval
+              </span>
+            )}
           </button>
 
-          {isSuperAdmin && (
+          {!isLaporan && (
             <button
               onClick={() => setActiveTab('penyesuaian_saldo')}
               className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
@@ -645,7 +667,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>Masuk Transaksi Anggota</span>
+              Penyesuaian Saldo
             </button>
           )}
 
@@ -717,7 +739,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {activeTab === 'verifikasi' && 'Verifikasi Setoran'}
               {activeTab === 'anggota' && 'Data Anggota'}
               {activeTab === 'kas' && 'Buku Kas & Neraca'}
-              {activeTab === 'penyesuaian_saldo' && 'Masuk Transaksi Anggota (Super Admin)'}
+              {activeTab === 'penyesuaian_saldo' && 'Penyesuaian Saldo Anggota'}
               {activeTab === 'zakat' && 'Zakat & Qurban'}
               {activeTab === 'surat' && 'Surat Menyurat'}
               {activeTab === 'chat' && 'Chat Online'}
@@ -759,6 +781,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-xl text-xs shrink-0 shadow-lg shadow-sky-500/20 transition-all cursor-pointer self-end sm:self-center"
                 >
                   Buka Pengesahan
+                </button>
+              </div>
+            )}
+
+            {/* PENDING BUKU KAS APPROVAL ALERT BANNER (Input, Edit, Hapus) */}
+            {(isSuperAdmin || isApproval) && pendingKasCount > 0 && (
+              <div
+                onClick={() => setActiveTab('kas')}
+                className="bg-gradient-to-r from-amber-950/80 via-yellow-950/70 to-slate-900 border border-amber-500/50 rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:border-amber-400 transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-extrabold text-white">
+                        Ada {pendingKasCount} Transaksi Buku Kas Koperasi Menunggu Persetujuan
+                      </h4>
+                      <span className="text-[10px] font-black bg-amber-500 text-slate-950 px-2 py-0.5 rounded-full animate-pulse">
+                        Approval Kas
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-300/80 mt-0.5">
+                      Diajukan oleh Admin Write (input, edit, atau permohonan hapus). Klik untuk membuka Buku Kas dan menyetujui atau menolak.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shrink-0 shadow-lg shadow-amber-500/20 transition-all cursor-pointer self-end sm:self-center"
+                >
+                  Buka Kas →
                 </button>
               </div>
             )}
@@ -1031,11 +1086,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span>›</span>
                 </button>
 
-                {isSuperAdmin && (
+                {!isLaporan && (
                   <button
                     type="button"
                     onClick={() => setActiveTab('penyesuaian_saldo')}
-                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 hover:border-amber-500/60 text-white flex items-center justify-between text-left transition-all group shadow-md cursor-pointer"
+                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 hover:border-amber-500/60 text-white flex items-center justify-between text-left transition-all group shadow-md"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-xl bg-slate-800 text-amber-400 flex items-center justify-center group-hover:scale-105 transition-transform">
@@ -1043,11 +1098,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div>
                         <div className="text-xs font-extrabold flex items-center gap-1.5">
-                          <span>5. Masuk Transaksi Anggota</span>
-                          <span className="text-[9px] bg-amber-500/20 text-amber-300 font-black px-1.5 py-0.2 rounded">Super Admin</span>
+                          <span>5. Penyesuaian Saldo Anggota</span>
+                          <span className="text-[9px] bg-amber-500/20 text-amber-300 font-black px-1.5 py-0.2 rounded">Baru</span>
                         </div>
                         <div className="text-[10px] text-slate-400">
-                          Pilih wilayah atau nama anggota, masukan password admin & persetujuan
+                          Koreksi Saldo Manual & Pembagian Hasil (% Pokok / SHU)
                         </div>
                       </div>
                     </div>

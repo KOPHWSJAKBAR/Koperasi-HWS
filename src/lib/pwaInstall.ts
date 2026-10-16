@@ -101,9 +101,21 @@ export async function promptInstallDirectly(): Promise<{
   }
 }
 
-export function directDownload(type: 'apk' | 'exe' | 'ios') {
+export type DownloadPackageType =
+  | 'apk'
+  | 'exe'
+  | 'ios'
+  | 'bat'
+  | 'database'
+  | 'google-services'
+  | 'shortcut';
+
+export function directDownload(type: DownloadPackageType) {
   if (typeof document === 'undefined') return;
   const link = document.createElement('a');
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+
   if (type === 'apk') {
     link.href = '/api/download/apk';
     link.download = 'koperasi-hws-v2.4.apk';
@@ -113,8 +125,86 @@ export function directDownload(type: 'apk' | 'exe' | 'ios') {
   } else if (type === 'ios') {
     link.href = '/api/download/ios';
     link.download = 'koperasi-hws.mobileconfig';
+  } else if (type === 'bat') {
+    link.href = '/api/download/pc-installer';
+    link.download = 'Install-Koperasi-HWS.bat';
+  } else if (type === 'database') {
+    link.href = '/api/download/database';
+    link.download = 'koperasi_db.json';
+  } else if (type === 'google-services') {
+    link.href = '/api/download/google-services.json';
+    link.download = 'google-services.json';
+  } else if (type === 'shortcut') {
+    link.href = '/api/download/pc-shortcut';
+    link.download = 'Koperasi-HWS.url';
   }
+
   document.body.appendChild(link);
   link.click();
-  document.body.removeChild(link);
+  setTimeout(() => {
+    try {
+      document.body.removeChild(link);
+    } catch {}
+  }, 300);
+}
+
+/**
+ * Trigger both direct database download of installer package AND automatic device install
+ */
+export async function installAndDownload(type: DownloadPackageType): Promise<{
+  status:
+    | 'installed'
+    | 'dismissed'
+    | 'downloaded_and_prompted'
+    | 'ios_guide'
+    | 'already_installed'
+    | 'downloaded';
+  message: string;
+}> {
+  // 1. Immediately trigger download of installer package from database
+  directDownload(type);
+
+  if (type === 'database' || type === 'google-services') {
+    return {
+      status: 'downloaded',
+      message:
+        type === 'database'
+          ? '✓ Salinan database resmi Koperasi HWS berhasil diunduh ke perangkat Anda.'
+          : '✓ Berkas konfigurasi google-services.json berhasil diunduh.',
+    };
+  }
+
+  // 2. Prompt direct installation on device
+  const promptRes = await promptInstallDirectly();
+
+  if (promptRes.status === 'already_installed') {
+    return {
+      status: 'already_installed',
+      message:
+        '✓ Berkas installer terunduh dari database & aplikasi telah terpasang di perangkat ini.',
+    };
+  }
+
+  if (promptRes.status === 'installed') {
+    return {
+      status: 'installed',
+      message:
+        '✓ Berkas installer terunduh dari database & Koperasi HWS berhasil dipasang otomatis di perangkat Anda!',
+    };
+  }
+
+  if (type === 'ios') {
+    return {
+      status: 'ios_guide',
+      message:
+        '✓ Profil iOS terunduh dari database. Ikuti petunjuk untuk menambahkannya ke Layar Utama iPhone/iPad Anda.',
+    };
+  }
+
+  return {
+    status: 'downloaded_and_prompted',
+    message: `✓ Berkas installer ${
+      type === 'apk' ? 'Android (.APK)' : 'PC Desktop (.EXE)'
+    } langsung terunduh dari database. Klik berkas atau pilih "Pasang" untuk instalasi otomatis.`,
+  };
 }

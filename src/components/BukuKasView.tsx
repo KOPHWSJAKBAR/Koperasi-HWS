@@ -25,6 +25,7 @@ import {
   Receipt,
   FileText,
   X,
+  Clock,
 } from 'lucide-react';
 
 interface BukuKasViewProps {
@@ -95,7 +96,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const isSuperAdmin = currentAdmin.role === 'super_admin';
   const isPembukuan = currentAdmin.role === 'admin_pembukuan';
   const isWriter = currentAdmin.role === 'admin_write';
-  const isApproval = currentAdmin.role === 'admin_approval';
+  const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola';
   const isLaporan = currentAdmin.role === 'admin_laporan';
 
   // Can approve / direct modify: Super Admin or Admin Approval / Admin Pembukuan
@@ -103,7 +104,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // Can input documents: Super Admin, Admin Write, Admin Approval
   const canInput = isSuperAdmin || isWriter || isApproval || isPembukuan;
   // Can edit: Super Admin, Admin Write (dengan approval), atau Admin Approval
-  const canEdit = isSuperAdmin || isWriter || isApproval || isPembukuan || isLaporan;
+  const canEdit = isSuperAdmin || isWriter || isApproval || isPembukuan;
+  // Can delete: Super Admin, Admin Write (dengan approval), atau Admin Approval
+  const canDelete = isSuperAdmin || isWriter || isApproval || isPembukuan;
+
+  // Pending approval list for Buku Kas (Input, Edit, Hapus)
+  const pendingKasApprovals = state.kasList.filter((k) => k.status === 'pending_approval');
 
   // Calculate Running Saldo Buku Kas Anggota
   let saldoKasAnggota = 0;
@@ -230,6 +236,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       return;
     }
 
+    const isDirect = isSuperAdmin || isApproval;
     const updatedEntry: KasEntry = {
       ...editingKasEntry,
       tanggal: editTanggal,
@@ -239,9 +246,19 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       nominal: nominalNum,
       keterangan: editKeterangan.trim(),
       namaPenerima: editNamaPenerima.trim() || undefined,
-      status: (isSuperAdmin || isApproval) ? 'approved' : 'pending_approval',
-      pendingAction: (isSuperAdmin || isApproval) ? undefined : 'update',
-      approvedBy: (isSuperAdmin || isApproval) ? currentAdmin.nama : undefined,
+      status: isDirect ? 'approved' : 'pending_approval',
+      pendingAction: isDirect ? undefined : 'update',
+      originalData: isDirect ? undefined : {
+        tanggal: editingKasEntry.tanggal,
+        bukuKas: editingKasEntry.bukuKas,
+        kategori: editingKasEntry.kategori,
+        tipe: editingKasEntry.tipe,
+        nominal: editingKasEntry.nominal,
+        keterangan: editingKasEntry.keterangan,
+        namaPenerima: editingKasEntry.namaPenerima,
+      },
+      inputBy: isDirect ? (editingKasEntry.inputBy || currentAdmin.nama) : currentAdmin.nama,
+      approvedBy: isDirect ? currentAdmin.nama : undefined,
     };
 
     // Kirim update ke server
@@ -264,8 +281,8 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       );
       const audit = createAuditLog(
         currentAdmin,
-        'Edit Transaksi Buku Kas',
-        `Mengubah transaksi kas [${updatedEntry.bukuKas}] ${updatedEntry.keterangan} senilai ${formatRupiah(updatedEntry.nominal)} (${updatedEntry.status === 'approved' ? 'Disetujui' : 'Menunggu Approval'})`,
+        isDirect ? 'Edit Transaksi Buku Kas' : 'Pengajuan Edit Buku Kas',
+        `Mengubah transaksi kas [${updatedEntry.bukuKas}] ${updatedEntry.keterangan} senilai ${formatRupiah(updatedEntry.nominal)} (${isDirect ? 'Disetujui Langsung' : 'Menunggu Approval'})`,
         updatedEntry.id
       );
       return {
@@ -277,36 +294,67 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
     setEditingKasEntry(null);
     alert(
-      (isSuperAdmin || isApproval)
+      isDirect
         ? '✓ Transaksi buku kas berhasil diperbarui dan disetujui!'
-        : '✓ Perubahan transaksi berhasil ditulis oleh Admin Write! Menunggu persetujuan oleh Admin Approval / Super Admin.'
+        : '✓ Perubahan transaksi kas berhasil ditulis oleh Admin Write! Menunggu persetujuan (approval) oleh Admin Approval / Super Admin.'
     );
   };
 
-  // Handle Delete Kas Entry (Req 6: Buku kas dapat di-hapus)
+  // Handle Delete Kas Entry (Req: Transaksi dapat dihapus oleh admin write dan disetujui oleh admin approval atau super admin)
   const handleDeleteKas = async (entry: KasEntry) => {
     if (entry.bukuKas === 'anggota') {
-      alert('Buku Kas Anggota bersifat otomatis dan dilindungi sistem, tidak dapat dihapus oleh admin.');
+      alert('Buku Kas Anggota bersifat otomatis dari mutasi setoran dan dilindungi. Tidak dapat dihapus oleh admin.');
       return;
     }
 
+    if (isWriter) {
+      const confirmReq = confirm(
+        `Ajukan penghapusan transaksi Buku Kas Koperasi:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nPengajuan akan diteruskan ke Admin Approval atau Super Admin untuk disahkan. Lanjutkan?`
+      );
+      if (!confirmReq) return;
+
+      try {
+        await fetch('/api/kas/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: false }),
+        });
+      } catch {}
+
+      await updateState((prev) => ({
+        ...prev,
+        kasList: prev.kasList.map((k) =>
+          k.id === entry.id
+            ? { ...k, status: 'pending_approval', pendingAction: 'delete', inputBy: currentAdmin.nama }
+            : k
+        ),
+        auditLogs: [
+          createAuditLog(
+            currentAdmin,
+            'Pengajuan Hapus Buku Kas',
+            `Admin Write ${currentAdmin.nama} mengajukan penghapusan transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)}`,
+            entry.id
+          ),
+          ...prev.auditLogs,
+        ],
+      }));
+
+      alert(`✓ Pengajuan hapus transaksi "${entry.keterangan}" berhasil dikirim! Menunggu persetujuan Admin Approval atau Super Admin.`);
+      return;
+    }
+
+    // Super Admin & Admin Approval direct delete
     const confirmDelete = confirm(
-      `Hapus transaksi "${entry.keterangan}" (${formatRupiah(entry.nominal)}) dari buku kas? Saldo kas akan otomatis disesuaikan.`
+      `Hapus transaksi Kas Koperasi:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai ${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}, transaksi ini akan langsung dihapus dan saldo kas koperasi otomatis disesuaikan. Lanjutkan?`
     );
     if (!confirmDelete) return;
 
-    // Kirim hapus ke server
     try {
-      const res = await fetch('/api/kas/delete', {
+      await fetch('/api/kas/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama }),
+        body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: true }),
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        alert(data.error || 'Gagal menghapus transaksi');
-        return;
-      }
     } catch {}
 
     await updateState((prev) => {
@@ -314,7 +362,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       const audit = createAuditLog(
         currentAdmin,
         'Hapus Transaksi Kas',
-        `Menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)}`,
+        `${isSuperAdmin ? 'Super Admin' : 'Admin Approval'} ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)}`,
         entry.id
       );
       return {
@@ -327,9 +375,17 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     alert(`✓ Transaksi "${entry.keterangan}" berhasil dihapus dari buku kas.`);
   };
 
-  // Handle Approval for pending kas changes
+  // Handle Approval for pending kas changes (Input, Edit, Hapus)
   const handleApproveKasAction = async (entry: KasEntry, isApproved: boolean) => {
     if (!canDirectModify) return;
+
+    try {
+      await fetch('/api/kas/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: entry.id, isApproved, adminName: currentAdmin.nama }),
+      });
+    } catch {}
 
     await updateState((prev) => {
       let updatedList = [...prev.kasList];
@@ -342,15 +398,27 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           );
         }
       } else {
-        updatedList = updatedList.map((k) =>
-          k.id === entry.id ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama } : k
-        );
+        if (entry.pendingAction === 'delete') {
+          updatedList = updatedList.map((k) =>
+            k.id === entry.id ? { ...k, status: 'approved', pendingAction: undefined } : k
+          );
+        } else if (entry.pendingAction === 'update' && entry.originalData) {
+          updatedList = updatedList.map((k) =>
+            k.id === entry.id ? { ...k, ...entry.originalData, status: 'approved', pendingAction: undefined, originalData: undefined } : k
+          );
+        } else {
+          updatedList = updatedList.map((k) =>
+            k.id === entry.id ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
+          );
+        }
       }
 
       const audit = createAuditLog(
         currentAdmin,
-        isApproved ? 'Setujui Transaksi Kas' : 'Tolak Transaksi Kas',
-        `${isApproved ? 'Menyetujui' : 'Menolak'} perubahan kas ${entry.keterangan}`,
+        isApproved ? 'Pengesahan Transaksi Kas' : 'Penolakan Transaksi Kas',
+        `${currentAdmin.nama} (${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}) ${isApproved ? 'menyetujui' : 'menolak'} ${
+          entry.pendingAction === 'delete' ? 'penghapusan' : entry.pendingAction === 'update' ? 'perubahan' : 'input'
+        } transaksi kas ${entry.keterangan}`,
         entry.id
       );
 
@@ -360,6 +428,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         auditLogs: [audit, ...prev.auditLogs],
       };
     });
+
+    alert(
+      isApproved
+        ? `✓ ${entry.pendingAction === 'delete' ? 'Penghapusan transaksi' : 'Perubahan transaksi'} berhasil disetujui!`
+        : `Permohonan transaksi kas telah ditolak.`
+    );
   };
 
   // Add Category Handler
@@ -874,18 +948,107 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       ) : (
         /* Table of Cashbook Transactions */
         <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl">
-          {activeKasTab === 'anggota' && (
-            <div className="mb-4 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-start gap-3">
-              <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl font-bold shrink-0 text-sm">
-                🔒
+          {/* PENDING KAS APPROVALS ALERT BOX FOR ADMIN APPROVAL & SUPER ADMIN (Req: Transaksi kas dapat dihapus oleh admin write dan disetujui admin approval / super admin) */}
+          {(isSuperAdmin || isApproval) && pendingKasApprovals.length > 0 && (
+            <div className="mb-5 bg-gradient-to-r from-amber-950/70 via-slate-900 to-indigo-950/70 border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+                    <Clock className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm text-amber-200">
+                      Permintaan Transaksi Buku Kas Menunggu Persetujuan ({pendingKasApprovals.length} Transaksi)
+                    </h4>
+                    <p className="text-[11px] text-amber-300/80">
+                      Diajukan oleh Admin Write (input, edit, atau hapus transaksi). Memerlukan pengesahan dari Admin Approval atau Super Admin.
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded-full animate-pulse">
+                  Persetujuan Kas
+                </span>
               </div>
-              <div>
-                <div className="font-extrabold text-white text-xs">
-                  Buku Kas Anggota (Pencatatan Otomatis & Terproteksi)
-                </div>
-                <div className="text-[11px] text-amber-200/90 mt-0.5 leading-relaxed">
-                  Semua transaksi Simpanan Pokok, Tabungan Umum Bebas, Zakat, dan Qurban dicatat secara otomatis ke dalam Buku Kas Anggota. Demi transparansi dan keamanan saldo anggota, buku kas anggota <strong>tidak dapat di-input manual atau diedit oleh admin</strong>.
-                </div>
+
+              <div className="space-y-2.5 pt-1">
+                {pendingKasApprovals.map((k) => (
+                  <div
+                    key={k.id}
+                    className="p-3.5 bg-slate-900/90 rounded-2xl border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                          k.pendingAction === 'delete'
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                            : k.pendingAction === 'update'
+                            ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        }`}>
+                          {k.pendingAction === 'delete' ? '🗑️ Permintaan HAPUS' : k.pendingAction === 'update' ? '✏️ Permintaan EDIT' : '➕ Permintaan INPUT BARU'}
+                        </span>
+                        <span className="font-extrabold text-white text-xs">
+                          {k.keterangan}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono bg-slate-800 px-1.5 py-0.5 rounded">
+                          [{k.bukuKas.toUpperCase()}]
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-300">
+                        Nominal: <span className="font-mono font-bold text-amber-400">{formatRupiah(k.nominal)}</span> ({k.tipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'}) • Kategori: {k.kategori} • Tanggal: {k.tanggal}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Diajukan oleh: <b className="text-slate-300">{k.inputBy}</b> pada {new Date(k.createdAt).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                      <button
+                        type="button"
+                        onClick={() => handleApproveKasAction(k, false)}
+                        className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                      >
+                        Tolak
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApproveKasAction(k, true)}
+                        className={`px-4 py-1.5 font-black rounded-xl text-xs shadow-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                          k.pendingAction === 'delete'
+                            ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
+                            : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
+                        }`}
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>{k.pendingAction === 'delete' ? 'Setujui Hapus' : 'Setujui'}</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* PENDING KAS INFO BOX FOR ADMIN WRITE */}
+          {isWriter && pendingKasApprovals.length > 0 && (
+            <div className="mb-5 bg-sky-950/30 border border-sky-500/30 rounded-3xl p-4 shadow-xl space-y-2">
+              <div className="flex items-center gap-2 text-sky-300 text-xs font-bold">
+                <Clock className="w-4 h-4 text-sky-400 animate-spin" />
+                <span>Pengajuan Transaksi Buku Kas Anda ({pendingKasApprovals.length} Menunggu Persetujuan Admin Approval / Super Admin)</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
+                {pendingKasApprovals.map((k) => (
+                  <div key={k.id} className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800 flex justify-between items-center gap-2">
+                    <div className="truncate">
+                      <div className="font-extrabold text-white text-xs truncate">{k.keterangan}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">{formatRupiah(k.nominal)} • [{k.bukuKas}]</div>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
+                      k.pendingAction === 'delete' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                    }`}>
+                      {k.pendingAction === 'delete' ? 'Hapus' : k.pendingAction === 'update' ? 'Edit' : 'Input'} (Pending)
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -971,53 +1134,75 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                             </span>
                           ) : (
                             <>
-                              {/* Tombol Edit Buku Kas Koperasi (Admin Write, Admin Approval, Super Admin) */}
-                              {canEdit && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditKas(entry)}
-                                  className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
-                                  title="Edit Transaksi Kas Koperasi"
-                                >
-                                  <Edit className="w-3.5 h-3.5 text-sky-400" />
-                                  Edit
-                                </button>
-                              )}
+                              {entry.status === 'pending_approval' ? (
+                                <>
+                                  {/* Jika status pending, Admin Approval & Super Admin melihat tombol persetujuan */}
+                                  {canDirectModify && (
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApproveKasAction(entry, true)}
+                                        className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-[10px] flex items-center gap-1 shadow-md transition-all active:scale-95 cursor-pointer"
+                                        title={`Setujui ${entry.pendingAction === 'delete' ? 'Penghapusan' : entry.pendingAction === 'update' ? 'Perubahan' : 'Pencatatan'} Kas`}
+                                      >
+                                        <CheckCircle className="w-3.5 h-3.5" />
+                                        <span>Setujui</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApproveKasAction(entry, false)}
+                                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[10px] flex items-center gap-1 shadow-md transition-all active:scale-95 cursor-pointer"
+                                        title={`Tolak ${entry.pendingAction === 'delete' ? 'Penghapusan' : entry.pendingAction === 'update' ? 'Perubahan' : 'Pencatatan'} Kas`}
+                                      >
+                                        <XCircle className="w-3.5 h-3.5" />
+                                        <span>Tolak</span>
+                                      </button>
+                                    </div>
+                                  )}
 
-                              {/* Tombol Approval Persetujuan (Admin Approval & Super Admin) */}
-                              {entry.status === 'pending_approval' && canDirectModify && (
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleApproveKasAction(entry, true)}
-                                    className="px-2 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-[10px] flex items-center gap-1 shadow transition-all active:scale-95 cursor-pointer"
-                                    title="Setujui (Approval) Transaksi Kas Koperasi"
-                                  >
-                                    <CheckCircle className="w-3.5 h-3.5" />
-                                    <span>Setujui</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleApproveKasAction(entry, false)}
-                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[10px] flex items-center gap-1 shadow transition-all active:scale-95 cursor-pointer"
-                                    title="Tolak Transaksi Kas Koperasi"
-                                  >
-                                    <XCircle className="w-3.5 h-3.5" />
-                                    <span>Tolak</span>
-                                  </button>
-                                </div>
-                              )}
+                                  {/* Untuk Admin Write yang sedang menunggu persetujuan */}
+                                  {isWriter && (
+                                    <span className={`px-2 py-1 rounded-lg text-[10px] font-bold border inline-flex items-center gap-1 ${
+                                      entry.pendingAction === 'delete'
+                                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                        : entry.pendingAction === 'update'
+                                        ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                                        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                    }`}>
+                                      <Clock className="w-3 h-3 animate-spin" />
+                                      <span>Menunggu {entry.pendingAction === 'delete' ? 'Hapus' : entry.pendingAction === 'update' ? 'Edit' : 'Input'}</span>
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {/* Tombol Edit Buku Kas Koperasi (Admin Write mengajukan, Admin Approval / Super Admin menyetujui) */}
+                                  {canEdit && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditKas(entry)}
+                                      className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
+                                      title={isWriter ? 'Edit Transaksi Kas (Ajukan Persetujuan)' : 'Edit Transaksi Kas Koperasi'}
+                                    >
+                                      <Edit className="w-3.5 h-3.5 text-sky-400" />
+                                      Edit
+                                    </button>
+                                  )}
 
-                              {/* Tombol Hapus Buku Kas Koperasi */}
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteKas(entry)}
-                                className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
-                                title="Hapus Transaksi Buku Kas Koperasi"
-                              >
-                                <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                                Hapus
-                              </button>
+                                  {/* Tombol Hapus Buku Kas Koperasi (Admin Write mengajukan, Admin Approval / Super Admin menyetujui) */}
+                                  {canDelete && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteKas(entry)}
+                                      className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
+                                      title={isWriter ? 'Ajukan Penghapusan Transaksi ke Approval / Super Admin' : 'Hapus Transaksi Buku Kas Koperasi'}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                      Hapus
+                                    </button>
+                                  )}
+                                </>
+                              )}
                             </>
                           )}
                         </div>

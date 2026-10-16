@@ -56,6 +56,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [freezeReasonInput, setFreezeReasonInput] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [lockPokokModalMember, setLockPokokModalMember] = useState<MemberUser | null>(null);
+  const [showHapusTxModal, setShowHapusTxModal] = useState(false);
+  const [hapusTxInitialMemberId, setHapusTxInitialMemberId] = useState<string>('semua');
+  const [hapusTxInitialWilayah, setHapusTxInitialWilayah] = useState<WilayahKoperasi | 'semua'>('semua');
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -75,6 +78,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       } else if (lockPokokModalMember) {
         e.preventDefault();
         setLockPokokModalMember(null);
+      } else if (showHapusTxModal) {
+        e.preventDefault();
+        setShowHapusTxModal(false);
       } else if (showAddModal) {
         e.preventDefault();
         setShowAddModal(false);
@@ -82,7 +88,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     };
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
-  }, [selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, lockPokokModalMember, showAddModal]);
+  }, [selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, lockPokokModalMember, showHapusTxModal, showAddModal]);
 
   // Period filter states for reports
   const [periodeTipe, setPeriodeTipe] = useState<'semua' | 'harian' | 'bulanan' | 'tahunan'>('semua');
@@ -1009,6 +1015,22 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               </button>
             )}
 
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setHapusTxInitialMemberId('semua');
+                  setHapusTxInitialWilayah((selectedWilayah as any) || 'semua');
+                  setShowHapusTxModal(true);
+                }}
+                className="py-2 px-3.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-black rounded-xl shadow-lg shadow-rose-600/30 flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Khusus Super Admin: Hapus transaksi anggota per wilayah / nama anggota dengan persetujuan password"
+              >
+                <Trash2 className="w-4 h-4" />
+                Hapus Transaksi Anggota
+              </button>
+            )}
+
             <button
               onClick={() => handleExportMembers('pdf')}
               className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-amber-400 border border-amber-500/30 rounded-xl font-bold flex items-center gap-1.5"
@@ -1269,6 +1291,21 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                           title="Hapus Anggota (Pindah Saldo ke Koperasi)"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setHapusTxInitialMemberId(member.id);
+                            setHapusTxInitialWilayah(member.wilayah);
+                            setShowHapusTxModal(true);
+                          }}
+                          className="p-1.5 bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-500/40 rounded-lg transition-colors cursor-pointer"
+                          title={`Hapus Transaksi ${member.nama} (Khusus Super Admin)`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
                         </button>
                       )}
                     </div>
@@ -2257,6 +2294,18 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* ================= MODAL: HAPUS TRANSAKSI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}
+      {showHapusTxModal && isSuperAdmin && (
+        <HapusTransaksiAnggotaModal
+          state={state}
+          updateState={updateState}
+          currentAdmin={currentAdmin}
+          initialWilayah={hapusTxInitialWilayah}
+          initialMemberId={hapusTxInitialMemberId}
+          onClose={() => setShowHapusTxModal(false)}
+        />
       )}
     </div>
   );
