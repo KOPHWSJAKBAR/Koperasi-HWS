@@ -212,8 +212,57 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     setJumlahHari('');
   };
 
-  // Download QRIS as JPG (Req A.5)
+  // Download QRIS as JPG (Req 2: Unduh QRIS sesuai persis dengan yang tampil)
   const handleDownloadQrisJpg = () => {
+    const qrisSrc = state.profile?.qrisImageUrl;
+
+    // Jika gambar QRIS resmi tersimpan dalam data profil koperasi
+    if (qrisSrc) {
+      // Jika berupa data URL base64 atau direct image link, unduh langsung berkas aslinya
+      if (qrisSrc.startsWith('data:image') || qrisSrc.startsWith('blob:')) {
+        const link = document.createElement('a');
+        link.href = qrisSrc;
+        link.download = `QRIS_Resmi_Koperasi_HWS_${Date.now()}.jpg`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      // Jika berupa image URL / path, gambar ke canvas untuk konversi ke JPG murni
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || 800;
+        canvas.height = img.naturalHeight || 800;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.98);
+          const link = document.createElement('a');
+          link.href = dataUrl;
+          link.download = `QRIS_Resmi_Koperasi_HWS_${Date.now()}.jpg`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+      };
+      img.onerror = () => {
+        const link = document.createElement('a');
+        link.href = qrisSrc;
+        link.download = `QRIS_Resmi_Koperasi_HWS_${Date.now()}.jpg`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+      img.src = qrisSrc;
+      return;
+    }
+
+    // Fallback jika belum di-upload oleh pengurus
     const canvas = document.createElement('canvas');
     canvas.width = 800;
     canvas.height = 1000;

@@ -22,6 +22,13 @@ import {
   TrendingUp,
   History,
   Info,
+  Lock,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  User,
+  KeyRound,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface PenyesuaianSaldoViewProps {
@@ -45,7 +52,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const [activeSubTab, setActiveSubTab] = useState<'koreksi' | 'pembagian_hasil' | 'riwayat'>('koreksi');
 
   // ================= STATE 1: KOREKSI SALDO =================
-  const [koreksiTargetTipe, setKoreksiTargetTipe] = useState<'semua' | 'wilayah' | 'perorangan'>('semua');
+  const [koreksiTargetTipe, setKoreksiTargetTipe] = useState<'wilayah' | 'perorangan' | 'semua'>('wilayah');
   const [koreksiWilayah, setKoreksiWilayah] = useState<WilayahKoperasi>('Cengkareng');
   const [koreksiMemberId, setKoreksiMemberId] = useState<string>('');
   const [koreksiMemberSearch, setKoreksiMemberSearch] = useState<string>('');
@@ -55,8 +62,13 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const [koreksiKeterangan, setKoreksiKeterangan] = useState<string>('');
   const [isSubmittingKoreksi, setIsSubmittingKoreksi] = useState(false);
 
+  // Security password state for Super Admin (Req User)
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+
   // ================= STATE 2: PEMBAGIAN HASIL (SHU / PERSENTASE POKOK) =================
-  const [bagiHasilTargetTipe, setBagiHasilTargetTipe] = useState<'semua' | 'wilayah' | 'perorangan'>('semua');
+  const [bagiHasilTargetTipe, setBagiHasilTargetTipe] = useState<'wilayah' | 'perorangan' | 'semua'>('wilayah');
   const [bagiHasilWilayah, setBagiHasilWilayah] = useState<WilayahKoperasi>('Cengkareng');
   const [bagiHasilMemberId, setBagiHasilMemberId] = useState<string>('');
   const [bagiHasilMemberSearch, setBagiHasilMemberSearch] = useState<string>('');
@@ -92,17 +104,30 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const totalPokokTarget = targetMembersBagiHasil.reduce((sum, m) => sum + (m.saldoPokok || 0), 0);
   const totalBagiHasilEstimasi = Math.round(totalPokokTarget * (persenNum / 100));
 
-  // Role check
+  // Role check: Hanya Super Admin yang berwenang masuk transaksi anggota (Req User)
   const isSuperAdmin = currentAdmin.role === 'super_admin';
-  const isWriter = currentAdmin.role === 'admin_write';
-  const isLaporan = currentAdmin.role === 'admin_laporan';
-  const canPerformAdjustment = isSuperAdmin || isWriter;
+  const canPerformAdjustment = isSuperAdmin;
 
   // ================= SUBMIT KOREKSI SALDO =================
   const handleKirimKoreksi = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPasswordError('');
+
     if (!canPerformAdjustment) {
-      alert('Akses ditolak: Hanya Super Admin atau Admin Write yang berwenang melakukan koreksi saldo.');
+      alert('Akses Ditolak: Hanya Super Admin yang berwenang masuk transaksi anggota.');
+      return;
+    }
+
+    // Validasi Password Super Admin (Req User)
+    const expectedPassword = currentAdmin.password || 'admin123';
+    if (!adminPasswordInput.trim()) {
+      setPasswordError('Password Super Admin wajib diisi untuk persetujuan transaksi.');
+      return;
+    }
+
+    if (adminPasswordInput.trim() !== expectedPassword) {
+      setPasswordError('Password Super Admin salah! Verifikasi persetujuan transaksi ditolak.');
+      alert('Verifikasi Gagal: Password Super Admin yang Anda masukkan salah.');
       return;
     }
 
@@ -201,8 +226,8 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
 
         const audit = createAuditLog(
           currentAdmin,
-          'Koreksi Saldo Anggota',
-          `Memproses koreksi saldo ${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}] @ ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Total: ${formatRupiah(totalDana)}. Ket: ${koreksiKeterangan}`,
+          'Persetujuan Transaksi Anggota',
+          `Super Admin ${currentAdmin.nama} menyetujui transaksi anggota (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota (${koreksiTargetTipe === 'wilayah' ? `Wilayah ${koreksiWilayah}` : koreksiTargetTipe === 'perorangan' ? targetMembersKoreksi[0]?.nama : 'Semua Anggota'}). Otorisasi password terverifikasi. Ket: ${koreksiKeterangan}`,
           kasEntryId
         );
 
@@ -220,18 +245,20 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
         sendRealtimeNotification({
           recipientId: m.id,
           recipientNama: m.nama,
-          title: `💳 Penyesuaian Saldo: ${koreksiTipe === 'masuk' ? 'Kredit (+)' : 'Debit (-)'}`,
-          body: `Saldo ${koreksiJenisTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Bebas'} Anda telah disesuaikan sebesar ${formatRupiah(nominalNum)}. Keterangan: ${koreksiKeterangan}.`,
+          title: `💳 Transaksi Anggota: ${koreksiTipe === 'masuk' ? 'Kredit (+)' : 'Debit (-)'}`,
+          body: `Transaksi ${koreksiJenisTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Umum'} sebesar ${formatRupiah(nominalNum)} telah disetujui oleh Super Admin. Keterangan: ${koreksiKeterangan}.`,
           type: 'mutasi_baru',
           data: { nominal: nominalNum, tipe: koreksiTipe },
         }).catch(() => {});
       });
 
-      alert(`✓ Berhasil memproses koreksi saldo untuk ${targetMembersKoreksi.length} anggota. Total dana: ${formatRupiah(totalDana)}.`);
+      alert(`✓ Persetujuan Berhasil! Transaksi ${koreksiTipe === 'masuk' ? 'pemasukan' : 'pengeluaran'} sebesar ${formatRupiah(nominalNum)} untuk ${targetMembersKoreksi.length} anggota berhasil disahkan.`);
       setKoreksiNominal('');
       setKoreksiKeterangan('');
+      setAdminPasswordInput('');
+      setPasswordError('');
     } catch (err: any) {
-      alert('Gagal memproses koreksi saldo: ' + err.message);
+      alert('Gagal memproses transaksi: ' + err.message);
     } finally {
       setIsSubmittingKoreksi(false);
     }
@@ -240,8 +267,23 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   // ================= SUBMIT PEMBAGIAN HASIL =================
   const handleKirimBagiHasil = async (e: React.FormEvent) => {
     e.preventDefault();
+    setPasswordError('');
+
     if (!canPerformAdjustment) {
-      alert('Akses ditolak: Hanya Super Admin atau Admin Write yang berwenang memproses pembagian hasil.');
+      alert('Akses Ditolak: Hanya Super Admin yang berwenang menyetujui transaksi pembagian hasil.');
+      return;
+    }
+
+    // Validasi Password Super Admin (Req User)
+    const expectedPassword = currentAdmin.password || 'admin123';
+    if (!adminPasswordInput.trim()) {
+      setPasswordError('Password Super Admin wajib diisi untuk persetujuan transaksi.');
+      return;
+    }
+
+    if (adminPasswordInput.trim() !== expectedPassword) {
+      setPasswordError('Password Super Admin salah! Verifikasi persetujuan transaksi ditolak.');
+      alert('Verifikasi Gagal: Password Super Admin yang Anda masukkan salah.');
       return;
     }
 

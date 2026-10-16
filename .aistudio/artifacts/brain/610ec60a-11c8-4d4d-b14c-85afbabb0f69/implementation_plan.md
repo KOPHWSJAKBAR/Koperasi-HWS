@@ -1,121 +1,61 @@
-# Rencana Implementasi Pembaruan Koperasi HWS
+# Rencana Implementasi: Sinkronisasi Realtime AI Studio, Alur Buku Kas Koperasi, dan Manajemen Biodata Admin
 
-Rencana ini merinci implementasi fitur-fitur baru dan penyempurnaan sistem aplikasi Koperasi Himpunan Wirausaha Sejahtera (HWS) sesuai permintaan pengguna.
-
----
-
-## 1. Perlindungan & Restorasi Realtime Database (Firebase & Server)
-- **Tujuan**: Memastikan integritas data anggota, saldo, mutasi kas, dan surat yang telah diinput tetap aman, tidak ter-reset atau terhapus ketika terjadi upgrade aplikasi.
-- **Langkah-langkah**:
-  - Konfigurasi logika `mergeServerState` di `server.ts` dan `mergeStates` di `src/lib/storage.ts` agar selalu memprioritaskan data persisten yang sudah ada di Firestore dan `koperasi_db.json`.
-  - Mengamankan koleksi Firestore (`members`, `kasList`, `setoranList`, `suratList`, `auditLogs`, `notifications`) dengan sinkronisasi dua arah real-time tanpa operasi penghapusan data otomatis.
-  - Memverifikasi koneksi database Firestore `ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69`.
+Dokumen ini merinci rancangan perbaikan dan penyempurnaan sistem aplikasi Koperasi HWS berdasarkan jawaban klarifikasi pengguna.
 
 ---
 
-## 2. Menu Penyesuaian Saldo Anggota
-Menu baru yang dapat diakses oleh Super Admin dan Admin yang berwenang di dalam Dashboard Pengurus:
+## 1. Ringkasan Kebutuhan & Hasil Klarifikasi
 
-### A. Submenu 1: Koreksi Saldo
-- **Target Penerima**:
-  - Pilihan: Seluruh Anggota, Per Wilayah (Cengkareng, Kalideres, Kebon Jeruk, dsb.), atau Perorangan (pilih anggota spesifik).
-- **Jenis Transaksi**: Pemasukan (Kredit +) atau Pengeluaran (Debit -).
-- **Pilihan Tabungan**: Tabungan Pokok atau Tabungan Umum Bebas.
-- **Formulir**: Input Nominal (Rp) dan Keterangan koreksi saldo.
-- **Dampak**:
-  - Mengupdate saldo anggota secara massal atau perorangan.
-  - Menghasilkan riwayat mutasi rekening dengan keterangan koreksi resmi.
-  - Mencatat entri penyeimbang otomatis pada Buku Kas Anggota.
-  - Mencatat riwayat ke log audit.
+1. **Sinkronisasi Database Realtime ke AI Studio**:
+   - Seluruh data transaksi, buku kas, anggota, dan profil disinkronisasikan secara otomatis di latar belakang (*background automatic sync*) ke Google Cloud Firestore AI Studio (`ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69`).
+   - Perubahan data di satu perangkat langsung tercermin secara instan di perangkat lain (Android, iOS, PC, dan AI Studio) tanpa memerlukan tombol manual.
 
-### B. Submenu 2: Pembagian Hasil (SHU / Bagi Hasil)
-- **Target Penerima**: Seluruh Anggota, Per Wilayah, atau Perorangan.
-- **Kalkulasi**: Menampilkan input persentase (`%`). Sistem otomatis mengalikan persentase terhadap Saldo Tabungan Pokok masing-masing anggota target.
-  - Rumus: `Bagi Hasil = Saldo Pokok x (Persentase / 100)`.
-- **Pilihan Buku Kas**: Pilihan pembebanan buku kas sumber dana (misal: Buku Kas Koperasi - Pos Bagi Hasil).
-- **Pilihan Tujuan Kredit**: Fleksibel (dapat dipilih masuk ke Tabungan Umum bebas tarik atau menambah Tabungan Pokok).
-- **Konfirmasi & Eksekusi**: Menampilkan kalkulasi total dana yang dibagikan sebelum tombol "Kirim / Proses Bagi Hasil" dieksekusi.
+2. **Alur Buku Kas Koperasi**:
+   - **Admin Write**: Berwenang menulis transaksi kas baru serta mengajukan perubahan/edit transaksi kas koperasi. Transaksi yang ditulis atau diedit oleh Admin Write masuk ke dalam status `pending_approval` (Menunggu Persetujuan).
+   - **Admin Approval & Super Admin**: Berwenang langsung memeriksa dan mengesahkan (*approve* / *reject*) transaksi maupun perubahan kas yang diajukan oleh Admin Write.
+
+3. **Perubahan Biodata Admin**:
+   - **Setiap Admin (Admin Write, Admin Approval, Admin Laporan)**: Dapat mengedit dan merubah biodata akunnya sendiri (nama, email, nomor WhatsApp, NIK, alamat kantor/domisili, foto profil, dan kata sandi) melalui menu profil.
+   - **Super Admin**: Memiliki hak akses penuh untuk mengedit, menambah, dan mengelola biodata seluruh akun administrator di koperasi.
 
 ---
 
-## 3. Perbaikan File Mentah & Alur Instalasi Aplikasi
-- **Penyempurnaan Posisi Tombol**:
-  - Memindahkan tombol "Pasang / Instal Aplikasi" di halaman Login ke **bagian paling bawah formulir login**, menjaga tampilan login tetap rapi dan fokus.
-- **Perbaikan Instalasi Langsung (PWA Native Prompt)**:
-  - Menyediakan penanganan event `beforeinstallprompt` langsung pada klik tombol pasang, memicu dialog instalasi native di browser Android/Chrome/Edge tanpa redirect yang membingungkan.
-- **Paket Mentah & Kompatibilitas Antivirus**:
-  - Menyediakan berkas unduhan mandiri yang bersih (PWA WebClip iOS `.mobileconfig`, Android APK wrapper manifest, dan executable installer script `.bat`/`.exe`) dengan metadata resmi dan hash verifikasi agar tidak ditandai sebagai ancaman oleh antivirus Windows Defender atau Play Protect.
-- **Alur Persetujuan Syarat & Ketentuan**:
-  - Setelah instalasi diproses/diunduh, pengguna disajikan modal persetujuan syarat & ketentuan aplikasi koperasi.
-  - Ketika tombol "Setuju & Lanjutkan" diklik, pengguna otomatis diarahkan langsung ke panel login aplikasi.
+## 2. Perubahan Teknis Per Modul
+
+### A. Modul Sinkronisasi Database Realtime (`src/lib/storage.ts`, `server.ts`)
+- Memastikan `onSnapshot` Firestore terhubung permanen ke koleksi `koperasi_state/main_database` dengan *database ID* `ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69`.
+- Sinkronisasi berjalan otomatis di latar belakang saat terjadi perubahan pada state lokal atau server.
+- Mengoptimalkan penanganan data *payload* agar tidak terjadi konflik (*race condition*) antar perangkat yang aktif bersamaan.
+
+### B. Modul Buku Kas Koperasi (`src/components/BukuKasView.tsx`, `server.ts`)
+- **Input Transaksi Kas Koperasi**:
+  - Admin Write menginput kas (Pemasukan/Pengeluaran, nominal, kategori, keterangan, pihak penerima).
+  - Status otomatis diset menjadi `pending_approval` dengan `pendingAction: 'create'`.
+- **Edit Transaksi Kas Koperasi**:
+  - Jika diedit oleh Admin Write: Transaksi diperbarui dengan status `pending_approval` dan `pendingAction: 'update'`.
+  - Jika diedit oleh Admin Approval / Super Admin: Perubahan langsung disetujui (`status: 'approved'`).
+- **Persetujuan (Approval)**:
+  - Admin Approval dan Super Admin melihat tombol aksi cepat **Setujui ✓** dan **Tolak ✕** pada baris transaksi berstatus *pending*.
+  - Riwayat persetujuan dicatat dalam *Audit Log* (waktu, nama petugas approval, dan nominal kas).
+
+### C. Modul Biodata Admin (`src/components/SettingModal.tsx`)
+- **Edit Profil Admin Mandiri**:
+  - Tombol **"Ubah Data Diri & Password"** pada menu Pengaturan dibuka untuk seluruh admin (`admin_write`, `admin_approval`, `admin_laporan`).
+  - Formulir memungkinkan admin memperbarui Nama Lengkap, Email, Nomor WhatsApp, NIK, Alamat, Wilayah Kantor, Pertanyaan/Jawaban Keamanan, dan Password baru mereka sendiri.
+- **Kelola Seluruh Admin oleh Super Admin**:
+  - Menu **"Kelola Akun Admin"** tetap menjadi wewenang khusus Super Admin untuk mengubah data, role, status aktif/nonaktif/dibekukan, dan kata sandi admin lainnya.
 
 ---
 
-## 4. Komponen 'Pengaturan Keamanan' (Dasbor Anggota & Admin)
-- **Antarmuka Baru**:
-  - Komponen kartu 'Pengaturan Keamanan Akun' di dalam pengaturan Anggota dan Admin.
-  - Toggle switch interaktif: **"Aktifkan Login Biometrik (Sidik Jari / Face ID)"**.
-  - Deskripsi panduan keamanan: "Gunakan sensor biometrik perangkat untuk memverifikasi identitas Anda saat masuk ke akun."
-- **Penyimpanan Status**:
-  - Tersimpan di `localStorage` per ID pengguna: `hws_biometric_enabled_<userId>`.
-  - Default status: `false` (harus diaktifkan pengguna terlebih dahulu di dalam dasbor demi keamanan).
+## 3. Rencana Verifikasi & Uji Coba
 
----
-
-## 5. Logika Autentikasi `android.biometric` pada LoginView
-- **Alur Keamanan Sebelum Autentikasi**:
-  - Ketika pengguna menekan tombol "Masuk dengan Biometrik", sistem pertama-tama memeriksa:
-    1. Apakah akun yang dipilih/diinput telah mengaktifkan opsi biometrik di Pengaturan Keamanan (`localStorage.getItem('hws_biometric_enabled_...') === 'true'`).
-    2. Jika **belum aktif**: Tampilkan peringatan bahwa login biometrik belum diaktifkan di akun ini, dan arahkan pengguna untuk masuk terlebih dahulu menggunakan password/PIN untuk mengaktifkannya di menu Pengaturan Keamanan.
-    3. Jika **sudah aktif**: Lanjutkan proses autentikasi biometrik melalui API sistem keamanan perangkat (`navigator.credentials` / WebAuthn / Touch/Face scan).
-
----
-
-## 6. Laporan Kas Bulanan Multi-Halaman & Filter Periode Fleksibel
-- **Halaman Depan (Ringkasan Keuangan Laba / Rugi)**:
-  - Rekap Total Pemasukan vs Total Pengeluaran periode berjalan.
-  - Posisi Surplus / Defisit (Laba / Rugi Bersih).
-  - Ringkasan Saldo Buku Kas Anggota dan Buku Kas Koperasi.
-- **Halaman Selanjutnya (Perincian Kategori & Rincian Transaksi)**:
-  - Pengelompokan pemasukan dan pengeluaran berdasarkan kategori (Iuran Pokok, Zakat, Qurban, Operasional, dsb.).
-  - Tabel rincian tanggal, referensi, nama anggota/penerima, nominal debit/kredit, dan saldo akhir.
-- **Filter Periode Fleksibel**:
-  - Opsi filter: Harian, Bulanan (pilihan bulan & tahun), Tahunan, dan Rentang Tanggal Kustom (Start Date s/d End Date).
-  - Tombol Cetak PDF Berhalaman Resmi (dengan kop surat Koperasi HWS) dan Unduh Excel/CSV.
-
----
-
-## 7. Penyempurnaan Logo Icon Android & iOS
-- Memastikan berkas icon (`icon-192.png`, `icon-512.png`, `apple-touch-icon.png`) beresolusi tinggi, berpusat sempurna, dengan rasio aman maskable untuk Android adaptive icon dan rounded corner iOS Safari WebClip.
-- Memperbarui manifest.json dengan konfigurasi `maskable` dan `any` yang valid.
-
----
-
-## 8. Penegasan Hak Akses (RBAC) 4 Peran Admin
-Memperbarui pembatasan antarmuka dan fungsi aksi sesuai hierarki:
-1. **Super Admin**: Akses penuh ke seluruh fitur (Buku Kas, Penyesuaian Saldo, Anggota, Approval, Verifikasi, Pengaturan Sistem, Hapus Data Permanen).
-2. **Admin Write**:
-   - Dapat menginput transaksi pengeluaran kas, zakat, qurban.
-   - Dapat menambah anggota baru.
-   - Perubahan data anggota / penghapusan berstatus pengajuan (memerlukan persetujuan Admin Approval / Super Admin).
-   - Dapat mengunduh seluruh laporan.
-   - Tidak dapat langsung menyetujui penghapusan/koreksi permanen tanpa approval.
-3. **Admin Approval**:
-   - Dapat menyetujui/menolak pengajuan edit dan hapus anggota.
-   - Dapat menyetujui verifikasi penyaluran qurban & zakat.
-   - Tidak dapat membuat entri transaksi kas baru secara mandiri.
-   - Dapat melihat dan mencetak laporan.
-4. **Admin Laporan**:
-   - Khusus peran pembacaan dan pelaporan: hanya dapat melihat dan mengunduh laporan anggota, laporan zakat/qurban, serta laporan buku kas & neraca.
-   - Tombol input, edit, hapus, dan approval disembunyikan.
-
----
-
-## Tahapan Eksekusi
-1. Konfigurasi penyimpanan aman dan preservasi database di `server.ts` & `src/lib/storage.ts`.
-2. Pembuatan komponen `PenyesuaianSaldoModal` / View di dalam menu Admin.
-3. Pembuatan komponen `PengaturanKeamanan` di dalam `SettingModal.tsx` / Dashboard.
-4. Pembaruan alur biometrik dan posisi tombol pasang di `LoginView.tsx`.
-5. Pembaruan tampilan laporan kas multi-halaman di `BukuKasView.tsx` dan `exportPdf.ts`.
-6. Penyesuaian akses peran admin (RBAC) di `AdminDashboard.tsx`, `MemberListView.tsx`, dan `BukuKasView.tsx`.
-7. Verifikasi kompilasi (`compile_applet`) dan pengujian menyeluruh.
+1. **Uji Validasi Kode & Build**:
+   - Menjalankan `compile_applet` dan `lint_applet` untuk memastikan tidak ada kesalahan kompilasi TypeScript.
+2. **Uji Alur Buku Kas**:
+   - Simulasi login sebagai Admin Write: Menulis kas baru dan mengedit transaksi kas -> Memverifikasi status `pending_approval`.
+   - Simulasi login sebagai Admin Approval: Menyetujui transaksi kas -> Memverifikasi status berubah menjadi `approved` dan saldo kas koperasi terakumulasi.
+3. **Uji Biodata Admin**:
+   - Membuka menu profil sebagai Admin Write / Approval -> Memverifikasi formulir edit biodata admin tersimpan dengan benar.
+   - Membuka menu kelola admin sebagai Super Admin -> Memverifikasi pengubahan biodata admin lain berhasil.
+4. **Uji Realtime Sync**:
+   - Memastikan koneksi *background realtime sync* aktif ke Firestore tanpa peringatan atau *error*.

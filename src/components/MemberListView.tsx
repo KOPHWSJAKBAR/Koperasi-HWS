@@ -4,10 +4,12 @@ import {
   MemberUser,
   AdminUser,
   WilayahKoperasi,
+  LockPokokRequest,
 } from '../types';
 import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
+import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
 import {
   Users,
   UserPlus,
@@ -28,6 +30,10 @@ import {
   AlertTriangle,
   Snowflake,
   ShieldCheck,
+  Clock,
+  Check,
+  Send,
+  KeyRound,
 } from 'lucide-react';
 
 interface MemberListViewProps {
@@ -49,6 +55,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [memberToFreeze, setMemberToFreeze] = useState<MemberUser | null>(null);
   const [freezeReasonInput, setFreezeReasonInput] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [lockPokokModalMember, setLockPokokModalMember] = useState<MemberUser | null>(null);
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -65,6 +72,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       } else if (memberToFreeze) {
         e.preventDefault();
         setMemberToFreeze(null);
+      } else if (lockPokokModalMember) {
+        e.preventDefault();
+        setLockPokokModalMember(null);
       } else if (showAddModal) {
         e.preventDefault();
         setShowAddModal(false);
@@ -72,7 +82,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     };
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
-  }, [selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, showAddModal]);
+  }, [selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, lockPokokModalMember, showAddModal]);
 
   // Period filter states for reports
   const [periodeTipe, setPeriodeTipe] = useState<'semua' | 'harian' | 'bulanan' | 'tahunan'>('semua');
@@ -112,7 +122,18 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   const isSuperAdmin = currentAdmin.role === 'super_admin';
   const isWriter = currentAdmin.role === 'admin_write';
-  const isKelola = currentAdmin.role === 'admin_kelola' || currentAdmin.role === 'admin_pembukuan';
+  const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola' || currentAdmin.role === 'admin_pembukuan';
+  const isKelola = isApproval;
+
+  // Lock/Unlock Tabungan Pokok State (Req 7)
+  const [lockPokokTargetAction, setLockPokokTargetAction] = useState<'lock' | 'unlock'>('unlock');
+  const [lockPokokReason, setLockPokokReason] = useState('');
+  const [lockPokokError, setLockPokokError] = useState('');
+
+  // Members pending lock/unlock approval (Req 7: diajukan admin write, disetujui admin approval)
+  const pendingLockPokokMembers = state.members.filter(
+    (m) => !!m.lockPokokRequest
+  );
 
   // Members pending deletion approval
   const pendingDeleteMembers = state.members.filter(
@@ -311,24 +332,163 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     return true;
   });
 
-  // Toggle lock on Tabungan Pokok
-  const handleToggleLockPokok = async (member: MemberUser) => {
-    const newStatus = !member.isPokokLocked;
+  // Open Lock/Unlock Tabungan Pokok Modal (Req 7)
+  const handleOpenLockPokok = (member: MemberUser) => {
+    setLockPokokError('');
+    setLockPokokModalMember(member);
+    if (member.lockPokokRequest) {
+      setLockPokokTargetAction(member.lockPokokRequest.action);
+      setLockPokokReason(member.lockPokokRequest.reason || '');
+    } else {
+      setLockPokokTargetAction(member.isPokokLocked ? 'unlock' : 'lock');
+      setLockPokokReason('');
+    }
+  };
+
+  // Approve lock/unlock request (by Admin Approval or Super Admin)
+  const handleApproveLockPokok = async (member: MemberUser) => {
+    if (!member.lockPokokRequest) return;
+    const req = member.lockPokokRequest;
+    const newLockedStatus = req.action === 'lock';
+
     await updateState((prev) => ({
       ...prev,
       members: prev.members.map((m) =>
-        m.id === member.id ? { ...m, isPokokLocked: newStatus } : m
+        m.id === member.id
+          ? {
+              ...m,
+              isPokokLocked: newLockedStatus,
+              lockPokokRequest: undefined,
+            }
+          : m
       ),
       auditLogs: [
         createAuditLog(
           currentAdmin,
-          newStatus ? 'Kunci Tabungan Pokok' : 'Buka Kunci Tabungan Pokok',
-          `Mengubah status lock tabungan pokok untuk ${member.nama} (${member.nomorAnggota})`,
+          newLockedStatus ? 'Persetujuan Kunci Tabungan Pokok' : 'Persetujuan Buka Kunci Tabungan Pokok',
+          `Admin Approval ${currentAdmin.nama} menyetujui ${newLockedStatus ? 'penguncian' : 'pembukaan kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan pengajuan: ${req.reason}`,
           member.id
         ),
         ...prev.auditLogs,
       ],
     }));
+
+    alert(`✓ Permintaan ${newLockedStatus ? 'Kunci' : 'Buka Kunci'} Tabungan Pokok untuk ${member.nama} berhasil disetujui!`);
+    if (lockPokokModalMember?.id === member.id) {
+      setLockPokokModalMember(null);
+    }
+  };
+
+  // Reject lock/unlock request (by Admin Approval or Super Admin)
+  const handleRejectLockPokok = async (member: MemberUser) => {
+    if (!member.lockPokokRequest) return;
+    const req = member.lockPokokRequest;
+
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              lockPokokRequest: undefined,
+            }
+          : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          'Penolakan Kunci/Buka Tabungan Pokok',
+          `Admin Approval ${currentAdmin.nama} menolak pengajuan ${req.action === 'lock' ? 'kunci' : 'buka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota})`,
+          member.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    alert(`Pengajuan untuk ${member.nama} telah ditolak.`);
+    if (lockPokokModalMember?.id === member.id) {
+      setLockPokokModalMember(null);
+    }
+  };
+
+  // Submit proposal or direct execution of Lock/Unlock Tabungan Pokok
+  const handleSubmitLockPokokForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLockPokokError('');
+
+    if (!lockPokokModalMember) return;
+    if (!lockPokokReason.trim()) {
+      setLockPokokError('Alasan pengajuan wajib diisi.');
+      return;
+    }
+
+    const member = lockPokokModalMember;
+    const targetAction = lockPokokTargetAction;
+
+    // Super Admin & Admin Approval can directly execute
+    if (isSuperAdmin || isApproval) {
+      const newLockedStatus = targetAction === 'lock';
+      await updateState((prev) => ({
+        ...prev,
+        members: prev.members.map((m) =>
+          m.id === member.id
+            ? {
+                ...m,
+                isPokokLocked: newLockedStatus,
+                lockPokokRequest: undefined,
+              }
+            : m
+        ),
+        auditLogs: [
+          createAuditLog(
+            currentAdmin,
+            newLockedStatus ? 'Kunci Tabungan Pokok' : 'Buka Kunci Tabungan Pokok',
+            `${isSuperAdmin ? 'Super Admin' : 'Admin Approval'} ${currentAdmin.nama} langsung ${newLockedStatus ? 'mengunci' : 'membuka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan: ${lockPokokReason.trim()}`,
+            member.id
+          ),
+          ...prev.auditLogs,
+        ],
+      }));
+
+      alert(`✓ Status Tabungan Pokok untuk ${member.nama} berhasil diubah menjadi ${newLockedStatus ? 'Terkunci' : 'Terbuka'}!`);
+      setLockPokokModalMember(null);
+      setLockPokokReason('');
+      return;
+    }
+
+    // Admin Write creates proposal for approval
+    const newReq: LockPokokRequest = {
+      action: targetAction,
+      requestedByRole: currentAdmin.role,
+      requestedByName: currentAdmin.nama,
+      reason: lockPokokReason.trim(),
+      requestedAt: new Date().toISOString(),
+    };
+
+    await updateState((prev) => ({
+      ...prev,
+      members: prev.members.map((m) =>
+        m.id === member.id
+          ? {
+              ...m,
+              lockPokokRequest: newReq,
+            }
+          : m
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          'Pengajuan Kunci/Buka Tabungan Pokok',
+          `Admin Write ${currentAdmin.nama} mengajukan ${targetAction === 'lock' ? 'kunci' : 'buka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan: ${lockPokokReason.trim()}`,
+          member.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+
+    alert(`✓ Pengajuan ${targetAction === 'lock' ? 'penguncian' : 'pembukaan'} tabungan pokok untuk ${member.nama} berhasil dikirim ke Admin Approval!`);
+    setLockPokokModalMember(null);
+    setLockPokokReason('');
   };
 
   // Delete Member (Admin write requires approval from super admin or admin kelola)
@@ -595,6 +755,119 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* PENDING LOCK / BUKA TABUNGAN POKOK APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN APPROVAL (Req 7) */}
+      {(isSuperAdmin || isApproval) && pendingLockPokokMembers.length > 0 && (
+        <div className="bg-gradient-to-r from-sky-950/70 via-indigo-950/60 to-slate-900 border border-sky-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-sky-500/20 text-sky-400 rounded-xl border border-sky-500/30">
+                <KeyRound className="w-5 h-5 text-sky-400" />
+              </div>
+              <div>
+                <h4 className="font-black text-sm text-sky-200">
+                  Permintaan Kunci / Buka Tabungan Pokok Menunggu Persetujuan ({pendingLockPokokMembers.length} Anggota)
+                </h4>
+                <p className="text-[11px] text-sky-300/80">
+                  Diajukan oleh Admin Write dengan alasan resmi. Memerlukan persetujuan Admin Approval / Super Admin.
+                </p>
+              </div>
+            </div>
+            <span className="text-[10px] font-black bg-sky-500/20 text-sky-300 border border-sky-500/40 px-2.5 py-1 rounded-full animate-pulse">
+              Persetujuan Admin Approval
+            </span>
+          </div>
+
+          <div className="space-y-2.5 pt-1">
+            {pendingLockPokokMembers.map((m) => {
+              const req = m.lockPokokRequest!;
+              const isToLock = req.action === 'lock';
+              return (
+                <div
+                  key={m.id}
+                  className="p-3.5 bg-slate-900/90 rounded-2xl border border-sky-500/30 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-inner"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-extrabold text-white text-sm">
+                        {m.nama}
+                      </span>
+                      <span className="font-mono text-slate-400 text-[11px]">
+                        ({m.nomorAnggota})
+                      </span>
+                      <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border inline-flex items-center gap-1 ${
+                        isToLock
+                          ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                          : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      }`}>
+                        {isToLock ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                        {isToLock ? 'Diajukan KUNCI' : 'Diajukan BUKA KUNCI'}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Saldo Pokok: <span className="font-mono font-bold text-amber-400">{formatRupiah(m.saldoPokok)}</span> • Status Saat Ini: <span className={m.isPokokLocked ? 'text-red-400 font-bold' : 'text-emerald-400 font-bold'}>{m.isPokokLocked ? 'Terkunci' : 'Terbuka'}</span> • Wilayah: <span className="text-slate-300">{m.wilayah}</span>
+                    </div>
+                    <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/80 text-[11px] text-sky-200 mt-1 space-y-1">
+                      <div>
+                        <span className="text-slate-400 font-bold">Alasan Pengajuan:</span> <span className="italic font-medium text-white">"{req.reason}"</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Diajukan oleh: <b className="text-slate-300">{req.requestedByName}</b> ({req.requestedByRole}) • {new Date(req.requestedAt).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                    <button
+                      type="button"
+                      onClick={() => handleRejectLockPokok(m)}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                    >
+                      Tolak
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApproveLockPokok(m)}
+                      className={`px-4 py-2 font-black rounded-xl text-xs shadow-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                        isToLock
+                          ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30'
+                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
+                      }`}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{isToLock ? 'Setujui Penguncian' : 'Setujui Buka Kunci'}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* PENDING LOCK / BUKA TABUNGAN POKOK INFO BOX FOR ADMIN WRITE (Req 7) */}
+      {isWriter && pendingLockPokokMembers.length > 0 && (
+        <div className="bg-sky-950/30 border border-sky-500/30 rounded-3xl p-4 shadow-xl space-y-2">
+          <div className="flex items-center gap-2 text-sky-300 text-xs font-bold">
+            <Clock className="w-4 h-4 text-sky-400 animate-spin" />
+            <span>Pengajuan Kunci / Buka Tabungan Pokok Anda ({pendingLockPokokMembers.length} Menunggu Persetujuan Admin Approval)</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
+            {pendingLockPokokMembers.map((m) => (
+              <div key={m.id} className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800 flex justify-between items-center gap-2">
+                <div>
+                  <div className="font-extrabold text-white text-xs">{m.nama}</div>
+                  <div className="text-[11px] text-slate-400 italic truncate max-w-xs">"{m.lockPokokRequest?.reason}"</div>
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
+                  m.lockPokokRequest?.action === 'lock' ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                }`}>
+                  {m.lockPokokRequest?.action === 'lock' ? 'Kunci' : 'Buka'} (Menunggu Approval)
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* PENDING FREEZE APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN KELOLA (Req 4) */}
       {(isSuperAdmin || isKelola) && pendingFreezeMembers.length > 0 && (
         <div className="bg-amber-950/40 border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
@@ -911,18 +1184,31 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     {formatRupiah(member.saldoZakatFitrah + member.saldoQurban)}
                   </td>
                   <td className="py-3 px-3 text-center">
-                    <button
-                      onClick={() => handleToggleLockPokok(member)}
-                      title={member.isPokokLocked ? 'Terkunci (Klik untuk buka)' : 'Terbuka (Klik untuk kunci)'}
-                      className={`p-1.5 rounded-lg border text-[10px] font-bold inline-flex items-center gap-1 ${
-                        member.isPokokLocked
-                          ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                          : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                      }`}
-                    >
-                      {member.isPokokLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                      {member.isPokokLocked ? 'Locked' : 'Open'}
-                    </button>
+                    {member.lockPokokRequest ? (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenLockPokok(member)}
+                        title={`Menunggu Approval: ${member.lockPokokRequest.action === 'lock' ? 'Kunci' : 'Buka Kunci'}. Alasan: "${member.lockPokokRequest.reason}"`}
+                        className="p-1.5 rounded-lg border text-[10px] font-extrabold inline-flex items-center gap-1 bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/50 text-amber-300 transition-all cursor-pointer shadow-sm animate-pulse"
+                      >
+                        <Clock className="w-3 h-3 text-amber-400" />
+                        <span>⏳ Pending {member.lockPokokRequest.action === 'lock' ? 'Lock' : 'Buka'}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenLockPokok(member)}
+                        title={member.isPokokLocked ? 'Terkunci (Klik untuk ajukan buka kunci)' : 'Terbuka (Klik untuk ajukan kunci)'}
+                        className={`p-1.5 rounded-lg border text-[10px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer ${
+                          member.isPokokLocked
+                            ? 'bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-400'
+                            : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-400'
+                        }`}
+                      >
+                        {member.isPokokLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                        {member.isPokokLocked ? 'Locked' : 'Open'}
+                      </button>
+                    )}
                   </td>
                   <td className="py-3 px-3 text-right">
                     <div className="flex justify-end gap-1.5">
@@ -1741,6 +2027,234 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL PENGAJUAN / PENGESAHAN KUNCI TABUNGAN POKOK (Req 7) ================= */}
+      {lockPokokModalMember && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-sky-500/50 w-full max-w-md rounded-3xl p-5 shadow-2xl text-slate-100 my-6">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700/80 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-sky-500/20 text-sky-400 rounded-xl border border-sky-500/30">
+                  <KeyRound className="w-5 h-5 text-sky-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">
+                    {lockPokokModalMember.lockPokokRequest
+                      ? 'Persetujuan Kunci / Buka Tabungan Pokok'
+                      : isWriter
+                      ? 'Pengajuan Kunci / Buka Tabungan Pokok'
+                      : 'Kelola Status Tabungan Pokok'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Otoritas Penarikan Saldo Pokok Anggota
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLockPokokModalMember(null)}
+                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Member info card */}
+            <div className="p-3.5 bg-slate-800/80 rounded-2xl border border-slate-700 space-y-2 mb-4 text-xs">
+              <div className="flex justify-between items-center">
+                <div>
+                  <div className="font-extrabold text-white text-sm">{lockPokokModalMember.nama}</div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    {lockPokokModalMember.nomorAnggota} • Rek: <span className="text-amber-400">{lockPokokModalMember.nomorRekening}</span>
+                  </div>
+                </div>
+                <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border flex items-center gap-1 ${
+                  lockPokokModalMember.isPokokLocked
+                    ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                    : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                }`}>
+                  {lockPokokModalMember.isPokokLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                  {lockPokokModalMember.isPokokLocked ? 'Status: Terkunci' : 'Status: Terbuka'}
+                </span>
+              </div>
+              <div className="pt-2 border-t border-slate-700/80 flex justify-between text-[11px]">
+                <span className="text-slate-400">Saldo Tabungan Pokok:</span>
+                <span className="font-mono font-extrabold text-amber-300">{formatRupiah(lockPokokModalMember.saldoPokok)}</span>
+              </div>
+            </div>
+
+            {/* Case 1: Member already has a pending request */}
+            {lockPokokModalMember.lockPokokRequest ? (
+              <div className="space-y-4 text-xs">
+                <div className="p-3.5 bg-sky-950/40 border border-sky-500/40 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-black tracking-wider text-sky-400">
+                      Permintaan Sedang Aktif
+                    </span>
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                      lockPokokModalMember.lockPokokRequest.action === 'lock'
+                        ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    }`}>
+                      {lockPokokModalMember.lockPokokRequest.action === 'lock' ? '🔒 Kunci Pokok' : '🔓 Buka Kunci Pokok'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[11px] block">Alasan Pengajuan:</span>
+                    <p className="text-white italic bg-slate-900/80 p-2.5 rounded-xl border border-slate-800 text-xs mt-1">
+                      "{lockPokokModalMember.lockPokokRequest.reason}"
+                    </p>
+                  </div>
+                  <div className="text-[10px] text-slate-400 pt-1">
+                    Diajukan oleh: <b className="text-slate-200">{lockPokokModalMember.lockPokokRequest.requestedByName}</b> ({lockPokokModalMember.lockPokokRequest.requestedByRole}) • {new Date(lockPokokModalMember.lockPokokRequest.requestedAt).toLocaleString('id-ID')}
+                  </div>
+                </div>
+
+                {isSuperAdmin || isApproval ? (
+                  <div className="space-y-2 pt-2">
+                    <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[10px] text-amber-300">
+                      ℹ️ Sebagai <b>{isSuperAdmin ? 'Super Admin' : 'Admin Approval'}</b>, Anda berwenang mengesahkan atau menolak permohonan pembukaan/penguncian tabungan pokok ini.
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRejectLockPokok(lockPokokModalMember)}
+                        className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                      >
+                        Tolak Pengajuan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApproveLockPokok(lockPokokModalMember)}
+                        className={`flex-1 py-2.5 font-black rounded-xl text-xs shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                          lockPokokModalMember.lockPokokRequest.action === 'lock'
+                            ? 'bg-red-600 hover:bg-red-500 text-white'
+                            : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                        }`}
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>{lockPokokModalMember.lockPokokRequest.action === 'lock' ? 'Setujui Penguncian' : 'Setujui Buka Kunci'}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 pt-1">
+                    <div className="p-3 bg-slate-800/90 rounded-2xl border border-slate-700 text-xs text-slate-300 space-y-1">
+                      <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-amber-400" />
+                        Menunggu Persetujuan
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Pengajuan Anda sudah masuk ke sistem dan sedang menunggu pengesahan dari Admin Approval atau Super Admin.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLockPokokModalMember(null)}
+                      className="w-full py-2.5 bg-slate-800 text-slate-300 font-bold rounded-xl text-xs"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Case 2: No pending request, form to submit request or directly change */
+              <form onSubmit={handleSubmitLockPokokForm} className="space-y-3.5 text-xs">
+                {lockPokokError && (
+                  <div className="p-2.5 bg-red-950/80 border border-red-500/40 text-red-200 rounded-xl flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                    <span>{lockPokokError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1.5 text-xs">
+                    Pilih Tindakan yang Ingin Diterapkan:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLockPokokTargetAction('unlock')}
+                      className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                        lockPokokTargetAction === 'unlock'
+                          ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200 shadow-md shadow-emerald-500/20 ring-1 ring-emerald-400'
+                          : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-extrabold text-xs">
+                        <Unlock className="w-3.5 h-3.5 text-emerald-400" />
+                        Buka Kunci (Unlock)
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Izinkan anggota menarik saldo pokok
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setLockPokokTargetAction('lock')}
+                      className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                        lockPokokTargetAction === 'lock'
+                          ? 'bg-red-500/20 border-red-400 text-red-200 shadow-md shadow-red-500/20 ring-1 ring-red-400'
+                          : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-extrabold text-xs">
+                        <Lock className="w-3.5 h-3.5 text-red-400" />
+                        Kunci (Lock)
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Kunci penarikan saldo pokok
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1 text-xs">
+                    Alasan {isWriter ? 'Pengajuan' : 'Perubahan'} *
+                  </label>
+                  <textarea
+                    required
+                    rows={3}
+                    value={lockPokokReason}
+                    onChange={(e) => setLockPokokReason(e.target.value)}
+                    placeholder="Ketik alasan mengapa penarikan tabungan pokok ini dibuka atau dikunci..."
+                    className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:ring-2 focus:ring-sky-500 placeholder:text-slate-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    * Wajib diisi sebagai catatan pertimbangan pengurus koperasi.
+                  </p>
+                </div>
+
+                <div className="p-2.5 bg-sky-500/10 border border-sky-500/30 rounded-xl text-[10px] text-sky-300">
+                  {isWriter
+                    ? 'ℹ️ Alur Persetujuan: Sebagai Admin Write, pengajuan Anda akan diteruskan ke Admin Approval untuk disahkan sebelum status tabungan pokok berubah.'
+                    : 'ℹ️ Eksekusi: Sebagai Admin Approval / Super Admin, tindakan ini akan langsung mengubah status kunci tabungan pokok anggota.'}
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setLockPokokModalMember(null)}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-sky-500/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{isWriter ? 'Kirim Pengajuan' : 'Terapkan Sekarang'}</span>
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

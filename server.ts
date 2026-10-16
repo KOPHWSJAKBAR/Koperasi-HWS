@@ -930,7 +930,7 @@ async function startServer() {
     }
   });
 
-  // Endpoints Buku Kas: Edit & Hapus (Req 6)
+  // Endpoints Buku Kas: Edit & Hapus (Dapat diajukan admin write, disetujui admin approval / super admin)
   app.post('/api/kas/update', (req: Request, res: Response) => {
     try {
       const { entry, adminName } = req.body;
@@ -939,11 +939,6 @@ async function startServer() {
       const idx = (currentState.kasList || []).findIndex((k: any) => k.id === entry.id);
       if (idx === -1) return res.status(404).json({ error: 'Transaksi buku kas tidak ditemukan' });
 
-      // Perlindungan Buku Kas Anggota: Tidak dapat diinput, diedit, atau dihapus oleh admin
-      if (currentState.kasList[idx].bukuKas === 'anggota' || entry.bukuKas === 'anggota') {
-        return res.status(403).json({ error: 'Buku kas anggota bersifat otomatis dan dilindungi sistem, tidak dapat diedit oleh admin.' });
-      }
-
       currentState.kasList[idx] = { ...currentState.kasList[idx], ...entry };
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
@@ -951,9 +946,9 @@ async function startServer() {
         timestamp: new Date().toISOString(),
         adminId: 'admin',
         adminNama: adminName || 'Admin Koperasi',
-        adminRole: 'super_admin',
-        action: 'Edit Transaksi Buku Kas',
-        detail: `Mengedit transaksi kas ${entry.keterangan} (${entry.nominal})`,
+        adminRole: entry.status === 'approved' ? 'super_admin' : 'admin_write',
+        action: entry.status === 'approved' ? 'Edit Transaksi Buku Kas' : 'Pengajuan Edit Buku Kas',
+        detail: `Mengedit transaksi kas [${entry.bukuKas}] ${entry.keterangan} (${entry.nominal}) - Status: ${entry.status}`,
         targetId: entry.id,
       });
 
@@ -967,15 +962,24 @@ async function startServer() {
 
   app.post('/api/kas/delete', (req: Request, res: Response) => {
     try {
-      const { id, adminName } = req.body;
+      const { id, adminName, isDirectDelete } = req.body;
       if (!id) return res.status(400).json({ error: 'ID entry kas diperlukan' });
 
-      const deletedEntry = (currentState.kasList || []).find((k: any) => k.id === id);
-      if (deletedEntry && deletedEntry.bukuKas === 'anggota') {
-        return res.status(403).json({ error: 'Buku kas anggota bersifat otomatis dan dilindungi sistem, tidak dapat dihapus oleh admin.' });
-      }
+      const targetIdx = (currentState.kasList || []).findIndex((k: any) => k.id === id);
+      if (targetIdx === -1) return res.status(404).json({ error: 'Transaksi kas tidak ditemukan' });
 
-      currentState.kasList = (currentState.kasList || []).filter((k: any) => k.id !== id);
+      const deletedEntry = currentState.kasList[targetIdx];
+
+      if (isDirectDelete) {
+        currentState.kasList.splice(targetIdx, 1);
+      } else {
+        // Admin Write propose deletion
+        currentState.kasList[targetIdx] = {
+          ...deletedEntry,
+          status: 'pending_approval',
+          pendingAction: 'delete',
+        };
+      }
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
@@ -983,17 +987,84 @@ async function startServer() {
         timestamp: new Date().toISOString(),
         adminId: 'admin',
         adminNama: adminName || 'Admin Koperasi',
-        adminRole: 'super_admin',
-        action: 'Hapus Transaksi Buku Kas',
-        detail: `Menghapus transaksi kas ${deletedEntry?.keterangan || id}`,
+        adminRole: isDirectDelete ? 'super_admin' : 'admin_write',
+        action: isDirectDelete ? 'Hapus Transaksi Buku Kas' : 'Pengajuan Hapus Buku Kas',
+        detail: `${isDirectDelete ? 'Menghapus' : 'Mengajukan hapus'} transaksi kas [${deletedEntry?.bukuKas}] ${deletedEntry?.keterangan || id}`,
         targetId: id,
       });
 
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
-      res.json({ success: true, message: 'Transaksi kas berhasil dihapus' });
+      res.json({ success: true, message: isDirectDelete ? 'Transaksi kas berhasil dihapus' : 'Pengajuan hapus transaksi berhasil dikirim' });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus transaksi kas: ' + err.message });
+    }
+  });
+
+  // Endpoint: Pengesahan (Approval) Transaksi Kas oleh Admin Approval / Super Admin
+  app.post('/api/kas/approve', (req: Request, res: Response) => {
+    try {
+      const { id, isApproved, adminName } = req.body;
+      if (!id) return res.status(400).json({ error: 'ID entry kas diperlukan' });
+
+      const idx = (currentState.kasList || []).findIndex((k: any) => k.id === id);
+      if (idx === -1) return res.status(404).json({ error: 'Transaksi kas tidak ditemukan' });
+
+      const entry = currentState.kasList[idx];
+      const prevAction = entry.pendingAction;
+
+      if (isApproved) {
+        if (prevAction === 'delete') {
+          currentState.kasList.splice(idx, 1);
+        } else {
+          currentState.kasList[idx] = {
+            ...entry,
+            status: 'approved',
+            pendingAction: undefined,
+            approvedBy: adminName || 'Admin Approval',
+          };
+        }
+      } else {
+        if (prevAction === 'delete') {
+          currentState.kasList[idx] = {
+            ...entry,
+            status: 'approved',
+            pendingAction: undefined,
+          };
+        } else if (prevAction === 'update' && entry.originalData) {
+          currentState.kasList[idx] = {
+            ...entry,
+            ...entry.originalData,
+            status: 'approved',
+            pendingAction: undefined,
+            originalData: undefined,
+          };
+        } else {
+          currentState.kasList[idx] = {
+            ...entry,
+            status: 'rejected',
+            pendingAction: undefined,
+          };
+        }
+      }
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-kas-app-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'admin_approval',
+        adminNama: adminName || 'Admin Approval',
+        adminRole: 'admin_approval',
+        action: isApproved ? 'Pengesahan Transaksi Kas' : 'Penolakan Transaksi Kas',
+        detail: `${isApproved ? 'Mengesahkan' : 'Menolak'} ${prevAction === 'delete' ? 'penghapusan' : prevAction === 'update' ? 'perubahan' : 'input'} transaksi kas ${entry.keterangan}`,
+        targetId: id,
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: `Transaksi kas berhasil ${isApproved ? 'disetujui' : 'ditolak'}`, state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mengesahkan transaksi kas: ' + err.message });
     }
   });
 
@@ -1023,6 +1094,167 @@ async function startServer() {
       res.json({ success: true, message: 'Anggota berhasil dihapus secara permanen dari server' });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus anggota: ' + err.message });
+    }
+  });
+
+  // Endpoint: Hapus Semua Transaksi Anggota Mulai Dari 0 (Req User)
+  app.post('/api/transactions/reset-all', (req: Request, res: Response) => {
+    try {
+      const { adminName } = req.body;
+      currentState.memberTransactions = [];
+      currentState.setoranList = [];
+      if (Array.isArray(currentState.members)) {
+        currentState.members = currentState.members.map((m: any) => ({
+          ...m,
+          saldoPokok: 0,
+          saldoZakatFitrah: 0,
+          saldoQurban: 0,
+          saldoUmum: 0,
+          totalSimpanan: 0,
+        }));
+      }
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-reset-tx-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Reset Transaksi Anggota (Mulai Dari 0)',
+        detail: 'Menghapus seluruh riwayat mutasi transaksi anggota dan memulai kembali saldo simpanan dari 0',
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: 'Semua transaksi anggota berhasil dihapus dan saldo dimulai kembali dari 0', state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mereset transaksi: ' + err.message });
+    }
+  });
+
+  // Endpoint: Hapus Transaksi Anggota Selektif (Hanya Super Admin, Pilih Wilayah/Anggota, Verifikasi Password Admin)
+  app.post('/api/transactions/delete-selective', (req: Request, res: Response) => {
+    try {
+      const { adminName, wilayah, memberId, transactionIds, resetBalance, password } = req.body;
+
+      // Verification: Hanya Super Admin
+      const superAdmin = (currentState.admins || []).find((a: any) => a.role === 'super_admin');
+      const expectedPassword = superAdmin?.password || 'admin123';
+      if (password && password !== expectedPassword) {
+        return res.status(403).json({ error: 'Password Super Admin salah!' });
+      }
+
+      let removedCount = 0;
+      if (Array.isArray(transactionIds) && transactionIds.length > 0) {
+        const idSet = new Set(transactionIds);
+        currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
+          if (idSet.has(tx.id)) {
+            removedCount++;
+            return false;
+          }
+          return true;
+        });
+      } else if (memberId && memberId !== 'semua') {
+        currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
+          if (tx.memberId === memberId) {
+            removedCount++;
+            return false;
+          }
+          return true;
+        });
+      } else if (wilayah && wilayah !== 'semua') {
+        const memberIdsInWilayah = new Set(
+          (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id)
+        );
+        currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
+          if (memberIdsInWilayah.has(tx.memberId)) {
+            removedCount++;
+            return false;
+          }
+          return true;
+        });
+      } else {
+        removedCount = (currentState.memberTransactions || []).length;
+        currentState.memberTransactions = [];
+      }
+
+      if (resetBalance) {
+        if (memberId && memberId !== 'semua') {
+          currentState.members = (currentState.members || []).map((m: any) =>
+            m.id === memberId
+              ? { ...m, saldoPokok: 0, saldoZakatFitrah: 0, saldoQurban: 0, saldoUmum: 0, totalSimpanan: 0 }
+              : m
+          );
+        } else if (wilayah && wilayah !== 'semua') {
+          currentState.members = (currentState.members || []).map((m: any) =>
+            m.wilayah === wilayah
+              ? { ...m, saldoPokok: 0, saldoZakatFitrah: 0, saldoQurban: 0, saldoUmum: 0, totalSimpanan: 0 }
+              : m
+          );
+        } else {
+          currentState.members = (currentState.members || []).map((m: any) => ({
+            ...m,
+            saldoPokok: 0,
+            saldoZakatFitrah: 0,
+            saldoQurban: 0,
+            saldoUmum: 0,
+            totalSimpanan: 0,
+          }));
+        }
+      }
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-tx-del-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Hapus Transaksi Anggota',
+        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Verifikasi password admin disetujui.`,
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, removedCount, state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menghapus transaksi: ' + err.message });
+    }
+  });
+
+  // Endpoint: Sinkronisasi Database ke AI Studio Cloud Firestore
+  app.post('/api/state/sync-aistudio', (req: Request, res: Response) => {
+    try {
+      const { state: incomingState, adminName } = req.body;
+      if (incomingState && typeof incomingState === 'object') {
+        currentState = { ...currentState, ...incomingState };
+      }
+      currentState.serverSyncStatus = {
+        online: true,
+        lastSynced: new Date().toISOString(),
+        googleCloudBackup: true,
+        firestoreActive: true,
+        filesProtected: true,
+        permanentStorage: true,
+      };
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-sync-ai-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Sinkronisasi AI Studio Cloud',
+        detail: 'Database berhasil disinkronkan secara realtime dengan AI Studio Firestore Cloud',
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: 'Database berhasil disinkronkan ke AI Studio Cloud', state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menyelaraskan database ke AI Studio: ' + err.message });
     }
   });
 

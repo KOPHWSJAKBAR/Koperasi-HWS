@@ -18,6 +18,7 @@ import { ZakatQurbanView } from './ZakatQurbanView';
 import { SuratMenyuratView } from './SuratMenyuratView';
 import { ChatOnlineView } from './ChatOnlineView';
 import { SettingModal } from './SettingModal';
+import { InstallAppModal } from './InstallAppModal';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import {
   BookOpen,
@@ -44,6 +45,9 @@ import {
   Sparkles,
   Activity,
   SlidersHorizontal,
+  Smartphone,
+  Lock,
+  Fingerprint,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -77,6 +81,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [showSettings, setShowSettings] = useState(false);
   const [settingSubModal, setSettingSubModal] = useState<any>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
 
   // Orcas Policy Engine confirmation modal state for Mobile & PC
   const [orcasConfirmation, setOrcasConfirmation] = useState<{
@@ -310,12 +315,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Pending deposits count
   const pendingDepositsCount = state.setoranList.filter((s) => s.status === 'pending').length;
 
+  // Pending Tabungan Pokok Lock / Unlock requests (Req 7)
+  const pendingLockPokokCount = state.members.filter((m) => !!m.lockPokokRequest).length;
+
   // Unread chat messages from members
   const unreadChatCount = state.chatMessages.filter(
     (m) => m.senderType === 'member' && !m.isReadByAdmin
   ).length;
 
-  const totalNotifCount = pendingDepositsCount + unreadChatCount;
+  const totalNotifCount = pendingDepositsCount + unreadChatCount + ((isSuperAdmin || isApproval) ? pendingLockPokokCount : 0);
 
   // Print summary report
   const handlePrintSummary = () => {
@@ -549,35 +557,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </span>
             </div>
 
-            {/* Quick Kelola Admin Button for Super Admin */}
-            {isSuperAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSettingSubModal('daftar_admin');
-                  setShowSettings(true);
-                }}
-                className="py-1.5 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
-                title="Kelola Akun Admin (Edit, Tambah, Hapus)"
-              >
-                <Shield className="w-3.5 h-3.5 text-amber-400" />
-                <span className="hidden sm:inline">Kelola Admin</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/30 font-mono font-black">
-                  {state.admins.length}
-                </span>
-              </button>
-            )}
-
+            {/* Menu Setting: Memuat Keamanan Biometrik, Pasang Aplikasi, dan Kelola Admin */}
             <button
               type="button"
               onClick={() => {
                 setSettingSubModal(null);
                 setShowSettings(true);
               }}
-              className="py-1.5 px-3 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+              className="py-1.5 px-3.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 text-amber-300 border border-amber-500/40 text-xs font-black flex items-center gap-2 transition-all shadow-md active:scale-95 cursor-pointer"
+              title="Menu Pengaturan (Kelola Admin, Keamanan Biometrik, Pasang Aplikasi, Profil Koperasi)"
             >
-              <Settings className="w-4 h-4 text-amber-500" />
-              <span>Setting</span>
+              <Settings className="w-4 h-4 text-amber-400" />
+              <span>Menu Setting</span>
             </button>
           </div>
         </div>
@@ -624,7 +615,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            Data Anggota ({state.members.length})
+            <span>Data Anggota ({state.members.length})</span>
+            {pendingLockPokokCount > 0 && (isSuperAdmin || isApproval) && (
+              <span className="px-1.5 py-0.5 bg-sky-500 text-slate-950 rounded-full font-black text-[10px] animate-pulse">
+                {pendingLockPokokCount} Lock
+              </span>
+            )}
           </button>
 
           <button
@@ -639,7 +635,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             Buku Kas & Neraca
           </button>
 
-          {!isLaporan && (
+          {isSuperAdmin && (
             <button
               onClick={() => setActiveTab('penyesuaian_saldo')}
               className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
@@ -649,7 +645,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               }`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
-              Penyesuaian Saldo
+              <span>Masuk Transaksi Anggota</span>
             </button>
           )}
 
@@ -721,7 +717,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {activeTab === 'verifikasi' && 'Verifikasi Setoran'}
               {activeTab === 'anggota' && 'Data Anggota'}
               {activeTab === 'kas' && 'Buku Kas & Neraca'}
-              {activeTab === 'penyesuaian_saldo' && 'Penyesuaian Saldo Anggota'}
+              {activeTab === 'penyesuaian_saldo' && 'Masuk Transaksi Anggota (Super Admin)'}
               {activeTab === 'zakat' && 'Zakat & Qurban'}
               {activeTab === 'surat' && 'Surat Menyurat'}
               {activeTab === 'chat' && 'Chat Online'}
@@ -734,6 +730,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       <main className="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1 overflow-x-hidden">
         {activeTab === 'dashboard' ? (
           <>
+            {/* PENDING LOCK POKOK APPROVAL ALERT BANNER (Req 7) */}
+            {(isSuperAdmin || isApproval) && pendingLockPokokCount > 0 && (
+              <div
+                onClick={() => setActiveTab('anggota')}
+                className="bg-gradient-to-r from-sky-950/80 via-indigo-950/70 to-slate-900 border border-sky-500/50 rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:border-sky-400 transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center justify-center shrink-0">
+                    <Lock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-extrabold text-white">
+                        Ada {pendingLockPokokCount} Pengajuan Kunci / Buka Tabungan Pokok Menunggu Persetujuan
+                      </h4>
+                      <span className="text-[10px] font-black bg-sky-500 text-slate-950 px-2 py-0.5 rounded-full animate-pulse">
+                        Perlu Disahkan
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-sky-300/80 mt-0.5">
+                      Diajukan oleh Admin Write beserta alasan permohonan. Klik untuk membuka menu Data Anggota dan memberikan persetujuan.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-xl text-xs shrink-0 shadow-lg shadow-sky-500/20 transition-all cursor-pointer self-end sm:self-center"
+                >
+                  Buka Pengesahan
+                </button>
+              </div>
+            )}
+
             {/* Top 4 Stat Cards Grid (Matching Tampilan Pada Dashboard PC Aplikasi admin.png) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* 1. Total Simpanan Pokok */}
@@ -1002,11 +1031,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span>›</span>
                 </button>
 
-                {!isLaporan && (
+                {isSuperAdmin && (
                   <button
                     type="button"
                     onClick={() => setActiveTab('penyesuaian_saldo')}
-                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 hover:border-amber-500/60 text-white flex items-center justify-between text-left transition-all group shadow-md"
+                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 hover:border-amber-500/60 text-white flex items-center justify-between text-left transition-all group shadow-md cursor-pointer"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-xl bg-slate-800 text-amber-400 flex items-center justify-center group-hover:scale-105 transition-transform">
@@ -1014,11 +1043,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div>
                         <div className="text-xs font-extrabold flex items-center gap-1.5">
-                          <span>5. Penyesuaian Saldo Anggota</span>
-                          <span className="text-[9px] bg-amber-500/20 text-amber-300 font-black px-1.5 py-0.2 rounded">Baru</span>
+                          <span>5. Masuk Transaksi Anggota</span>
+                          <span className="text-[9px] bg-amber-500/20 text-amber-300 font-black px-1.5 py-0.2 rounded">Super Admin</span>
                         </div>
                         <div className="text-[10px] text-slate-400">
-                          Koreksi Saldo Manual & Pembagian Hasil (% Pokok / SHU)
+                          Pilih wilayah atau nama anggota, masukan password admin & persetujuan
                         </div>
                       </div>
                     </div>
@@ -1291,6 +1320,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           onLogout={onLogout}
         />
       )}
+
+      {/* ================= MODAL INSTALASI APLIKASI ================= */}
+      <InstallAppModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+      />
 
       {/* ================= ORCAS POLICY ENGINE CONFIRMATION MODAL (MOBILE & PC) ================= */}
       {orcasConfirmation?.isOpen && (

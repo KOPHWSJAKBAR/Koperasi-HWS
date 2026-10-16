@@ -41,6 +41,18 @@ export interface FreezeRequest {
   approvedBySuperAdminName?: string;
 }
 
+export interface LockPokokRequest {
+  action: 'lock' | 'unlock'; // lock = kunci penarikan pokok, unlock = buka penarikan pokok
+  requestedByRole: 'admin_write' | 'admin_approval' | 'super_admin' | string;
+  requestedByName: string;
+  reason: string;
+  requestedAt: string;
+  approvedByApproval?: boolean;
+  approvedByApprovalName?: string;
+  approvedBySuperAdmin?: boolean;
+  approvedBySuperAdminName?: string;
+}
+
 export interface KoperasiProfile {
   nama: string;
   badanHukum: string;
@@ -149,6 +161,7 @@ export interface MemberUser {
   
   status: 'aktif' | 'nonaktif' | 'pending' | 'pending_deletion' | 'dibekukan' | 'pending_freeze';
   freezeRequest?: FreezeRequest;
+  lockPokokRequest?: LockPokokRequest;
   terdaftarSejak: string;
 }
 

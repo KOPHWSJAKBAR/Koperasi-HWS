@@ -38,7 +38,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   updateState,
   currentAdmin,
 }) => {
-  const [activeKasTab, setActiveKasTab] = useState<'anggota' | 'koperasi' | 'neraca'>('anggota');
+  const [activeKasTab, setActiveKasTab] = useState<'koperasi' | 'anggota' | 'neraca'>('koperasi');
   const [filterStartDate, setFilterStartDate] = useState('');
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterKategori, setFilterKategori] = useState('semua');
@@ -95,12 +95,15 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const isSuperAdmin = currentAdmin.role === 'super_admin';
   const isPembukuan = currentAdmin.role === 'admin_pembukuan';
   const isWriter = currentAdmin.role === 'admin_write';
+  const isApproval = currentAdmin.role === 'admin_approval';
   const isLaporan = currentAdmin.role === 'admin_laporan';
 
-  // Can edit/delete directly: Super Admin or Admin Pembukuan
-  const canDirectModify = isSuperAdmin || isPembukuan;
-  // Can input documents: Super Admin or Admin Write (Admin Pembukuan cannot input per req 6)
-  const canInput = isSuperAdmin || isWriter;
+  // Can approve / direct modify: Super Admin or Admin Approval / Admin Pembukuan
+  const canDirectModify = isSuperAdmin || isApproval || isPembukuan;
+  // Can input documents: Super Admin, Admin Write, Admin Approval
+  const canInput = isSuperAdmin || isWriter || isApproval || isPembukuan;
+  // Can edit: Super Admin, Admin Write (dengan approval), atau Admin Approval
+  const canEdit = isSuperAdmin || isWriter || isApproval || isPembukuan || isLaporan;
 
   // Calculate Running Saldo Buku Kas Anggota
   let saldoKasAnggota = 0;
@@ -133,11 +136,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     return true;
   });
 
-  // Handle Input Transaksi Kas Koperasi
+  // Handle Input Transaksi Kas Koperasi (Req 1: Admin write dapat menulis, admin approval yang menyetujui)
   const handleInputKasSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canInput) {
-      alert('Admin Pembukuan tidak dapat menginput dokumen (hanya approval).');
+      alert('Admin Approval / Admin Laporan tidak dapat menginput transaksi kas koperasi. Admin Write yang menulis dokumen, Admin Approval yang menyetujui.');
       return;
     }
 
@@ -164,14 +167,16 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       nominal,
       saldoKasSetelah: formTipe === 'masuk' ? saldoKasKoperasi + nominal : saldoKasKoperasi - nominal,
       inputBy: currentAdmin.nama,
-      status: isSuperAdmin ? 'approved' : 'pending_approval',
+      status: (isSuperAdmin || isApproval) ? 'approved' : 'pending_approval',
+      pendingAction: (isSuperAdmin || isApproval) ? undefined : 'create',
+      approvedBy: (isSuperAdmin || isApproval) ? currentAdmin.nama : undefined,
       createdAt: new Date().toISOString(),
     };
 
     const audit = createAuditLog(
       currentAdmin,
       'Input Kas Koperasi',
-      `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)}: ${formKeterangan} (${newKas.namaPenerima})`,
+      `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)}: ${formKeterangan} (${newKas.namaPenerima}) - ${newKas.status === 'approved' ? 'Disetujui' : 'Menunggu Approval'}`,
       newKas.id
     );
 
@@ -185,10 +190,14 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     setFormNominal('');
     setFormNamaPenerima('');
     setFormKeterangan('');
-    alert(isSuperAdmin ? 'Transaksi kas berhasil dicatat!' : 'Transaksi diajukan, menunggu persetujuan Super Admin / Pembukuan.');
+    alert(
+      (isSuperAdmin || isApproval)
+        ? '✓ Transaksi kas berhasil dicatat dan disetujui!'
+        : '✓ Transaksi berhasil ditulis oleh Admin Write! Dokumen masuk status MENUNGGU PERSETUJUAN (Approval) oleh Admin Approval / Super Admin.'
+    );
   };
 
-  // Open Edit Kas Modal (Req 6) - HANYA Buku Kas Koperasi (Buku Kas Anggota TIDAK DAPAT diedit oleh admin)
+  // Open Edit Kas Modal (Req 6 & Req 1) - HANYA Buku Kas Koperasi (Buku Kas Anggota TIDAK DAPAT diedit oleh admin)
   const handleOpenEditKas = (entry: KasEntry) => {
     if (entry.bukuKas === 'anggota') {
       alert('Buku Kas Anggota bersifat otomatis dari mutasi dan setoran anggota. Tidak dapat diinput atau diedit oleh admin.');
@@ -204,7 +213,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     setEditNamaPenerima(entry.namaPenerima || '');
   };
 
-  // Save Edit Kas (Req 6)
+  // Save Edit Kas (Req 1: Admin write dapat mengedit dengan approval, Admin Approval/Superadmin menyetujui)
   const handleSaveEditKas = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingKasEntry) return;
@@ -230,6 +239,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       nominal: nominalNum,
       keterangan: editKeterangan.trim(),
       namaPenerima: editNamaPenerima.trim() || undefined,
+      status: (isSuperAdmin || isApproval) ? 'approved' : 'pending_approval',
+      pendingAction: (isSuperAdmin || isApproval) ? undefined : 'update',
+      approvedBy: (isSuperAdmin || isApproval) ? currentAdmin.nama : undefined,
     };
 
     // Kirim update ke server
@@ -253,7 +265,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       const audit = createAuditLog(
         currentAdmin,
         'Edit Transaksi Buku Kas',
-        `Mengubah transaksi kas [${updatedEntry.bukuKas}] ${updatedEntry.keterangan} senilai ${formatRupiah(updatedEntry.nominal)}`,
+        `Mengubah transaksi kas [${updatedEntry.bukuKas}] ${updatedEntry.keterangan} senilai ${formatRupiah(updatedEntry.nominal)} (${updatedEntry.status === 'approved' ? 'Disetujui' : 'Menunggu Approval'})`,
         updatedEntry.id
       );
       return {
@@ -264,7 +276,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     });
 
     setEditingKasEntry(null);
-    alert('✓ Transaksi buku kas berhasil diperbarui!');
+    alert(
+      (isSuperAdmin || isApproval)
+        ? '✓ Transaksi buku kas berhasil diperbarui dan disetujui!'
+        : '✓ Perubahan transaksi berhasil ditulis oleh Admin Write! Menunggu persetujuan oleh Admin Approval / Super Admin.'
+    );
   };
 
   // Handle Delete Kas Entry (Req 6: Buku kas dapat di-hapus)
@@ -473,20 +489,26 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {canInput && activeKasTab === 'koperasi' && (
+            {canInput && (
               <>
                 <button
                   type="button"
-                  onClick={() => setIsInputModalOpen(true)}
-                  className="py-2 px-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
+                  onClick={() => {
+                    setActiveKasTab('koperasi');
+                    setIsInputModalOpen(true);
+                  }}
+                  className="py-2 px-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all cursor-pointer"
                 >
                   <PlusCircle className="w-4 h-4" />
                   + Input Kas Koperasi
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsAddCatModalOpen(true)}
-                  className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-sky-400 border border-sky-500/30 rounded-xl font-bold flex items-center gap-1.5 transition-all"
+                  onClick={() => {
+                    setActiveKasTab('koperasi');
+                    setIsAddCatModalOpen(true);
+                  }}
+                  className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-sky-400 border border-sky-500/30 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer"
                   title="Tambah atau hapus kategori kas koperasi"
                 >
                   <Edit className="w-4 h-4 text-sky-400" />
@@ -949,34 +971,41 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                             </span>
                           ) : (
                             <>
-                              {/* Tombol Edit Buku Kas Koperasi */}
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditKas(entry)}
-                                className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
-                                title="Edit Transaksi Kas Koperasi"
-                              >
-                                <Edit className="w-3.5 h-3.5 text-sky-400" />
-                                Edit
-                              </button>
+                              {/* Tombol Edit Buku Kas Koperasi (Admin Write, Admin Approval, Super Admin) */}
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditKas(entry)}
+                                  className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all"
+                                  title="Edit Transaksi Kas Koperasi"
+                                >
+                                  <Edit className="w-3.5 h-3.5 text-sky-400" />
+                                  Edit
+                                </button>
+                              )}
 
+                              {/* Tombol Approval Persetujuan (Admin Approval & Super Admin) */}
                               {entry.status === 'pending_approval' && canDirectModify && (
-                                <>
+                                <div className="flex items-center gap-1">
                                   <button
+                                    type="button"
                                     onClick={() => handleApproveKasAction(entry, true)}
-                                    className="p-1 text-emerald-400 hover:text-emerald-300"
-                                    title="Setujui"
+                                    className="px-2 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-[10px] flex items-center gap-1 shadow transition-all active:scale-95 cursor-pointer"
+                                    title="Setujui (Approval) Transaksi Kas Koperasi"
                                   >
-                                    <CheckCircle className="w-4 h-4" />
+                                    <CheckCircle className="w-3.5 h-3.5" />
+                                    <span>Setujui</span>
                                   </button>
                                   <button
+                                    type="button"
                                     onClick={() => handleApproveKasAction(entry, false)}
-                                    className="p-1 text-red-400 hover:text-red-300"
-                                    title="Tolak"
+                                    className="px-2 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[10px] flex items-center gap-1 shadow transition-all active:scale-95 cursor-pointer"
+                                    title="Tolak Transaksi Kas Koperasi"
                                   >
-                                    <XCircle className="w-4 h-4" />
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    <span>Tolak</span>
                                   </button>
-                                </>
+                                </div>
                               )}
 
                               {/* Tombol Hapus Buku Kas Koperasi */}
@@ -1431,15 +1460,31 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Tipe Mutasi *</label>
-                  <select
-                    value={editTipe}
-                    onChange={(e) => setEditTipe(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold"
-                  >
-                    <option value="masuk">Pemasukan (CR / Masuk)</option>
-                    <option value="keluar">Pengeluaran (DB / Keluar)</option>
-                  </select>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Tipe Mutasi (Masuk / Keluar) *</label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditTipe('masuk')}
+                      className={`py-2 px-2 rounded-xl text-[11px] font-black border transition-all ${
+                        editTipe === 'masuk'
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      + Masuk (CR)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditTipe('keluar')}
+                      className={`py-2 px-2 rounded-xl text-[11px] font-black border transition-all ${
+                        editTipe === 'keluar'
+                          ? 'bg-rose-500/20 border-rose-500 text-rose-300 shadow-sm'
+                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      - Keluar (DB)
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 mb-1">Nominal (Rp) *</label>
@@ -1454,15 +1499,57 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 </div>
               </div>
 
+              {/* Edit Kategori Transaksi (Pilih Kategori, Tambah / Kurang) */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1">Kategori Transaksi *</label>
-                <input
-                  type="text"
-                  required
-                  value={editKategori}
-                  onChange={(e) => setEditKategori(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                />
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-[11px] font-bold text-slate-300">
+                    Kategori Transaksi ({editTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'}) *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewCatTipe(editTipe === 'masuk' ? 'pemasukan' : 'pengeluaran');
+                      setIsAddCatModalOpen(true);
+                    }}
+                    className="text-[10px] text-amber-400 hover:underline font-bold flex items-center gap-1"
+                  >
+                    <span>+ Tambah / Kurang Kategori</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <select
+                    value={
+                      (editTipe === 'masuk'
+                        ? state.categoriesKasKoperasi.pemasukan
+                        : state.categoriesKasKoperasi.pengeluaran
+                      ).includes(editKategori)
+                        ? editKategori
+                        : ''
+                    }
+                    onChange={(e) => {
+                      if (e.target.value) setEditKategori(e.target.value);
+                    }}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold"
+                  >
+                    <option value="">-- Pilih dari Daftar --</option>
+                    {(editTipe === 'masuk'
+                      ? state.categoriesKasKoperasi.pemasukan
+                      : state.categoriesKasKoperasi.pengeluaran
+                    ).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Nama Kategori..."
+                    value={editKategori}
+                    onChange={(e) => setEditKategori(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
               </div>
 
               <div>
@@ -1497,9 +1584,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                  className="flex-1 py-2.5 bg-gradient-to-r from-sky-500 to-sky-400 hover:from-sky-400 hover:to-sky-300 text-slate-950 font-black rounded-xl shadow-lg transition-all"
                 >
-                  Simpan Perubahan
+                  {isWriter ? 'Ajukan Perubahan (Menunggu Approval)' : 'Simpan & Setujui Transaksi'}
                 </button>
               </div>
             </form>

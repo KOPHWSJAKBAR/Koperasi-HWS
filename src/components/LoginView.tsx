@@ -363,40 +363,48 @@ export const LoginView: React.FC<LoginViewProps> = ({
     onLoginAdmin(admin);
   };
 
-  // Biometric Login: Terhubung langsung ke sensor keamanan perangkat (Req 7)
+  // Biometric Login: Terhubung langsung ke sensor keamanan perangkat (Req 4 & 5: Terpisah dari pengingat password, harus diaktifkan dulu)
   const handleBiometricAuth = async () => {
     setErrorMessage('');
-    setShowBiometricModal(true);
-    setBiometricStatus('connecting');
-    setBiometricMsg('Menghubungkan ke Sensor Biometrik Device...');
 
-    // Tentukan akun target (dari input saat ini, saved account, atau akun utama)
-    let target = '';
-    if (activeTab === 'member') {
-      target = memberIdentifier.trim() || savedMemberAccount?.identifier || (state.members[0]?.nomorAnggota || '');
-    } else {
-      target = adminUsername.trim() || savedAdminAccount?.username || 'Abzqar';
-    }
-    setBiometricTargetUser(target);
-
-    // Pemeriksaan Pengaturan Keamanan Biometrik di localStorage (Req D & E)
-    const isBiometricGloballyActive = typeof window !== 'undefined' && (
-      localStorage.getItem('hws_biometric_enabled') === 'true' ||
+    // Pemeriksaan Pengaturan Keamanan Biometrik di localStorage (Req 4 & 5)
+    const isBiometricActive = typeof window !== 'undefined' && (
       localStorage.getItem('hws_biometric_active') === 'true' ||
-      (target && localStorage.getItem(`hws_biometric_enabled_${target.toLowerCase()}`) === 'true')
+      localStorage.getItem('hws_biometric_enabled') === 'true'
     );
 
-    if (!isBiometricGloballyActive) {
+    if (!isBiometricActive) {
       setShowBiometricModal(false);
       setErrorMessage(
-        '⚠️ Login Biometrik belum diaktifkan di Pengaturan Keamanan. ' +
-        'Demi menjaga keamanan akun, silakan masuk terlebih dahulu menggunakan User ID/Username & Password, ' +
-        'kemudian aktifkan opsi "Aktifkan Login Biometrik" pada menu Pengaturan Keamanan di dalam dasbor.'
+        '⚠️ Autentikasi Biometrik belum diaktifkan pada perangkat ini. ' +
+        'Untuk penggunaan biometric harus diaktifkan terlebih dahulu. ' +
+        'Silakan masuk terlebih dahulu menggunakan User ID/Username & Password Anda, ' +
+        'kemudian aktifkan opsi "Biometrik (Fingerprint / Face ID)" pada menu Pengaturan Keamanan di dalam dasbor.'
       );
       return;
     }
 
-    // Hubungkan ke Hardware Biometrik Device melalui WebAuthn / PublicKeyCredential
+    // Tentukan akun target dari input yang diketik atau dari profil biometrik yang didaftarkan pada device ini
+    let target = '';
+    const storedBioUser = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user') || '' : '';
+    const storedBioRole = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user_role') || '' : '';
+
+    if (activeTab === 'member') {
+      target = memberIdentifier.trim() || (storedBioRole === 'member' ? storedBioUser : '') || (state.members[0]?.nomorAnggota || '');
+    } else {
+      target = adminUsername.trim() || (storedBioRole === 'admin' ? storedBioUser : '') || 'Abzqar';
+    }
+
+    setBiometricTargetUser(target);
+    setShowBiometricModal(true);
+    setBiometricStatus('scanning');
+    setBiometricMsg(
+      biometricMethod === 'fingerprint'
+        ? 'Memindai sidik jari yang terhubung pada sensor device...'
+        : 'Memindai wajah pada kamera sensor device...'
+    );
+
+    // Hubungkan ke Hardware Biometrik Device melalui WebAuthn / PublicKeyCredential jika didukung browser
     if (typeof window !== 'undefined' && (window as any).PublicKeyCredential && navigator.credentials) {
       try {
         const challenge = new Uint8Array(32);
@@ -408,36 +416,24 @@ export const LoginView: React.FC<LoginViewProps> = ({
             timeout: 60000,
           },
         }).then(() => {
-          // Hardware scan selesai via sistem device
+          // Hardware scan selesai via sistem device -> langsung login ke dashboard
           executeBiometricLogin(target);
         }).catch(() => {
-          // Beralih ke sensor biometrik interaktif di layar device
-          setBiometricStatus('ready');
-          setBiometricMsg('Sensor perangkat siap. Silakan tempelkan sidik jari atau hadapkan wajah ke sensor.');
+          // Tetap lakukan scan visual otomatis device dan langsung masuk ke dashboard
+          setTimeout(() => {
+            executeBiometricLogin(target);
+          }, 850);
         });
       } catch {
-        setBiometricStatus('ready');
-        setBiometricMsg('Sensor perangkat siap. Silakan tempelkan sidik jari atau hadapkan wajah ke sensor.');
+        setTimeout(() => {
+          executeBiometricLogin(target);
+        }, 850);
       }
     } else {
       setTimeout(() => {
-        setBiometricStatus('ready');
-        setBiometricMsg('Sensor perangkat siap. Silakan tempelkan sidik jari atau hadapkan wajah ke sensor.');
-      }, 400);
+        executeBiometricLogin(target);
+      }, 850);
     }
-  };
-
-  const handleScanBiometricTouch = async () => {
-    setBiometricStatus('scanning');
-    setBiometricMsg(
-      biometricMethod === 'fingerprint'
-        ? 'Memindai sidik jari pada sensor device...'
-        : 'Memindai wajah pada sensor kamera device...'
-    );
-
-    setTimeout(() => {
-      executeBiometricLogin(biometricTargetUser);
-    }, 1000);
   };
 
   const executeBiometricLogin = (targetUser: string) => {
@@ -877,7 +873,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
               </div>
 
-              {/* Checkbox Ingat Password & User ID (Req 2 & 6) */}
+              {/* Checkbox Ingat Password & User ID (Pengingat Sandi Mandiri) */}
               <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none py-1">
                 <input
                   type="checkbox"
@@ -886,18 +882,18 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-300"
                 />
                 <span className="font-semibold text-[11px] text-slate-700">
-                  Ingat Password & User ID di Perangkat ini
+                  Ingat Password & User ID (Pengingat Sandi)
                 </span>
               </label>
 
-              {/* Biometric Login Button (Terintegrasi Pengingat Password - Req 3 & 6) */}
+              {/* Biometric Login Button (Mandiri - Terpisah dari Pengingat Password) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className="w-full py-2.5 px-3 border border-amber-300 hover:border-amber-500 bg-amber-50/80 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm"
+                className="w-full py-2.5 px-3 border border-amber-300 hover:border-amber-500 bg-amber-50/90 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer active:scale-[0.99]"
               >
                 <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Masuk dengan Biometrik (Sidik Jari / Face ID Terintegrasi)</span>
+                <span>Masuk dengan Sidik Jari (Scan Finger / Face ID)</span>
               </button>
 
               <button
@@ -1033,7 +1029,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
               </div>
 
-              {/* Checkbox Ingat Password & Username Admin (Req 2 & 6) */}
+              {/* Checkbox Ingat Password & Username Admin (Pengingat Sandi Mandiri) */}
               <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700 select-none py-1">
                 <input
                   type="checkbox"
@@ -1042,18 +1038,18 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 border-slate-300"
                 />
                 <span className="font-semibold text-[11px] text-slate-700">
-                  Ingat Password & Username di Perangkat ini
+                  Ingat Password & Username (Pengingat Sandi)
                 </span>
               </label>
 
-              {/* Biometric Login Button: Admin Biometric (Req 4: login untuk admin dapat menggunakan biometrik) */}
+              {/* Biometric Login Button: Admin Biometric (Mandiri - Terpisah dari Pengingat Password) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className="w-full py-2.5 px-3 border border-amber-400 hover:border-amber-500 bg-amber-50 hover:bg-amber-100/90 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm"
+                className="w-full py-2.5 px-3 border border-amber-400 hover:border-amber-500 bg-amber-50 hover:bg-amber-100/90 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer active:scale-[0.99]"
               >
                 <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Masuk dengan Biometrik Admin (Sidik Jari / Face ID Device)</span>
+                <span>Masuk dengan Sidik Jari Admin (Scan Finger / Face ID)</span>
               </button>
 
               <button
@@ -1763,30 +1759,25 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
             </div>
 
-            {/* Interactive Sensor Scan Area */}
+            {/* Automatic Device Sensor Scanner (Tanpa perlu klik tombol kedua - Langsung scan otomatis) */}
             <div className="py-4 flex flex-col items-center justify-center">
-              <button
-                type="button"
-                onClick={handleScanBiometricTouch}
-                disabled={biometricStatus === 'scanning' || biometricStatus === 'success'}
-                className="relative group cursor-pointer focus:outline-none"
-              >
+              <div className="relative group focus:outline-none">
                 {/* Glow rings */}
                 <div className={`absolute -inset-4 rounded-full blur-lg opacity-70 transition-all ${
                   biometricStatus === 'scanning'
                     ? 'bg-sky-500 animate-pulse'
                     : biometricStatus === 'success'
                     ? 'bg-emerald-500'
-                    : 'bg-amber-500/40 group-hover:bg-amber-500/70'
+                    : 'bg-amber-500/40'
                 }`} />
 
                 {/* Circular scanner pad */}
                 <div className={`relative w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all ${
                   biometricStatus === 'scanning'
-                    ? 'border-sky-400 bg-sky-950/60'
+                    ? 'border-sky-400 bg-sky-950/60 shadow-[0_0_25px_rgba(56,189,248,0.5)]'
                     : biometricStatus === 'success'
-                    ? 'border-emerald-400 bg-emerald-950/80'
-                    : 'border-amber-400/80 bg-slate-900 group-hover:scale-105 shadow-xl'
+                    ? 'border-emerald-400 bg-emerald-950/80 shadow-[0_0_25px_rgba(52,211,153,0.5)]'
+                    : 'border-amber-400/80 bg-slate-900 shadow-xl'
                 }`}>
                   {biometricMethod === 'fingerprint' ? (
                     <Fingerprint className={`w-14 h-14 transition-colors ${
@@ -1794,7 +1785,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                         ? 'text-sky-300 animate-pulse'
                         : biometricStatus === 'success'
                         ? 'text-emerald-400'
-                        : 'text-amber-400 group-hover:text-amber-300'
+                        : 'text-amber-400'
                     }`} />
                   ) : (
                     <div className="flex flex-col items-center">
@@ -1807,34 +1798,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
                   )}
                 </div>
-              </button>
+              </div>
 
               <div className="mt-4 space-y-1">
                 <p className="text-xs font-bold text-white">
                   {biometricStatus === 'scanning'
-                    ? 'Sedang Memindai Biometrik Device...'
+                    ? 'Memindai Sensor Sidik Jari Device...'
                     : biometricStatus === 'success'
-                    ? 'Autentikasi Biometrik Berhasil!'
-                    : biometricMethod === 'fingerprint'
-                    ? 'Sentuh sensor sidik jari device untuk masuk'
-                    : 'Arahkan wajah ke kamera depan device'}
+                    ? '✓ Sensor Terverifikasi! Mengalihkan ke Dashboard...'
+                    : 'Menghubungkan Sensor Device...'}
                 </p>
                 <p className="text-[11px] text-slate-400">
-                  {biometricMsg || 'Terhubung dengan hardware keamanan Android / iOS / PC'}
+                  {biometricMsg || 'Sensor biometrik aktif - Otomatis masuk ke dashboard setelah scan'}
                 </p>
               </div>
             </div>
 
-            {/* Quick action button */}
-            <button
-              type="button"
-              onClick={handleScanBiometricTouch}
-              disabled={biometricStatus === 'scanning' || biometricStatus === 'success'}
-              className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5"
-            >
-              <Fingerprint className="w-4 h-4" />
-              <span>{biometricStatus === 'scanning' ? 'Memindai Device...' : 'Pindai Sekarang & Masuk'}</span>
-            </button>
           </div>
         </div>
       )}

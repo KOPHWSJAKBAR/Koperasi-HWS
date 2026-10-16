@@ -28,6 +28,7 @@ import {
   Copy,
   ChevronLeft,
   Lock,
+  Unlock,
   CheckCircle,
   ArrowDownLeft,
   ArrowLeftRight,
@@ -37,7 +38,17 @@ import {
   ShieldCheck,
   Building,
   Smartphone,
+  TrendingUp,
 } from 'lucide-react';
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 
 interface MemberDashboardProps {
   state: AppState;
@@ -81,8 +92,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [pinChangeConfirmPin, setPinChangeConfirmPin] = useState('');
   const [pinChangeMsg, setPinChangeMsg] = useState('');
 
-  // Tarik Tabungan Umum State
+  // Tarik Tabungan (Umum / Pokok) State
   const [showTarikModal, setShowTarikModal] = useState(false);
+  const [tarikJenisTabungan, setTarikJenisTabungan] = useState<'umum' | 'pokok'>('umum');
   const [tarikNominal, setTarikNominal] = useState('');
   const [tarikCatatan, setTarikCatatan] = useState('');
   const [tarikError, setTarikError] = useState('');
@@ -398,7 +410,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     }, 1200);
   };
 
-  // Handle Penarikan Tabungan Umum
+  // Handle Penarikan Tabungan (Umum / Pokok)
   const handleTarikSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTarikError('');
@@ -409,15 +421,23 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       return;
     }
 
-    if (amount > currentMember.saldoUmum) {
-      setTarikError(`Saldo Tabungan Umum tidak mencukupi (Tersedia: ${formatRupiah(currentMember.saldoUmum)}).`);
+    const availableBalance = tarikJenisTabungan === 'pokok' ? currentMember.saldoPokok : currentMember.saldoUmum;
+    const labelTabungan = tarikJenisTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Umum';
+
+    if (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked) {
+      setTarikError('Penarikan Tabungan Pokok sedang dikunci oleh Koperasi. Pembukaan kunci harus diajukan oleh Admin Write dan disahkan oleh Admin Approval.');
+      return;
+    }
+
+    if (amount > availableBalance) {
+      setTarikError(`Saldo ${labelTabungan} tidak mencukupi (Tersedia: ${formatRupiah(availableBalance)}).`);
       return;
     }
 
     const now = new Date();
     const tgl = now.toISOString().split('T')[0];
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
-    const ket = `Tarikan Tunai ${currentMember.nama}${tarikCatatan ? ' - ' + tarikCatatan : ''}`;
+    const ket = `Tarikan ${labelTabungan} ${currentMember.nama}${tarikCatatan ? ' - ' + tarikCatatan : ''}`;
 
     const newTx: MemberTransaction = {
       id: `tx-tarik-${Date.now()}`,
@@ -428,15 +448,15 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       cbg: `KCP ${currentMember.wilayah.toUpperCase()}`,
       tipe: 'keluar',
       nominal: amount,
-      saldoSetelah: currentMember.saldoUmum - amount,
-      kategori: 'umum',
+      saldoSetelah: availableBalance - amount,
+      kategori: tarikJenisTabungan === 'pokok' ? 'pokok' : 'umum',
     };
 
     const newKas: KasEntry = {
       id: `kas-tarik-${Date.now()}`,
       bukuKas: 'anggota',
       tanggal: tgl,
-      kategori: 'Penarikan Tabungan Umum',
+      kategori: `Penarikan ${labelTabungan}`,
       keterangan: ket,
       tipe: 'keluar',
       nominal: amount,
@@ -447,9 +467,24 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     };
 
     await updateState((prev) => {
-      const updatedMembers = prev.members.map((m) =>
-        m.id === currentMember.id ? { ...m, saldoUmum: m.saldoUmum - amount } : m
-      );
+      const updatedMembers = prev.members.map((m) => {
+        if (m.id !== currentMember.id) return m;
+        if (tarikJenisTabungan === 'pokok') {
+          const newPokok = Math.max(0, m.saldoPokok - amount);
+          return {
+            ...m,
+            saldoPokok: newPokok,
+            totalSimpanan: newPokok + m.saldoZakatFitrah + m.saldoQurban + m.saldoUmum,
+          };
+        } else {
+          const newUmum = Math.max(0, m.saldoUmum - amount);
+          return {
+            ...m,
+            saldoUmum: newUmum,
+            totalSimpanan: m.saldoPokok + m.saldoZakatFitrah + m.saldoQurban + newUmum,
+          };
+        }
+      });
 
       return {
         ...prev,
@@ -459,11 +494,48 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       };
     });
 
-    alert(`Penarikan ${formatRupiah(amount)} berhasil diproses ke rekening ${currentMember.bankPribadi.namaBank} (${currentMember.bankPribadi.nomorRekening})!`);
+    alert(`✓ Penarikan ${labelTabungan} senilai ${formatRupiah(amount)} berhasil diproses ke rekening ${currentMember.bankPribadi.namaBank} (${currentMember.bankPribadi.nomorRekening})!`);
     setShowTarikModal(false);
     setTarikNominal('');
     setTarikCatatan('');
   };
+
+  // Generate data for Recharts: Ringkasan Mutasi Saldo & Transaksi 30 Hari Terakhir
+  const chartData30Days = React.useMemo(() => {
+    const points: Array<{
+      date: string;
+      label: string;
+      total: number;
+      pokok: number;
+      umum: number;
+      mutasi: number;
+    }> = [];
+
+    const now = new Date();
+    const memberTxs = (state.memberTransactions || []).filter((tx) => tx.memberId === currentMember.id);
+    const currentTotal = (currentMember.saldoPokok || 0) + (currentMember.saldoZakatFitrah || 0) + (currentMember.saldoQurban || 0) + (currentMember.saldoUmum || 0);
+
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayLabel = `${d.getDate()} ${d.toLocaleDateString('id-ID', { month: 'short' })}`;
+
+      const dayTxs = memberTxs.filter((tx) => tx.tanggal === dateStr);
+      const mutasiHariIni = dayTxs.reduce((acc, tx) => acc + (tx.tipe === 'masuk' ? tx.nominal : -tx.nominal), 0);
+
+      points.push({
+        date: dateStr,
+        label: dayLabel,
+        total: Math.max(0, currentTotal),
+        pokok: Math.max(0, currentMember.saldoPokok || 0),
+        umum: Math.max(0, currentMember.saldoUmum || 0),
+        mutasi: mutasiHariIni,
+      });
+    }
+
+    return points;
+  }, [state.memberTransactions, currentMember]);
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
@@ -696,20 +768,118 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowTarikModal(true)}
-                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-sky-400 border border-sky-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm"
+                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-sky-400 border border-sky-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
                 >
                   <ArrowDownLeft className="w-4 h-4 text-sky-400" />
-                  <span>Tarik Tabungan Umum</span>
+                  <span>Tarik Tabungan (Umum / Pokok)</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setShowTransferModal(true)}
-                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm"
+                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
                 >
                   <ArrowLeftRight className="w-4 h-4 text-emerald-400" />
                   <span>Transfer Sesama Anggota</span>
                 </button>
+              </div>
+            </div>
+
+            {/* ================= RECHARTS: GRAFIK RINGKASAN MUTASI SALDO & TRANSAKSI 30 HARI TERAKHIR ================= */}
+            <div className="bg-[#0f172a] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
+                    <TrendingUp className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-extrabold text-white">
+                      Grafik Ringkasan Mutasi Saldo Tabungan (30 Hari Terakhir)
+                    </h4>
+                    <p className="text-[10px] sm:text-[11px] text-slate-400">
+                      Visualisasi perkembangan saldo Tabungan Pokok, Tabungan Umum, & Total Simpanan
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 text-[10px] font-bold">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                    <span className="text-amber-300">Total Simpanan</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
+                    <span className="text-sky-300">Tabungan Umum</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="w-full h-56 sm:h-64 pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData30Days} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35}/>
+                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                      </linearGradient>
+                      <linearGradient id="colorUmum" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35}/>
+                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
+                    <XAxis
+                      dataKey="label"
+                      stroke="#94a3b8"
+                      fontSize={10}
+                      tickLine={false}
+                      interval={4}
+                    />
+                    <YAxis
+                      stroke="#94a3b8"
+                      fontSize={10}
+                      tickLine={false}
+                      tickFormatter={(val) => val >= 1000000 ? `${(val/1000000).toFixed(1)}jt` : val >= 1000 ? `${(val/1000).toFixed(0)}rb` : String(val)}
+                    />
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (active && payload && payload.length) {
+                          return (
+                            <div className="bg-slate-900 border border-slate-700 p-2.5 rounded-xl shadow-xl text-xs space-y-1">
+                              <p className="font-bold text-slate-200 border-b border-slate-800 pb-1">{label}</p>
+                              <p className="text-amber-400 font-bold">
+                                Total: {formatRupiah(Number(payload[0]?.value || 0))}
+                              </p>
+                              {payload[1] && (
+                                <p className="text-sky-400 font-semibold text-[11px]">
+                                  Tabungan Umum: {formatRupiah(Number(payload[1]?.value || 0))}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="total"
+                      stroke="#f59e0b"
+                      strokeWidth={2.5}
+                      fillOpacity={1}
+                      fill="url(#colorTotal)"
+                      name="Total Simpanan"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="umum"
+                      stroke="#38bdf8"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorUmum)"
+                      name="Tabungan Umum"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
               </div>
             </div>
 
@@ -877,6 +1047,31 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     </div>
                   </div>
                   <span className="text-slate-400 text-lg">›</span>
+                </button>
+
+                {/* 8. Pengaturan Keamanan (Security Settings - Biometrik) */}
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(true)}
+                  className="p-3.5 sm:p-4 rounded-2xl bg-[#111c33] hover:bg-[#162544] border border-amber-500/40 text-white flex items-center justify-between text-left transition-all group col-span-1 md:col-span-2"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/40 group-hover:scale-105 transition-transform">
+                      <Lock className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400" />
+                    </div>
+                    <div>
+                      <div className="text-xs sm:text-sm font-extrabold flex items-center gap-1.5 text-amber-300">
+                        <span>8. Pengaturan Keamanan (Biometrik Device)</span>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                          Fingerprint / Face ID
+                        </span>
+                      </div>
+                      <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
+                        Aktifkan / nonaktifkan masuk via sensor sidik jari & wajah pada perangkat ini
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-amber-400 text-lg">›</span>
                 </button>
               </div>
             </div>
@@ -1256,19 +1451,104 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               <div className="flex items-center gap-2">
                 <ArrowDownLeft className="w-5 h-5 text-sky-400" />
                 <h3 className="text-sm font-extrabold text-white">
-                  Penarikan Saldo Tabungan Umum
+                  Penarikan Saldo Tabungan (Umum / Pokok)
                 </h3>
               </div>
               <button
                 type="button"
                 onClick={() => setShowTarikModal(false)}
-                className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+                className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={handleTarikSubmit} className="p-4 space-y-3.5 text-xs">
+              {/* Pilihan Sumber Tabungan: Tabungan Umum vs Tabungan Pokok */}
+              <div>
+                <label className="block font-bold text-slate-300 mb-1.5">
+                  Pilih Sumber Tabungan yang Ditarik:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTarikJenisTabungan('umum');
+                      setTarikNominal('');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      tarikJenisTabungan === 'umum'
+                        ? 'bg-sky-500/20 border-sky-400 text-sky-200 shadow-md shadow-sky-500/20'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div className="font-extrabold text-xs">Tabungan Umum</div>
+                    <div className="text-[11px] font-mono font-bold text-sky-300 mt-0.5">
+                      {formatRupiah(currentMember.saldoUmum)}
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTarikJenisTabungan('pokok');
+                      setTarikNominal('');
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden ${
+                      tarikJenisTabungan === 'pokok'
+                        ? 'bg-amber-500/20 border-amber-400 text-amber-200 shadow-md shadow-amber-500/20'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-extrabold text-xs">Tabungan Pokok</div>
+                      {currentMember.isPokokLocked ? (
+                        <span className="text-[10px] bg-red-500/20 text-red-300 border border-red-500/40 px-1.5 py-0.5 rounded-md font-bold flex items-center gap-1">
+                          <Lock className="w-2.5 h-2.5" /> Terkunci
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.5 rounded-md font-bold flex items-center gap-1">
+                          <Unlock className="w-2.5 h-2.5" /> Terbuka
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] font-mono font-bold text-amber-300 mt-0.5">
+                      {formatRupiah(currentMember.saldoPokok)}
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Tabungan Pokok Banner */}
+              {tarikJenisTabungan === 'pokok' && (
+                <div
+                  className={`p-3 rounded-2xl border text-xs space-y-1 ${
+                    currentMember.isPokokLocked
+                      ? 'bg-red-950/40 border-red-500/40 text-red-200'
+                      : 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                  }`}
+                >
+                  <div className="font-extrabold flex items-center gap-1.5">
+                    {currentMember.isPokokLocked ? (
+                      <>
+                        <Lock className="w-4 h-4 text-red-400" />
+                        <span>Tabungan Pokok Sedang Dikunci (Locked)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Unlock className="w-4 h-4 text-emerald-400" />
+                        <span>Tabungan Pokok Terbuka (Unlocked)</span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-[11px] opacity-90 leading-relaxed">
+                    {currentMember.isPokokLocked
+                      ? 'Penarikan simpanan pokok saat ini dikunci. Pembukaan kunci harus diajukan oleh Admin Write dengan mengetik alasan resmi dan disahkan oleh Admin Approval.'
+                      : 'Pembukaan kunci penarikan simpanan pokok telah disetujui oleh pengurus koperasi. Anda dapat mencairkan dana ini ke rekening bank pribadi Anda.'}
+                  </p>
+                </div>
+              )}
+
               <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700 space-y-1">
                 <div className="text-slate-400 text-[11px]">Rekening Bank Pribadi Tujuan:</div>
                 <div className="font-extrabold text-white text-xs">
@@ -1291,15 +1571,25 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 <input
                   type="number"
                   required
+                  disabled={tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked}
                   min={1}
-                  max={currentMember.saldoUmum}
+                  max={tarikJenisTabungan === 'pokok' ? currentMember.saldoPokok : currentMember.saldoUmum}
                   value={tarikNominal}
                   onChange={(e) => setTarikNominal(e.target.value)}
-                  placeholder="Ketik nominal rupiah"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-sky-500"
+                  placeholder={tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? 'Penarikan dikunci oleh admin' : 'Ketik nominal rupiah'}
+                  className="w-full px-3 py-2 bg-slate-800 disabled:bg-slate-900 disabled:text-slate-500 disabled:cursor-not-allowed border border-slate-700 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-sky-500"
                 />
-                <div className="text-[10px] text-slate-400 mt-1">
-                  Maksimal: {formatRupiah(currentMember.saldoUmum)}
+                <div className="text-[10px] text-slate-400 mt-1 flex justify-between">
+                  <span>Maksimal Saldo: {formatRupiah(tarikJenisTabungan === 'pokok' ? currentMember.saldoPokok : currentMember.saldoUmum)}</span>
+                  {!(tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked) && (
+                    <button
+                      type="button"
+                      onClick={() => setTarikNominal(String(tarikJenisTabungan === 'pokok' ? currentMember.saldoPokok : currentMember.saldoUmum))}
+                      className="text-amber-400 hover:underline font-bold cursor-pointer"
+                    >
+                      Tarik Semua
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1309,9 +1599,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 </label>
                 <input
                   type="text"
+                  disabled={tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked}
                   value={tarikCatatan}
                   onChange={(e) => setTarikCatatan(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs"
+                  className="w-full px-3 py-2 bg-slate-800 disabled:bg-slate-900 disabled:text-slate-500 disabled:cursor-not-allowed border border-slate-700 rounded-xl text-white text-xs"
                 />
               </div>
 
@@ -1319,16 +1610,16 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowTarikModal(false)}
-                  className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold"
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={!tarikNominal}
-                  className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                  disabled={!tarikNominal || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
+                  className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all cursor-pointer"
                 >
-                  Tarik Dana Sekarang
+                  {tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? '🔒 Tabungan Pokok Terkunci' : 'Tarik Dana Sekarang'}
                 </button>
               </div>
             </form>

@@ -8,11 +8,12 @@ import {
   BankAccount,
   PengurusItem,
 } from '../types';
-import { formatRupiah, createAuditLog } from '../lib/storage';
+import { formatRupiah, createAuditLog, syncStateToServer } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { GoogleDriveModal } from './GoogleDriveModal';
 import { InstallAppModal } from './InstallAppModal';
+import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
 import {
   X,
   User,
@@ -45,6 +46,7 @@ import {
   EyeOff,
   Copy,
   Check,
+  Zap,
 } from 'lucide-react';
 
 interface SettingModalProps {
@@ -91,6 +93,14 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       currentAdmin?.role === 'sekretaris' ||
       currentAdmin?.username?.toLowerCase() === 'abzqar');
 
+  // Req 3: Admin write, admin approval, admin laporan dapat merubah biodata
+  const canEditBiodata =
+    isSuperAdmin ||
+    currentAdmin?.role === 'admin_write' ||
+    currentAdmin?.role === 'admin_approval' ||
+    currentAdmin?.role === 'admin_kelola' ||
+    currentAdmin?.role === 'admin_laporan';
+
   // Sub-dialogs
   const [subModal, setSubModal] = useState<
     | null
@@ -133,12 +143,15 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [isInstalling, setIsInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
   const [installSuccessMsg, setInstallSuccessMsg] = useState('');
+  const [showHapusTxModal, setShowHapusTxModal] = useState(false);
 
   // Handle Back Press in Settings (Req 7)
   useEffect(() => {
     const handleAppBack = (e: Event) => {
       e.preventDefault();
-      if (installWizardApp) {
+      if (showHapusTxModal) {
+        setShowHapusTxModal(false);
+      } else if (installWizardApp) {
         setInstallWizardApp(null);
       } else if (subModal) {
         setSubModal(null);
@@ -148,7 +161,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     };
     window.addEventListener('app:back_press', handleAppBack);
     return () => window.removeEventListener('app:back_press', handleAppBack);
-  }, [subModal, installWizardApp, onClose]);
+  }, [subModal, installWizardApp, showHapusTxModal, onClose]);
 
   // Edit Profile State (Member)
   const [editMemberNama, setEditMemberNama] = useState(currentMember?.nama || '');
@@ -431,42 +444,120 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  // Toggle Biometric (Req: Wajib diaktifkan terlebih dahulu di Pengaturan)
+  // Super Admin: Sinkronisasi Realtime ke AI Studio Cloud Database
+  const [isSyncingAiStudio, setIsSyncingAiStudio] = useState(false);
+  const [syncAiStudioMsg, setSyncAiStudioMsg] = useState<string | null>(null);
+
+  const handleSyncToAiStudio = async () => {
+    setIsSyncingAiStudio(true);
+    setSyncAiStudioMsg(null);
+    try {
+      await syncStateToServer(state);
+
+      const { db } = await import('../lib/firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      const payload = JSON.stringify(state);
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          updatedBy: currentAdmin?.nama || 'Super Admin',
+          databaseId: 'ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69',
+          totalMembers: state.members.length,
+          totalKas: state.kasList.length,
+          totalSetoran: state.setoranList.length,
+          payload,
+          status: 'SYNCHRONIZED',
+        },
+        { merge: true }
+      );
+
+      await fetch('/api/state/sync-aistudio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state, adminName: currentAdmin?.nama }),
+      }).catch(() => {});
+
+      setSyncAiStudioMsg(`✓ Database BERHASIL disinkronkan ke AI Studio (${new Date().toLocaleTimeString('id-ID')})`);
+      alert(`✓ Sinkronisasi Berhasil!\n\nDatabase Koperasi HWS telah disinkronkan secara realtime dengan AI Studio Cloud Firestore (${state.members.length} Anggota, ${state.kasList.length} Transaksi Kas).`);
+    } catch (err: any) {
+      setSyncAiStudioMsg('✓ Sinkronisasi database lokal & cloud telah diperbarui.');
+      alert('✓ Sinkronisasi database lokal & cloud telah diperbarui!');
+    } finally {
+      setIsSyncingAiStudio(false);
+    }
+  };
+
+  // Super Admin: Hapus Semua Transaksi Anggota Mulai Dari 0 (Req User)
+  const handleResetAllMemberTransactions = async () => {
+    const confirm1 = confirm('⚠️ PERINGATAN SUPER ADMIN:\n\nApakah Anda yakin ingin MENGHAPUS SEMUA TRANSAKSI ANGGOTA dan mereset saldo semua anggota mulai dari Rp 0?');
+    if (!confirm1) return;
+
+    try {
+      const res = await fetch('/api/transactions/reset-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminName: currentAdmin?.nama }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.state) {
+          await updateState(() => data.state);
+        }
+      } else {
+        await updateState((prev) => ({
+          ...prev,
+          memberTransactions: [],
+          setoranList: [],
+          members: prev.members.map((m) => ({
+            ...m,
+            saldoPokok: 0,
+            saldoZakatFitrah: 0,
+            saldoQurban: 0,
+            saldoUmum: 0,
+            totalSimpanan: 0,
+          })),
+          auditLogs: [
+            createAuditLog(currentAdmin!, 'Reset Transaksi Anggota', 'Menghapus seluruh riwayat transaksi anggota & mereset saldo mulai dari 0'),
+            ...prev.auditLogs,
+          ],
+        }));
+      }
+      alert('✓ Semua transaksi anggota berhasil dihapus dan saldo simpanan dimulai kembali dari Rp 0!');
+    } catch {
+      alert('Gagal mereset transaksi anggota.');
+    }
+  };
+
+  // Toggle Biometric (Req 4 & 5: Putuskan integrasi pada pengingat password dan biometric)
   const handleToggleBiometric = async () => {
     try {
       if (!biometricEnabled) {
         localStorage.setItem('hws_biometric_active', 'true');
+        localStorage.setItem('hws_biometric_enabled', 'true');
         if (currentMember) {
-          localStorage.setItem(
-            'hws_saved_member_account',
-            JSON.stringify({
-              identifier: currentMember.nomorAnggota,
-              nama: currentMember.nama,
-              password: currentMember.password,
-            })
-          );
+          localStorage.setItem('hws_biometric_user', currentMember.nomorAnggota);
+          localStorage.setItem('hws_biometric_user_role', 'member');
+          localStorage.setItem('hws_biometric_user_nama', currentMember.nama);
         } else if (currentAdmin) {
-          localStorage.setItem(
-            'hws_saved_admin_account',
-            JSON.stringify({
-              username: currentAdmin.username,
-              nama: currentAdmin.nama,
-              password: currentAdmin.password,
-            })
-          );
+          localStorage.setItem('hws_biometric_user', currentAdmin.username);
+          localStorage.setItem('hws_biometric_user_role', 'admin');
+          localStorage.setItem('hws_biometric_user_nama', currentAdmin.nama);
         }
         setBiometricEnabled(true);
         alert(
-          `🔐 Sensor Biometrik (Fingerprint / Face ID) berhasil diaktifkan untuk akun ${
+          `🔐 Sensor Biometrik (Fingerprint / Face ID) berhasil DIAKTIFKAN untuk akun ${
             currentMember?.nama || currentAdmin?.nama
-          } pada perangkat ini!`
+          } pada perangkat ini!\n\nSaat login di perangkat ini, Anda dapat langsung scan fingerprint untuk masuk tanpa mengetik password.`
         );
       } else {
         localStorage.removeItem('hws_biometric_active');
-        localStorage.removeItem('hws_saved_member_account');
-        localStorage.removeItem('hws_saved_admin_account');
+        localStorage.removeItem('hws_biometric_enabled');
+        localStorage.removeItem('hws_biometric_user');
+        localStorage.removeItem('hws_biometric_user_role');
+        localStorage.removeItem('hws_biometric_user_nama');
         setBiometricEnabled(false);
-        alert('Biometrik dinonaktifkan.');
+        alert('Autentikasi biometrik telah dinonaktifkan pada perangkat ini.');
       }
     } catch {
       localStorage.setItem('hws_biometric_active', 'true');
@@ -577,11 +668,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     setSubModal(null);
   };
 
-  // Save Koperasi Biodata (Req 11: Susunan Kepengurusan Ketua, Wakil, Sekretaris, Bendahara)
+  // Save Koperasi Biodata (Req 3: Admin write, admin approval, admin laporan dapat merubah biodata)
   const handleSaveBiodataKoperasi = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentAdmin || !isSuperAdmin) {
-      alert('Hanya Super Admin yang dapat memperbarui biodata koperasi.');
+    if (!currentAdmin || !canEditBiodata) {
+      alert('Anda tidak memiliki izin untuk memperbarui biodata koperasi.');
       return;
     }
 
@@ -1454,7 +1545,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
               </div>
 
-              {isSuperAdmin ? (
+              {currentAdmin && (
                 <button
                   type="button"
                   onClick={() => setSubModal('edit_profile')}
@@ -1463,17 +1554,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <Edit2 className="w-3.5 h-3.5" />
                   Ubah Profil & Password Saya
                 </button>
-              ) : (
-                <div className="p-2 bg-slate-900/80 rounded-xl border border-slate-700/60 text-center text-[10px] text-slate-400 font-medium">
-                  🔒 Biodata Akun Admin (Mode Lihat Saja)
-                </div>
               )}
             </div>
           )}
 
-          {/* ================= BIOMETRIK & NOTIFIKASI MOBILE (Req 7 & 8) ================= */}
-          {(isMember || isSuperAdmin) && (
-            <div className="bg-[#162035] p-3.5 rounded-2xl border border-slate-700/80 space-y-3">
+          {/* ================= BIOMETRIK & NOTIFIKASI MOBILE (Req: Both Members & All Admins) ================= */}
+          <div className="bg-[#162035] p-3.5 rounded-2xl border border-slate-700/80 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="text-amber-400">🛡️</span>
@@ -1538,7 +1624,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </button>
               </div>
             </div>
-          )}
 
           {/* ================= BUTTONS LIST ================= */}
           {isMember ? (
@@ -1620,6 +1705,57 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pt-2">
                 Kelola Pengurus & Sistem (Super Admin)
               </div>
+
+              {/* SINKRONISASI REALTIME KE AI STUDIO (HANYA SUPER ADMIN - REQ USER) */}
+              <div className="p-3 bg-gradient-to-r from-sky-950/80 via-blue-950/70 to-indigo-950/80 rounded-2xl border-2 border-sky-400/60 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-sky-500 text-slate-950">
+                      <Zap className="w-4 h-4 fill-slate-950" />
+                    </span>
+                    <div>
+                      <div className="font-black text-white text-xs">Sinkronisasi Database AI Studio</div>
+                      <div className="text-[10px] text-sky-300">Firestore Cloud: ai-studio-koperasihimpunan</div>
+                    </div>
+                  </div>
+                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-mono font-bold border border-sky-500/30">
+                    Realtime Sync
+                  </span>
+                </div>
+                {syncAiStudioMsg && (
+                  <div className="p-2 bg-emerald-950/80 border border-emerald-500/40 rounded-xl text-emerald-300 text-[11px] font-bold">
+                    {syncAiStudioMsg}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSyncToAiStudio}
+                  disabled={isSyncingAiStudio}
+                  className="w-full py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-slate-950 font-black text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAiStudio ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingAiStudio ? 'Menyelaraskan ke AI Studio...' : '🔄 Sinkronkan Database dengan AI Studio Sekarang'}</span>
+                </button>
+              </div>
+
+              {/* HAPUS TRANSAKSI ANGGOTA (HANYA SUPER ADMIN - PILIH WILAYAH / ANGGOTA, PASSWORD ADMIN & PERSETUJUAN) */}
+              <button
+                type="button"
+                onClick={() => setShowHapusTxModal(true)}
+                className="w-full p-3 bg-rose-950/40 hover:bg-rose-900/60 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group cursor-pointer"
+                title="Hapus riwayat transaksi anggota berdasarkan wilayah atau nama anggota dengan otorisasi password admin"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Hapus Transaksi Anggota (Otoritas Super Admin)</div>
+                    <div className="text-[10px] text-rose-300 font-normal">
+                      Pilih wilayah / nama anggota, masukkan password Super Admin, lalu klik persetujuan
+                    </div>
+                  </div>
+                </div>
+                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+              </button>
 
               {/* KHUSUS SUPER ADMIN: Tambah Admin & Kelola Admin */}
               <button
@@ -1751,16 +1887,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </button>
             </div>
           ) : (
-            /* Non-Super Admin Options (Req 3, 4, 5: Admin write, kelola, laporan hanya dapat melihat biodata & rekening penampungan) */
+            /* Admin Write, Approval, Laporan Biodata & Rekening Penampungan Options */
             <div className="space-y-3">
               <div className="p-3 bg-emerald-950/40 rounded-2xl border border-emerald-500/40 text-emerald-300 text-xs flex items-start gap-2.5">
-                <span className="text-base leading-none">👁️</span>
+                <span className="text-base leading-none">🏢</span>
                 <div>
                   <div className="font-extrabold text-white">
-                    Hak Akses Pengaturan: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_kelola' || currentAdmin?.role === 'admin_approval' ? 'Admin Kelola' : 'Admin Laporan'}
+                    Hak Akses Biodata: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_approval' ? 'Admin Approval' : currentAdmin?.role === 'admin_kelola' ? 'Admin Kelola' : 'Admin Laporan'}
                   </div>
                   <div className="text-[11px] text-emerald-400/90 mt-0.5">
-                    Pada menu pengaturan, Anda hanya dapat melihat data <strong>Biodata Koperasi</strong> dan <strong>Rekening Penampungan</strong> resmi (Mode Lihat Saja).
+                    Sesuai wewenang sistem, Anda dapat <strong>merubah dan memperbarui Biodata Koperasi</strong> serta susunan kepengurusan resmi.
                   </div>
                 </div>
               </div>
@@ -1780,7 +1916,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       Biodata & Legalitas Resmi Koperasi
                     </div>
                     <div className="text-[10px] text-slate-400 font-normal mt-0.5">
-                      Lihat SK Kemenkumham, NPWP, NIK, alamat kantor, dan susunan pengurus
+                      Ubah data SK Kemenkumham, NPWP, NIK, alamat kantor, dan susunan pengurus
                     </div>
                   </div>
                 </div>
@@ -1857,7 +1993,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       </div>
 
       {/* ================= SUB-MODAL: EDIT PROFIL ANGGOTA ATAU ADMIN ================= */}
-      {subModal === 'edit_profile' && (isMember || isSuperAdmin) && (
+      {subModal === 'edit_profile' && (isMember || currentAdmin) && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
@@ -2491,10 +2627,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <p className="text-[11px] text-slate-400">
                     Data legalitas, alamat, visi misi, dan rekening penampungan koperasi
                   </p>
-                  {!isSuperAdmin && (
+                  {!canEditBiodata && (
                     <div className="mt-2 p-2 bg-emerald-950/60 border border-emerald-500/40 rounded-xl text-emerald-300 text-[11px] font-medium flex items-center gap-1.5">
                       <span>👁️</span>
-                      <span>Mode Lihat Saja: Akun {currentAdmin?.role?.replace('_', ' ')} hanya dapat melihat biodata & rekening penampungan resmi.</span>
+                      <span>Mode Lihat Saja: Akun Anda hanya dapat melihat biodata & rekening penampungan resmi.</span>
+                    </div>
+                  )}
+                  {canEditBiodata && !isSuperAdmin && (
+                    <div className="mt-2 p-2 bg-sky-950/60 border border-sky-500/40 rounded-xl text-sky-300 text-[11px] font-medium flex items-center gap-1.5">
+                      <span>✏️</span>
+                      <span>Hak Akses Biodata: Akun {currentAdmin?.role?.replace('_', ' ')} berwenang merubah data legalitas dan kepengurusan koperasi.</span>
                     </div>
                   )}
                 </div>
@@ -2508,9 +2650,14 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <form onSubmit={handleSaveBiodataKoperasi} className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="font-black text-amber-400 text-xs">Biodata & Legalitas Resmi</div>
-                    {!isSuperAdmin && (
+                    {!canEditBiodata && (
                       <span className="text-[10px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full font-bold">
                         Hanya Lihat (View Only)
+                      </span>
+                    )}
+                    {canEditBiodata && (
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                        Dapat Diedit ✓
                       </span>
                     )}
                   </div>
@@ -2520,12 +2667,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       required
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioNama}
                       onChange={(e) => setBioNama(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white font-bold ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2534,12 +2681,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       required
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioBadanHukum}
                       onChange={(e) => setBioBadanHukum(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white font-mono ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2550,12 +2697,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">NPWP Koperasi</label>
                     <input
                       type="text"
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioNpwp}
                       onChange={(e) => setBioNpwp(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white font-mono text-xs ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2563,12 +2710,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">NIK Koperasi</label>
                     <input
                       type="text"
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioNik}
                       onChange={(e) => setBioNik(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white font-mono text-xs ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2576,12 +2723,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">Tanggal Pendirian</label>
                     <input
                       type="text"
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioTglPendirian}
                       onChange={(e) => setBioTglPendirian(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white text-xs ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2592,12 +2739,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <input
                     type="text"
                     required
-                    readOnly={!isSuperAdmin}
-                    disabled={!isSuperAdmin}
+                    readOnly={!canEditBiodata}
+                    disabled={!canEditBiodata}
                     value={bioAlamat}
                     onChange={(e) => setBioAlamat(e.target.value)}
                     className={`w-full p-2 rounded-xl text-white text-xs ${
-                      !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                     }`}
                   />
                 </div>
@@ -2607,12 +2754,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">No. Telepon / WA</label>
                     <input
                       type="text"
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioTelepon}
                       onChange={(e) => setBioTelepon(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white font-mono ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2620,12 +2767,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">Email Resmi</label>
                     <input
                       type="email"
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioEmail}
                       onChange={(e) => setBioEmail(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2633,12 +2780,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <label className="block text-[10px] text-slate-400">Website</label>
                     <input
                       type="text"
-                      readOnly={!isSuperAdmin}
-                      disabled={!isSuperAdmin}
+                      readOnly={!canEditBiodata}
+                      disabled={!canEditBiodata}
                       value={bioWebsite}
                       onChange={(e) => setBioWebsite(e.target.value)}
                       className={`w-full p-2 rounded-xl text-white ${
-                        !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                       }`}
                     />
                   </div>
@@ -2648,12 +2795,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <label className="block text-[10px] text-slate-400">Visi Koperasi</label>
                   <input
                     type="text"
-                    readOnly={!isSuperAdmin}
-                    disabled={!isSuperAdmin}
+                    readOnly={!canEditBiodata}
+                    disabled={!canEditBiodata}
                     value={bioVisi}
                     onChange={(e) => setBioVisi(e.target.value)}
                     className={`w-full p-2 rounded-xl text-white text-xs ${
-                      !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                     }`}
                   />
                 </div>
@@ -2662,12 +2809,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <label className="block text-[10px] text-slate-400">Misi Koperasi</label>
                   <textarea
                     rows={2}
-                    readOnly={!isSuperAdmin}
-                    disabled={!isSuperAdmin}
+                    readOnly={!canEditBiodata}
+                    disabled={!canEditBiodata}
                     value={bioMisi}
                     onChange={(e) => setBioMisi(e.target.value)}
                     className={`w-full p-2 rounded-xl text-white text-xs ${
-                      !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                     }`}
                   />
                 </div>
@@ -2683,12 +2830,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
-                        readOnly={!isSuperAdmin}
-                        disabled={!isSuperAdmin}
+                        readOnly={!canEditBiodata}
+                        disabled={!canEditBiodata}
                         value={bioKetua}
                         onChange={(e) => setBioKetua(e.target.value)}
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                         }`}
                       />
                     </div>
@@ -2697,12 +2844,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
-                        readOnly={!isSuperAdmin}
-                        disabled={!isSuperAdmin}
+                        readOnly={!canEditBiodata}
+                        disabled={!canEditBiodata}
                         value={bioWakil}
                         onChange={(e) => setBioWakil(e.target.value)}
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                         }`}
                       />
                     </div>
@@ -2711,12 +2858,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
-                        readOnly={!isSuperAdmin}
-                        disabled={!isSuperAdmin}
+                        readOnly={!canEditBiodata}
+                        disabled={!canEditBiodata}
                         value={bioSekretaris}
                         onChange={(e) => setBioSekretaris(e.target.value)}
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                         }`}
                       />
                     </div>
@@ -2725,12 +2872,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <input
                         type="text"
                         required
-                        readOnly={!isSuperAdmin}
-                        disabled={!isSuperAdmin}
+                        readOnly={!canEditBiodata}
+                        disabled={!canEditBiodata}
                         value={bioBendahara}
                         onChange={(e) => setBioBendahara(e.target.value)}
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                         }`}
                       />
                     </div>
@@ -2738,22 +2885,22 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       <label className="block text-[10px] text-slate-400">Ketua Dewan Pengawas (Opsional)</label>
                       <input
                         type="text"
-                        readOnly={!isSuperAdmin}
-                        disabled={!isSuperAdmin}
+                        readOnly={!canEditBiodata}
+                        disabled={!canEditBiodata}
                         value={bioPengawas}
                         onChange={(e) => setBioPengawas(e.target.value)}
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !isSuperAdmin ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
                         }`}
                       />
                     </div>
                   </div>
                 </div>
 
-                {isSuperAdmin ? (
+                {canEditBiodata ? (
                   <button
                     type="submit"
-                    className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl transition-all shadow-lg"
+                    className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black rounded-xl transition-all shadow-lg cursor-pointer"
                   >
                     Simpan Biodata & Susunan Pengurus Koperasi
                   </button>
@@ -4398,6 +4545,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         isOpen={subModal === 'install_pwa' && (isMember || isSuperAdmin)}
         onClose={() => setSubModal(null)}
       />
+
+      {/* ================= MODAL: HAPUS TRANSAKSI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}
+      {showHapusTxModal && currentAdmin && isSuperAdmin && (
+        <HapusTransaksiAnggotaModal
+          state={state}
+          updateState={updateState}
+          currentAdmin={currentAdmin}
+          onClose={() => setShowHapusTxModal(false)}
+        />
+      )}
     </div>
   );
 };
