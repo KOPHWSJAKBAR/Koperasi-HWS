@@ -19,12 +19,14 @@ import { SuratMenyuratView } from './SuratMenyuratView';
 import { ChatOnlineView } from './ChatOnlineView';
 import { SettingModal } from './SettingModal';
 import { InstallAppModal } from './InstallAppModal';
+import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import {
   BookOpen,
   Users,
   CheckCircle2,
   HeartHandshake,
+  Heart,
   Mail,
   MessageSquare,
   Settings,
@@ -82,6 +84,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showSettings, setShowSettings] = useState(false);
   const [settingSubModal, setSettingSubModal] = useState<any>(null);
   const [showInstallModal, setShowInstallModal] = useState(false);
+  const [showBerbagiModal, setShowBerbagiModal] = useState(false);
 
   // Orcas Policy Engine confirmation modal state for Mobile & PC
   const [orcasConfirmation, setOrcasConfirmation] = useState<{
@@ -155,13 +158,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (e.defaultPrevented) return;
       if (showSettings) {
         setShowSettings(false);
+      } else if (showBerbagiModal) {
+        setShowBerbagiModal(false);
       } else if (activeTab !== 'dashboard') {
         setActiveTab('dashboard');
       }
     };
     window.addEventListener('app:back_press', onAppBack);
     return () => window.removeEventListener('app:back_press', onAppBack);
-  }, [showSettings, activeTab]);
+  }, [showSettings, showBerbagiModal, activeTab]);
 
   // Request browser notification permission once on admin dashboard mount
   useEffect(() => {
@@ -670,6 +675,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           >
             <HeartHandshake className="w-3.5 h-3.5" />
             Zakat & Qurban
+          </button>
+
+          {/* User Req 2: Tombol Menu Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum) */}
+          <button
+            type="button"
+            onClick={() => setShowBerbagiModal(true)}
+            className="py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer"
+            title="Kelola & Salurkan Dana Berbagi (Sedekah Subuh, Jumat, Umum) & Unduh Laporan"
+          >
+            <Heart className="w-3.5 h-3.5 text-rose-400 fill-rose-400/20" />
+            <span>Menu Berbagi</span>
           </button>
 
           {!isLaporan && (
@@ -1426,6 +1442,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* ================= MODAL MENU BERBAGI (REQ 2: SEDEKAH SUBUH, JUMAT, UMUM & LAPORAN) ================= */}
+      <MenuBerbagiModal
+        isOpen={showBerbagiModal}
+        onClose={() => setShowBerbagiModal(false)}
+        state={state}
+        updateState={updateState}
+        currentAdmin={currentAdmin}
+      />
     </div>
   );
 };

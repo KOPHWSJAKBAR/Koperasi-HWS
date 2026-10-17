@@ -114,12 +114,34 @@ const defaultInitialState: AppState = {
   memberTransactions: [],
   kasList: [],
   penyaluranList: [],
+  sedekahList: [],
   chatMessages: [],
   suratList: [],
   auditLogs: [],
   categoriesKasKoperasi: {
-    pemasukan: ['Iuran Tabungan Zakat & Qurban', 'Penerimaan Sumbangan / Donasi', 'Pendapatan Jasa Koperasi', 'Pindah Kas Tutup Akun'],
-    pengeluaran: ['Penyaluran Zakat Fitrah', 'Penyaluran Tabungan Qurban', 'Biaya Operasional & ATK', 'Sewa Kantor & Listrik', 'Honor Pengurus'],
+    pemasukan: [
+      'Sedekah Subuh',
+      'Sedekah Jumat',
+      'Sedekah Umum',
+      'Pinjaman Kas',
+      'Pengembalian Kas',
+      'Iuran Tabungan Zakat & Qurban',
+      'Penerimaan Sumbangan / Donasi',
+      'Pendapatan Jasa Koperasi',
+      'Pindah Kas Tutup Akun',
+    ],
+    pengeluaran: [
+      'Penyaluran Sedekah Subuh',
+      'Penyaluran Sedekah Jumat',
+      'Penyaluran Sedekah Umum',
+      'Pinjaman Kas',
+      'Pengembalian Buku Kas',
+      'Penyaluran Zakat Fitrah',
+      'Penyaluran Tabungan Qurban',
+      'Biaya Operasional & ATK',
+      'Sewa Kantor & Listrik',
+      'Honor Pengurus',
+    ],
   },
   lastRunningNumber: 66666,
   serverSyncStatus: {
@@ -130,6 +152,15 @@ const defaultInitialState: AppState = {
   },
   maintenanceLock: {
     isLocked: false,
+  },
+  pengaturanBerbagi: {
+    namaSubuh: 'Sedekah Subuh',
+    namaJumat: 'Sedekah Jumat',
+    namaUmum: 'Sedekah Umum',
+    bankName: 'Bank Syariah Indonesia (BSI)',
+    noRekening: '7123-4567-8901',
+    namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
+    qrisImageUrl: '',
   },
 };
 

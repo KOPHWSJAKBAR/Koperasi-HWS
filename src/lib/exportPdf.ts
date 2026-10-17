@@ -1,4 +1,4 @@
-import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry } from '../types';
+import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry, SedekahBerbagiEntry } from '../types';
 import { formatRupiah } from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
@@ -1558,5 +1558,344 @@ export function exportBukuKasExcel(payload: BukuKasExportPayload) {
   `;
 
   downloadExcelHtml(excelHtml, `Laporan_Buku_Kas_${bukuKasType}_${periodeLabel.replace(/\s+/g, '_')}`);
+}
+
+// ==========================================
+// LAPORAN BERBAGI & SEDEKAH (PDF & EXCEL)
+// Req 2: Sedekah Subuh, Sedekah Jumat, Sedekah Umum
+// Unduh Laporan Tahunan dan Bulanan sesuai periode yang diinginkan
+// ==========================================
+export interface LaporanBerbagiExportPayload {
+  entries: SedekahBerbagiEntry[];
+  periodeTipe: 'harian' | 'bulanan' | 'tahunan' | 'semua';
+  periodeLabel: string;
+  wilayahLabel?: string;
+  memberLabel?: string;
+  kategoriFilter: string;
+  totalPenerimaan: number;
+  totalPenyaluran: number;
+  saldoTersedia: number;
+  subuhTotal: number;
+  jumatTotal: number;
+  umumTotal: number;
+  namaBerbagiMap?: Record<string, string>;
+}
+
+export function exportLaporanBerbagiPdf(payload: LaporanBerbagiExportPayload) {
+  const {
+    entries,
+    periodeLabel,
+    wilayahLabel = 'Keseluruhan Wilayah',
+    memberLabel = 'Semua Anggota',
+    totalPenerimaan,
+    totalPenyaluran,
+    saldoTersedia,
+    subuhTotal,
+    jumatTotal,
+    umumTotal,
+    namaBerbagiMap,
+  } = payload;
+
+  const tanggalCetak = new Date().toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const getJenisLabel = (jenis: string) => {
+    if (namaBerbagiMap && namaBerbagiMap[jenis]) return namaBerbagiMap[jenis];
+    if (jenis === 'sedekah_subuh') return 'Sedekah Subuh';
+    if (jenis === 'sedekah_jumat') return 'Sedekah Jumat';
+    if (jenis === 'sedekah_umum') return 'Sedekah Umum';
+    return jenis;
+  };
+
+  const rowsHtml = entries.length === 0
+    ? `<tr><td colspan="8" style="text-align: center; padding: 20px; color: #64748b; font-style: italic;">Belum ada catatan mutasi dana berbagi / sedekah pada kriteria filter ini.</td></tr>`
+    : entries
+        .map((e, idx) => {
+          const isMasuk = e.tipe === 'penerimaan';
+          const namaOrang = isMasuk
+            ? (e.donaturNama || 'Hamba Allah')
+            : (e.penerimaManfaat || 'Penerima Manfaat');
+          const wilayahOrang = isMasuk ? (e.donaturWilayah || '-') : 'Penyaluran Sosial';
+          const namaBerbagi = e.namaBerbagiKustom || getJenisLabel(e.jenis);
+          const statusText = isMasuk
+            ? (e.status === 'approved' ? 'Terverifikasi' : e.status === 'rejected' ? 'Ditolak' : 'Pending Verifikasi')
+            : 'Tersalurkan Resmi';
+          const statusColor = isMasuk
+            ? (e.status === 'approved' ? '#047857' : e.status === 'rejected' ? '#b91c1c' : '#d97706')
+            : '#0284c7';
+
+          return `
+            <tr>
+              <td style="text-align: center; font-family: monospace;">${idx + 1}</td>
+              <td style="white-space: nowrap; font-size: 8.5pt;">${e.tanggal} <span style="font-size: 7.5pt; color: #64748b;">${e.jam || ''}</span></td>
+              <td style="font-weight: 700; color: #0f172a;">${namaOrang}</td>
+              <td style="font-size: 8.5pt; font-weight: 600; color: #475569;">${wilayahOrang}</td>
+              <td><span style="font-weight: 700; color: #0284c7;">${namaBerbagi}</span></td>
+              <td style="font-size: 8pt; color: #334155;">${e.keterangan || '-'}</td>
+              <td style="text-align: center; font-size: 8pt; font-weight: 700; color: ${statusColor};">${statusText}</td>
+              <td class="num" style="font-weight: 800; color: ${isMasuk ? '#047857' : '#b45309'}; white-space: nowrap;">
+                ${isMasuk ? '+' : '-'}${formatRupiah(e.nominal)}
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+
+  const html = `
+    <div class="header">
+      <div class="logo-box">HWS</div>
+      <div class="header-text">
+        <h2>KOPERASI SIMPAN PINJAM HARAPAN WARGA SEJAHTERA (HWS)</h2>
+        <p>Layanan Program Sosial & Keumatan • Unit Pengelola Dana Berbagi Syariah</p>
+        <p class="meta">Badan Hukum No: AHU-0012948.AH.01.29.TAHUN 2024 • NPWP: 29.839.201.2-412.000</p>
+      </div>
+    </div>
+
+    <div style="background: linear-gradient(135deg, #0284c7 0%, #0f172a 100%); color: white; padding: 14px 18px; border-radius: 8px; margin-bottom: 16px;">
+      <h3 style="font-size: 13pt; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase;">
+        LAPORAN MUTASI DANA BERBAGI & SEDEKAH KOPERASI
+      </h3>
+      <div style="font-size: 9pt; opacity: 0.95; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 14px;">
+        <span>Periode: <b>${periodeLabel}</b></span>
+        <span>Wilayah: <b>${wilayahLabel}</b></span>
+        <span>Filter Anggota: <b>${memberLabel}</b></span>
+        <span>Tanggal Cetak: <b>${tanggalCetak}</b></span>
+      </div>
+    </div>
+
+    <!-- Ringkasan Saldo Berbagi -->
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
+      <div style="background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 8px; padding: 10px 14px;">
+        <div style="font-size: 8.5pt; color: #166534; font-weight: 700; text-transform: uppercase;">Total Penerimaan Sedekah</div>
+        <div style="font-size: 14pt; font-weight: 900; color: #15803d; margin-top: 3px;">${formatRupiah(totalPenerimaan)}</div>
+        <div style="font-size: 7.5pt; color: #166534; margin-top: 2px;">Tercatat pada Buku Kas Koperasi</div>
+      </div>
+      <div style="background: #fefce8; border: 1.5px solid #fde047; border-radius: 8px; padding: 10px 14px;">
+        <div style="font-size: 8.5pt; color: #854d0e; font-weight: 700; text-transform: uppercase;">Total Penyaluran Oleh Admin</div>
+        <div style="font-size: 14pt; font-weight: 900; color: #a16207; margin-top: 3px;">${formatRupiah(totalPenyaluran)}</div>
+        <div style="font-size: 7.5pt; color: #854d0e; margin-top: 2px;">Disalurkan resmi kepada mustahiq</div>
+      </div>
+      <div style="background: #f0f9ff; border: 1.5px solid #7dd3fc; border-radius: 8px; padding: 10px 14px;">
+        <div style="font-size: 8.5pt; color: #075985; font-weight: 700; text-transform: uppercase;">Saldo Kas Berbagi Siap Salur</div>
+        <div style="font-size: 14pt; font-weight: 900; color: #0369a1; margin-top: 3px;">${formatRupiah(saldoTersedia)}</div>
+        <div style="font-size: 7.5pt; color: #075985; margin-top: 2px;">Dana sosial siap disalurkan</div>
+      </div>
+    </div>
+
+    <!-- Rincian Kategori Sedekah -->
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;">
+      <div style="font-size: 8.5pt; font-weight: 800; color: #334155; margin-bottom: 6px; text-transform: uppercase;">
+        Rincian Pengumpulan Sesuai Pilihan Sedekah:
+      </div>
+      <div style="display: flex; gap: 20px; font-size: 9pt;">
+        <div>🌅 <b>${getJenisLabel('sedekah_subuh')}:</b> <span style="font-weight: 800; color: #0f172a;">${formatRupiah(subuhTotal)}</span></div>
+        <div>🕌 <b>${getJenisLabel('sedekah_jumat')}:</b> <span style="font-weight: 800; color: #0f172a;">${formatRupiah(jumatTotal)}</span></div>
+        <div>✨ <b>${getJenisLabel('sedekah_umum')}:</b> <span style="font-weight: 800; color: #0f172a;">${formatRupiah(umumTotal)}</span></div>
+      </div>
+      <div style="font-size: 7.5pt; color: #64748b; margin-top: 5px; font-style: italic;">
+        * Ketentuan: Dana sedekah masuk ke pos Buku Kas Koperasi dan tidak dapat ditarik kembali oleh anggota.
+      </div>
+    </div>
+
+    <!-- Tabel Mutasi -->
+    <h4 style="font-size: 10pt; font-weight: 800; color: #0f172a; margin-bottom: 6px; text-transform: uppercase;">
+      Daftar Mutasi Transaksi Per Donatur & Penyaluran:
+    </h4>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 28px; text-align: center;">No</th>
+          <th style="width: 80px;">Tanggal</th>
+          <th style="width: 130px;">Nama</th>
+          <th style="width: 85px;">Wilayah</th>
+          <th style="width: 100px;">Nama Berbagi</th>
+          <th>Keterangan / Pesan Doa</th>
+          <th style="width: 85px; text-align: center;">Status</th>
+          <th style="width: 110px;" class="num">Jumlah (Rp)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+      <tfoot>
+        <tr class="total-row">
+          <td colspan="7" style="text-align: right; font-weight: 800;">TOTAL PENERIMAAN DANA (JUMLAH KESELURUHAN):</td>
+          <td class="num" style="font-size: 10pt; color: #047857; font-weight: 900;">${formatRupiah(totalPenerimaan)}</td>
+        </tr>
+        <tr class="total-row">
+          <td colspan="7" style="text-align: right; font-weight: 800;">TOTAL PENYALURAN DANA OLEH ADMIN:</td>
+          <td class="num" style="font-size: 10pt; color: #b45309; font-weight: 900;">${formatRupiah(totalPenyaluran)}</td>
+        </tr>
+        <tr class="total-row" style="background-color: #e0f2fe;">
+          <td colspan="7" style="text-align: right; font-weight: 900; color: #0369a1;">SISA SALDO KAS BERBAGI SIAP SALUR:</td>
+          <td class="num" style="font-size: 11pt; color: #0369a1; font-weight: 900;">${formatRupiah(saldoTersedia)}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="footer-sign">
+      <div class="sign-box">
+        <p>Disiapkan Oleh,</p>
+        <p class="title">Pengurus Bagian Sosial</p>
+        <div class="line"></div>
+        <p class="name">Admin Kasir Koperasi HWS</p>
+      </div>
+      <div class="sign-box">
+        <p>Disahkan & Diketahui,</p>
+        <p class="title">Ketua / Super Admin Koperasi</p>
+        <div class="line"></div>
+        <p class="name">Abzqar (Super Admin)</p>
+      </div>
+    </div>
+  `;
+
+  printDocumentHtml(html, `Laporan_Dana_Berbagi_${periodeLabel.replace(/\s+/g, '_')}`);
+}
+
+export function exportLaporanBerbagiExcel(payload: LaporanBerbagiExportPayload) {
+  const {
+    entries,
+    periodeLabel,
+    wilayahLabel = 'Keseluruhan Wilayah',
+    memberLabel = 'Semua Anggota',
+    totalPenerimaan,
+    totalPenyaluran,
+    saldoTersedia,
+    subuhTotal,
+    jumatTotal,
+    umumTotal,
+    namaBerbagiMap,
+  } = payload;
+
+  const tanggalCetak = new Date().toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const getJenisLabel = (jenis: string) => {
+    if (namaBerbagiMap && namaBerbagiMap[jenis]) return namaBerbagiMap[jenis];
+    if (jenis === 'sedekah_subuh') return 'Sedekah Subuh';
+    if (jenis === 'sedekah_jumat') return 'Sedekah Jumat';
+    if (jenis === 'sedekah_umum') return 'Sedekah Umum';
+    return jenis;
+  };
+
+  const rowsExcel = entries.length === 0
+    ? `<tr><td colspan="8" style="text-align:center; padding:12px; color:#64748b;">Belum ada catatan mutasi dana berbagi / sedekah pada kriteria filter ini.</td></tr>`
+    : entries
+        .map((e, idx) => {
+          const isMasuk = e.tipe === 'penerimaan';
+          const namaOrang = isMasuk
+            ? (e.donaturNama || 'Hamba Allah')
+            : (e.penerimaManfaat || 'Penerima Manfaat');
+          const wilayahOrang = isMasuk ? (e.donaturWilayah || '-') : 'Penyaluran Sosial';
+          const namaBerbagi = e.namaBerbagiKustom || getJenisLabel(e.jenis);
+          const statusText = isMasuk
+            ? (e.status === 'approved' ? 'Terverifikasi' : e.status === 'rejected' ? 'Ditolak' : 'Pending Verifikasi')
+            : 'Tersalurkan Resmi';
+
+          return `
+            <tr>
+              <td style="text-align:center;">${idx + 1}</td>
+              <td style="text-align:center;">${e.tanggal} ${e.jam || ''}</td>
+              <td style="font-weight:bold;">${namaOrang}</td>
+              <td style="text-align:center;">${wilayahOrang}</td>
+              <td style="font-weight:bold;">${namaBerbagi}</td>
+              <td>${e.keterangan || '-'}</td>
+              <td style="text-align:center; font-weight:bold;">${statusText}</td>
+              <td class="num" style="font-weight:bold; color:${isMasuk ? '#166534' : '#854d0e'};">${isMasuk ? '' : '-'}${e.nominal}</td>
+            </tr>
+          `;
+        })
+        .join('');
+
+  const excelHtml = `
+    <div class="banner">
+      <h2>KOPERASI HARAPAN WARGA SEJAHTERA (HWS)</h2>
+      <p>LAPORAN DANA BERBAGI & SEDEKAH</p>
+      <p>Periode: ${periodeLabel} | Wilayah: ${wilayahLabel} | Filter Anggota: ${memberLabel} | Dicetak: ${tanggalCetak}</p>
+    </div>
+
+    <table>
+      <tr class="header-cat">
+        <th colspan="2">RINGKASAN POS DANA BERBAGI KOPERASI</th>
+      </tr>
+      <tr>
+        <td style="font-weight:bold;">Total Penerimaan Sedekah (Buku Kas Koperasi)</td>
+        <td class="num" style="font-weight:bold; color:#166534;">${formatRupiah(totalPenerimaan)}</td>
+      </tr>
+      <tr>
+        <td style="font-weight:bold;">Total Penyaluran Oleh Admin</td>
+        <td class="num" style="font-weight:bold; color:#854d0e;">${formatRupiah(totalPenyaluran)}</td>
+      </tr>
+      <tr class="total-row">
+        <td>SISA SALDO KAS BERBAGI TERSEDIA</td>
+        <td class="num" style="font-size:12pt; color:#0369a1;">${formatRupiah(saldoTersedia)}</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="font-size:8pt; color:#64748b; font-style:italic;">
+          * Ketentuan: Dana sedekah masuk ke kas koperasi dan disalurkan oleh admin, tidak dapat ditarik oleh anggota.
+        </td>
+      </tr>
+    </table>
+
+    <br/>
+    <table>
+      <tr class="header-cat">
+        <th colspan="2">PENGUMPULAN PER KATEGORI SEDEKAH</th>
+      </tr>
+      <tr>
+        <td>${getJenisLabel('sedekah_subuh')}</td>
+        <td class="num" style="font-weight:bold;">${formatRupiah(subuhTotal)}</td>
+      </tr>
+      <tr>
+        <td>${getJenisLabel('sedekah_jumat')}</td>
+        <td class="num" style="font-weight:bold;">${formatRupiah(jumatTotal)}</td>
+      </tr>
+      <tr>
+        <td>${getJenisLabel('sedekah_umum')}</td>
+        <td class="num" style="font-weight:bold;">${formatRupiah(umumTotal)}</td>
+      </tr>
+    </table>
+
+    <br/>
+    <table>
+      <thead>
+        <tr>
+          <th>NO</th>
+          <th>TANGGAL & JAM</th>
+          <th>NAMA</th>
+          <th>WILAYAH</th>
+          <th>NAMA BERBAGI</th>
+          <th>KETERANGAN / PESAN DOA</th>
+          <th>STATUS</th>
+          <th>JUMLAH PER ORANG (RP)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsExcel}
+      </tbody>
+      <tfoot>
+        <tr class="total-row">
+          <td colspan="7" style="text-align:right; font-weight:bold;">TOTAL PENERIMAAN (JUMLAH KESELURUHAN):</td>
+          <td class="num" style="color:#166534; font-weight:bold;">${formatRupiah(totalPenerimaan)}</td>
+        </tr>
+        <tr class="total-row">
+          <td colspan="7" style="text-align:right; font-weight:bold;">TOTAL PENYALURAN OLEH ADMIN:</td>
+          <td class="num" style="color:#854d0e; font-weight:bold;">${formatRupiah(totalPenyaluran)}</td>
+        </tr>
+        <tr class="total-row" style="background-color:#e0f2fe;">
+          <td colspan="7" style="text-align:right; font-weight:bold; color:#0369a1;">SISA SALDO KAS BERBAGI SIAP SALUR:</td>
+          <td class="num" style="color:#0369a1; font-weight:bold;">${formatRupiah(saldoTersedia)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
+
+  downloadExcelHtml(excelHtml, `Laporan_Dana_Berbagi_${periodeLabel.replace(/\s+/g, '_')}`);
 }
 

@@ -158,6 +158,7 @@ export interface MemberUser {
   saldoZakatFitrah: number; // Rp 500/hari, dikelola pengurus
   saldoQurban: number; // Rp 500/hari, dikelola pengurus
   saldoUmum: number; // Bebas setor & tarik kapan saja
+  totalSimpanan?: number; // Total akumulasi seluruh simpanan
   
   status: 'aktif' | 'nonaktif' | 'pending' | 'pending_deletion' | 'dibekukan' | 'pending_freeze';
   freezeRequest?: FreezeRequest;
@@ -290,6 +291,44 @@ export interface MaintenanceLock {
   unlockedByName?: string;
 }
 
+// Req 2: Menu Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum)
+export type JenisSedekahBerbagi = 'sedekah_subuh' | 'sedekah_jumat' | 'sedekah_umum';
+
+export interface PengaturanBerbagi {
+  namaSubuh: string;
+  namaJumat: string;
+  namaUmum: string;
+  noRekening: string;
+  bankName: string;
+  namaPemilikRekening: string;
+  qrisImageUrl?: string;
+}
+
+export interface SedekahBerbagiEntry {
+  id: string;
+  tanggal: string; // YYYY-MM-DD
+  jam: string;
+  jenis: JenisSedekahBerbagi; // 'sedekah_subuh' | 'sedekah_jumat' | 'sedekah_umum'
+  namaBerbagiKustom?: string;
+  tipe: 'penerimaan' | 'penyaluran'; // penerimaan = dari anggota/donatur, penyaluran = oleh admin
+  nominal: number;
+  status?: 'pending' | 'approved' | 'rejected'; // konfirmasi admin
+  donaturNama?: string;
+  donaturWilayah?: string; // wilayah anggota / donatur
+  donaturMemberId?: string;
+  donaturRekening?: string;
+  buktiTransferUrl?: string; // foto / bukti transfer jpg
+  penerimaManfaat?: string; // pihak penerima manfaat saat disalurkan oleh admin
+  keterangan: string;
+  sumberDana?: 'tabungan_umum' | 'transfer_bank' | 'qris';
+  kasKoperasiId?: string; // id transaksi pencatatan di Buku Kas Koperasi
+  inputBy: string;
+  verifiedBy?: string;
+  verifiedAt?: string;
+  rejectionReason?: string;
+  createdAt: string;
+}
+
 export interface AppState {
   profile: KoperasiProfile;
   admins: AdminUser[];
@@ -298,6 +337,8 @@ export interface AppState {
   memberTransactions: MemberTransaction[];
   kasList: KasEntry[];
   penyaluranList: PenyaluranZakatQurban[];
+  sedekahList?: SedekahBerbagiEntry[]; // Daftar mutasi sedekah/berbagi
+  pengaturanBerbagi?: PengaturanBerbagi; // Nama berbagi & rekening kas berbagi
   chatMessages: ChatMessage[];
   suratList: SuratResmi[];
   auditLogs: AuditLog[];
@@ -316,4 +357,6 @@ export interface AppState {
   };
   maintenanceLock?: MaintenanceLock;
 }
+
+
 

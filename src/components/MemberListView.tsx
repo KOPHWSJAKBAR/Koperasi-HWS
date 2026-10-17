@@ -784,26 +784,40 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
       await updateState((prev) => {
         const remainingTx = prev.memberTransactions.filter((t) => t.id !== tx.id);
-        const nominalImpact = tx.tipe === 'masuk' ? -tx.nominal : tx.nominal;
+
+        // Hitung ulang akumulasi persis dan running balance untuk anggota ini
+        const memberTx = remainingTx
+          .filter((t) => t.memberId === tx.memberId)
+          .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+        let p = 0, u = 0, z = 0, q = 0, run = 0;
+        memberTx.forEach((t) => {
+          const nom = t.nominal || 0;
+          if (t.tipe === 'masuk') {
+            run += nom;
+            if (t.kategori === 'pokok') p += nom;
+            else if (t.kategori === 'qurban') q += nom;
+            else if (t.kategori === 'zakat') z += nom;
+            else u += nom;
+          } else {
+            run = Math.max(0, run - nom);
+            if (t.kategori === 'pokok') p = Math.max(0, p - nom);
+            else if (t.kategori === 'qurban') q = Math.max(0, q - nom);
+            else if (t.kategori === 'zakat') z = Math.max(0, z - nom);
+            else u = Math.max(0, u - nom);
+          }
+          t.saldoSetelah = run;
+        });
 
         const updatedMembers = prev.members.map((m) => {
           if (m.id !== tx.memberId) return m;
-          let newPokok = m.saldoPokok;
-          let newQurban = m.saldoQurban;
-          let newZakat = m.saldoZakatFitrah;
-          let newUmum = m.saldoUmum;
-
-          if (tx.kategori === 'pokok') newPokok = Math.max(0, (newPokok || 0) + nominalImpact);
-          else if (tx.kategori === 'qurban') newQurban = Math.max(0, (newQurban || 0) + nominalImpact);
-          else if (tx.kategori === 'zakat') newZakat = Math.max(0, (newZakat || 0) + nominalImpact);
-          else newUmum = Math.max(0, (newUmum || 0) + nominalImpact);
-
           return {
             ...m,
-            saldoPokok: newPokok,
-            saldoQurban: newQurban,
-            saldoZakatFitrah: newZakat,
-            saldoUmum: newUmum,
+            saldoPokok: p,
+            saldoUmum: u,
+            saldoZakatFitrah: z,
+            saldoQurban: q,
+            totalSimpanan: p + u + z + q,
           };
         });
 

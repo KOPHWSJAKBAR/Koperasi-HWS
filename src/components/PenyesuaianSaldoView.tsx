@@ -106,6 +106,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
 
   // Role check: Hanya Super Admin yang berwenang masuk transaksi anggota (Req User)
   const isSuperAdmin = currentAdmin.role === 'super_admin';
+  const isLaporan = currentAdmin.role === 'admin_laporan';
   const canPerformAdjustment = isSuperAdmin;
 
   // ================= SUBMIT KOREKSI SALDO =================

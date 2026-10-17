@@ -117,12 +117,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [showIosGuide, setShowIosGuide] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
-  // Biometric Device Connection State (Req 7)
+  // Biometric Device Connection State (Req 7 & User Req 1)
   const [showBiometricModal, setShowBiometricModal] = useState(false);
   const [biometricMethod, setBiometricMethod] = useState<'fingerprint' | 'face_id'>('fingerprint');
   const [biometricStatus, setBiometricStatus] = useState<'connecting' | 'ready' | 'scanning' | 'success' | 'failed'>('ready');
   const [biometricTargetUser, setBiometricTargetUser] = useState('');
   const [biometricMsg, setBiometricMsg] = useState('');
+  const [isMobileEnv, setIsMobileEnv] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      if (typeof window === 'undefined') return false;
+      const ua = navigator.userAgent || '';
+      const isMobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+      const isTouch = navigator.maxTouchPoints > 0;
+      const isSmall = window.innerWidth <= 768;
+      const isPwa = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
+      return isMobileUA || (isTouch && isSmall) || isPwa;
+    };
+    setIsMobileEnv(checkMobile());
+  }, []);
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -380,9 +394,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
     onLoginAdmin(admin);
   };
 
-  // Biometric Login: Terhubung langsung ke sensor biometrik perangkat (Req 4: Scan jari sebelum masuk, terpisah dari pengingat password)
+  // Biometric Login (User Req 1: saat login versi mobile dasboard anggota dan admin dpat langsung mengunakan scan finger dan masuk dasboard, admin dan anggota versi web tidak bisa menggunak biometric)
   const handleBiometricAuth = async () => {
     setErrorMessage('');
+
+    // Versi web desktop TIDAK BISA menggunakan biometric
+    if (!isMobileEnv) {
+      alert(
+        '🔒 Biometrik Hanya untuk Versi Mobile:\n\nAutentikasi sidik jari (fingerprint) hanya dapat digunakan pada aplikasi versi Mobile (Android / iOS / PWA Mobile).\n\nUntuk login versi Web komputer/desktop, silakan masuk menggunakan No. Anggota / Username dan Password.'
+      );
+      return;
+    }
 
     // Feedback getar hardware perangkat
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
@@ -931,14 +953,31 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </label>
 
-              {/* Biometric Login Button (Mandiri - Terpisah dari Pengingat Password) */}
+              {/* Biometric Login Button (User Req 1: Mobile scan finger langsung masuk, web dinonaktifkan) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className="w-full py-2.5 px-3 border border-amber-300 hover:border-amber-500 bg-amber-50/90 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer active:scale-[0.99]"
+                className={`w-full py-2.5 px-3 border rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-sm active:scale-[0.99] cursor-pointer ${
+                  isMobileEnv
+                    ? 'border-emerald-400 hover:border-emerald-500 bg-emerald-50/90 hover:bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400/50'
+                    : 'border-slate-300 bg-slate-100/80 text-slate-500 hover:bg-slate-200'
+                }`}
               >
-                <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Masuk dengan Sidik Jari (Scan Finger / Face ID)</span>
+                <div className="flex items-center gap-2 truncate">
+                  <Fingerprint className={`w-4 h-4 shrink-0 ${isMobileEnv ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <span className="truncate">
+                    {isMobileEnv
+                      ? 'Masuk dengan Sidik Jari (Scan Finger)'
+                      : 'Sidik Jari (Khusus Versi Mobile)'}
+                  </span>
+                </div>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-black shrink-0 ${
+                  isMobileEnv
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-200 text-slate-500'
+                }`}>
+                  {isMobileEnv ? '⚡ Scan Langsung' : 'Web Nonaktif'}
+                </span>
               </button>
 
               <button
@@ -1087,14 +1126,31 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </label>
 
-              {/* Biometric Login Button: Admin Biometric (Mandiri - Terpisah dari Pengingat Password) */}
+              {/* Biometric Login Button: Admin Biometric (User Req 1: Mobile scan finger langsung masuk, web dinonaktifkan) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className="w-full py-2.5 px-3 border border-amber-400 hover:border-amber-500 bg-amber-50 hover:bg-amber-100/90 rounded-xl text-xs font-bold text-amber-900 flex items-center justify-center gap-2 transition-all shadow-sm cursor-pointer active:scale-[0.99]"
+                className={`w-full py-2.5 px-3 border rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-sm active:scale-[0.99] cursor-pointer ${
+                  isMobileEnv
+                    ? 'border-emerald-400 hover:border-emerald-500 bg-emerald-50/90 hover:bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400/50'
+                    : 'border-slate-300 bg-slate-100/80 text-slate-500 hover:bg-slate-200'
+                }`}
               >
-                <Fingerprint className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Masuk dengan Sidik Jari Admin (Scan Finger / Face ID)</span>
+                <div className="flex items-center gap-2 truncate">
+                  <Fingerprint className={`w-4 h-4 shrink-0 ${isMobileEnv ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <span className="truncate">
+                    {isMobileEnv
+                      ? 'Masuk dengan Sidik Jari Admin'
+                      : 'Sidik Jari Admin (Khusus Versi Mobile)'}
+                  </span>
+                </div>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-black shrink-0 ${
+                  isMobileEnv
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-200 text-slate-500'
+                }`}>
+                  {isMobileEnv ? '⚡ Scan Langsung' : 'Web Nonaktif'}
+                </span>
               </button>
 
               <button

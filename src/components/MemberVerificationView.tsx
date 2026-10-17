@@ -73,6 +73,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
   // Admin Verification State
   const [filterStatus, setFilterStatus] = useState<'semua' | 'pending' | 'disetujui' | 'ditolak'>('pending');
+  const [sortBy, setSortBy] = useState<
+    | 'pending_first'
+    | 'approved_first'
+    | 'rejected_first'
+    | 'terbaru'
+    | 'terlama'
+    | 'nominal_besar'
+    | 'nominal_kecil'
+  >('pending_first');
   const [previewBukti, setPreviewBukti] = useState<string | null>(null);
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
@@ -408,20 +417,28 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     if (deposit.jenis === 'kewajiban') {
       drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || 1} Hari`, 490);
     }
-    drawRow('Rekening Tujuan / Metode:', `${deposit.rekeningTujuan} (${(deposit.metode || 'TRANSFER').toUpperCase()})`, 530);
-    drawRow('Status Verifikasi:', deposit.status === 'disetujui' ? 'BERHASIL / DISETUJUI' : 'MENUNGGU VERIFIKASI ADMIN', 570, true);
+    const isApproved = deposit.status === 'disetujui';
+    const isRejected = deposit.status === 'ditolak';
+    const statusLabel = isApproved
+      ? 'TERVERIFIKASI SETORAN'
+      : isRejected
+      ? 'SETORAN DITOLAK'
+      : 'PENDING VERIFIKASI SETORAN';
 
-    ctx.fillStyle = '#ecfdf5';
+    drawRow('Rekening Tujuan / Metode:', `${deposit.rekeningTujuan} (${(deposit.metode || 'TRANSFER').toUpperCase()})`, 530);
+    drawRow('Status Verifikasi:', statusLabel, 570, true);
+
+    ctx.fillStyle = isApproved ? '#ecfdf5' : isRejected ? '#fef2f2' : '#fffbeb';
     ctx.fillRect(80, 620, 740, 90);
-    ctx.strokeStyle = '#10b981';
+    ctx.strokeStyle = isApproved ? '#10b981' : isRejected ? '#ef4444' : '#f59e0b';
     ctx.lineWidth = 2;
     ctx.strokeRect(80, 620, 740, 90);
 
-    ctx.fillStyle = '#065f46';
+    ctx.fillStyle = isApproved ? '#065f46' : isRejected ? '#991b1b' : '#92400e';
     ctx.font = 'bold 18px sans-serif';
     ctx.fillText('TOTAL NOMINAL SETORAN:', 110, 675);
 
-    ctx.fillStyle = '#047857';
+    ctx.fillStyle = isApproved ? '#047857' : isRejected ? '#dc2626' : '#d97706';
     ctx.font = 'bold 32px monospace';
     ctx.fillText(formatRupiah(deposit.nominal), 420, 678);
 
@@ -429,26 +446,28 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     ctx.font = '14px sans-serif';
     ctx.fillText(`Catatan: ${deposit.catatanAnggota || '-'}`, 80, 750);
 
-    ctx.strokeStyle = '#dc2626';
+    const stampBorderColor = isApproved ? '#059669' : isRejected ? '#dc2626' : '#d97706';
+    ctx.strokeStyle = stampBorderColor;
     ctx.lineWidth = 3;
-    ctx.strokeRect(560, 800, 240, 100);
-    ctx.fillStyle = '#dc2626';
+    ctx.strokeRect(520, 800, 300, 105);
+    ctx.fillStyle = stampBorderColor;
     ctx.font = 'bold 16px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('KOPERASI HWS', 680, 835);
-    ctx.font = '12px sans-serif';
-    ctx.fillText('TERVERIFIKASI SISTEM', 680, 860);
-    ctx.fillText('ELEKTRONIK RESMI', 680, 880);
+    ctx.fillText('KOPERASI HWS SYARIAH', 670, 835);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText(statusLabel, 670, 860);
+    ctx.font = '11px sans-serif';
+    ctx.fillText(isApproved ? 'TERVERIFIKASI SISTEM RESMI' : isRejected ? 'TRANSAKSI TIDAK SAH' : 'MENUNGGU VERIFIKASI ADMIN', 670, 882);
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#94a3b8';
     ctx.font = '13px sans-serif';
-    ctx.fillText('Bukti setoran ini sah dan diterbitkan secara digital oleh Koperasi HWS Syariah.', 450, 950);
+    ctx.fillText('Bukti setoran ini sah dan diterbitkan secara digital dalam format JPG oleh Koperasi HWS Syariah.', 450, 950);
 
     const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
     const link = document.createElement('a');
     link.href = dataUrl;
-    link.download = `Bukti_Setoran_${deposit.memberRekening}_${deposit.id}.jpg`;
+    link.download = `Bukti_Setoran_${deposit.memberRekening}_${statusLabel.replace(/\s+/g, '_')}_${deposit.nomorReferensi || deposit.id}.jpg`;
     link.click();
   };
 
@@ -1445,33 +1464,100 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               {isSyncing ? 'Sinkron...' : 'Sinkronkan'}
             </button>
 
+            {/* Sort Dropdown */}
             <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value as any)}
-              className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-slate-200 font-semibold cursor-pointer"
             >
-              <option value="pending">Menunggu Verifikasi (Pending)</option>
-              <option value="disetujui">Telah Disetujui</option>
-              <option value="ditolak">Ditolak</option>
-              <option value="semua">Semua Status</option>
+              <option value="pending_first">Urutkan: Status Pending Verifikasi Dahulu</option>
+              <option value="approved_first">Urutkan: Status Terverifikasi Setoran Dahulu</option>
+              <option value="rejected_first">Urutkan: Status Setoran Ditolak Dahulu</option>
+              <option value="terbaru">Urutkan: Waktu Pengajuan Terbaru</option>
+              <option value="terlama">Urutkan: Waktu Pengajuan Terlama</option>
+              <option value="nominal_besar">Urutkan: Nominal Terbesar</option>
+              <option value="nominal_kecil">Urutkan: Nominal Terkecil</option>
             </select>
 
             <button
               onClick={() => handleExportDeposits('pdf')}
-              className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-bold rounded-xl flex items-center gap-1.5"
+              className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-bold rounded-xl flex items-center gap-1.5 cursor-pointer"
             >
               <FileDown className="w-3.5 h-3.5 text-amber-400" />
               Unduh PDF
             </button>
             <button
               onClick={() => handleExportDeposits('excel')}
-              className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-bold rounded-xl flex items-center gap-1.5"
+              className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 font-bold rounded-xl flex items-center gap-1.5 cursor-pointer"
             >
               <FileDown className="w-3.5 h-3.5 text-emerald-400" />
               Excel
             </button>
           </div>
         </div>
+
+        {/* Quick Filter Status Tabs */}
+        {(() => {
+          const baseList = isMember
+            ? state.setoranList.filter((s) => s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening)
+            : state.setoranList;
+          const pendingCount = baseList.filter((s) => s.status === 'pending').length;
+          const disetujuiCount = baseList.filter((s) => s.status === 'disetujui').length;
+          const ditolakCount = baseList.filter((s) => s.status === 'ditolak').length;
+
+          return (
+            <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-slate-800">
+              <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Status Setoran:</span>
+              <button
+                type="button"
+                onClick={() => setFilterStatus('semua')}
+                className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  filterStatus === 'semua'
+                    ? 'bg-slate-700 text-white shadow'
+                    : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                }`}
+              >
+                Semua ({baseList.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterStatus('pending')}
+                className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  filterStatus === 'pending'
+                    ? 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-500/50'
+                    : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Pending Verifikasi ({pendingCount})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterStatus('disetujui')}
+                className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                  filterStatus === 'disetujui'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-emerald-500/50'
+                    : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Terverifikasi Setoran ({disetujuiCount})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterStatus('ditolak')}
+                className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  filterStatus === 'ditolak'
+                    ? 'bg-red-500 text-white shadow-md ring-2 ring-red-500/50'
+                    : 'bg-red-500/15 text-red-300 hover:bg-red-500/25 border border-red-500/30'
+                }`}
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Ditolak ({ditolakCount})</span>
+              </button>
+            </div>
+          );
+        })()}
 
         {/* List / Table */}
         <div className="mt-4 overflow-x-auto">
@@ -1482,8 +1568,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 <th className="py-2.5 px-3">Anggota</th>
                 <th className="py-2.5 px-3">Jenis Setoran</th>
                 <th className="py-2.5 px-3">Nominal</th>
-                <th className="py-2.5 px-3">Bukti Transfer</th>
-                <th className="py-2.5 px-3">Status</th>
+                <th className="py-2.5 px-3">Bukti Setor (Format JPG)</th>
+                <th className="py-2.5 px-3">Status Verifikasi</th>
                 {!isMember && <th className="py-2.5 px-3 text-right">Aksi</th>}
               </tr>
             </thead>
@@ -1493,6 +1579,28 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   if (isMember) return s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening;
                   if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
                   return true;
+                })
+                .sort((a, b) => {
+                  if (sortBy === 'pending_first') {
+                    if (a.status === 'pending' && b.status !== 'pending') return -1;
+                    if (a.status !== 'pending' && b.status === 'pending') return 1;
+                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                  }
+                  if (sortBy === 'approved_first') {
+                    if (a.status === 'disetujui' && b.status !== 'disetujui') return -1;
+                    if (a.status !== 'disetujui' && b.status === 'disetujui') return 1;
+                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                  }
+                  if (sortBy === 'rejected_first') {
+                    if (a.status === 'ditolak' && b.status !== 'ditolak') return -1;
+                    if (a.status !== 'ditolak' && b.status === 'ditolak') return 1;
+                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                  }
+                  if (sortBy === 'terbaru') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                  if (sortBy === 'terlama') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+                  if (sortBy === 'nominal_besar') return b.nominal - a.nominal;
+                  if (sortBy === 'nominal_kecil') return a.nominal - b.nominal;
+                  return 0;
                 })
                 .map((dep) => (
                   <tr key={dep.id} className="hover:bg-slate-800/30 transition-colors">
@@ -1517,36 +1625,46 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                       {formatRupiah(dep.nominal)}
                     </td>
                     <td className="py-3 px-3">
-                      {dep.buktiTransferUrl ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {dep.buktiTransferUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewBukti(dep.buktiTransferUrl)}
+                            className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-sky-500/30 cursor-pointer"
+                            title="Lihat foto bukti transfer anggota"
+                          >
+                            <Eye className="w-3 h-3" />
+                            Foto Bukti
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => setPreviewBukti(dep.buktiTransferUrl)}
-                          className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-sky-500/20"
+                          onClick={() => handleDownloadBuktiSetorJpg(dep)}
+                          className="py-1 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg text-[10px] font-extrabold flex items-center gap-1 border border-amber-500/30 cursor-pointer"
+                          title="Unduh slip tanda terima bukti setor resmi format .JPG sesuai status transaksi"
                         >
-                          <Eye className="w-3 h-3" />
-                          Lihat Bukti
+                          <FileDown className="w-3 h-3 text-amber-400" />
+                          <span>Format .JPG</span>
                         </button>
-                      ) : (
-                        <span className="text-[10px] text-slate-500">-</span>
-                      )}
+                      </div>
                     </td>
                     <td className="py-3 px-3">
                       {dep.status === 'pending' && (
-                        <span className="py-0.5 px-2 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          Menunggu
+                        <span className="py-1 px-2.5 bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                          <Clock className="w-3.5 h-3.5 shrink-0" />
+                          <span>Pending Verifikasi</span>
                         </span>
                       )}
                       {dep.status === 'disetujui' && (
-                        <span className="py-0.5 px-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Disetujui
+                        <span className="py-1 px-2.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          <span>Terverifikasi Setoran</span>
                         </span>
                       )}
                       {dep.status === 'ditolak' && (
-                        <span className="py-0.5 px-2 bg-red-500/10 text-red-400 border border-red-500/20 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
-                          <XCircle className="w-3 h-3" />
-                          Ditolak
+                        <span className="py-1 px-2.5 bg-red-500/15 text-red-400 border border-red-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                          <XCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>Setoran Ditolak</span>
                         </span>
                       )}
                     </td>
@@ -1558,14 +1676,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                               type="button"
                               disabled={approvingId === dep.id}
                               onClick={() => handleApproveDeposit(dep)}
-                              className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1"
+                              className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
                             >
                               {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
                             </button>
                             <button
                               type="button"
                               onClick={() => handleRejectDeposit(dep)}
-                              className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold"
+                              className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
                             >
                               ✕ Tolak
                             </button>

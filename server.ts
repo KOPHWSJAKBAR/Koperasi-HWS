@@ -104,6 +104,7 @@ const getInitialState = () => ({
   memberTransactions: [],
   kasList: [],
   penyaluranList: [],
+  sedekahList: [],
   chatMessages: [],
   suratList: [],
   auditLogs: [],
@@ -1187,30 +1188,63 @@ async function startServer() {
         currentState.memberTransactions = [];
       }
 
-      if (resetBalance) {
-        if (memberId && memberId !== 'semua') {
-          currentState.members = (currentState.members || []).map((m: any) =>
-            m.id === memberId
-              ? { ...m, saldoPokok: 0, saldoZakatFitrah: 0, saldoQurban: 0, saldoUmum: 0, totalSimpanan: 0 }
-              : m
-          );
-        } else if (wilayah && wilayah !== 'semua') {
-          currentState.members = (currentState.members || []).map((m: any) =>
-            m.wilayah === wilayah
-              ? { ...m, saldoPokok: 0, saldoZakatFitrah: 0, saldoQurban: 0, saldoUmum: 0, totalSimpanan: 0 }
-              : m
-          );
-        } else {
-          currentState.members = (currentState.members || []).map((m: any) => ({
-            ...m,
-            saldoPokok: 0,
-            saldoZakatFitrah: 0,
-            saldoQurban: 0,
-            saldoUmum: 0,
-            totalSimpanan: 0,
-          }));
-        }
+      // Helper untuk rekalkulasi saldo dan running balance mutasi anggota
+      const syncMemberBalancesAndRunningHistory = (affectedMemberIds: string[], forceZero: boolean) => {
+        affectedMemberIds.forEach((mId) => {
+          const mem = (currentState.members || []).find((m: any) => m.id === mId);
+          if (!mem) return;
+
+          if (forceZero) {
+            mem.saldoPokok = 0;
+            mem.saldoZakatFitrah = 0;
+            mem.saldoQurban = 0;
+            mem.saldoUmum = 0;
+            mem.totalSimpanan = 0;
+          } else {
+            // Hitung akumulasi dari transaksi yang tersisa
+            const mTx = (currentState.memberTransactions || [])
+              .filter((tx: any) => tx.memberId === mId)
+              .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+            let p = 0, u = 0, z = 0, q = 0, run = 0;
+            mTx.forEach((tx: any) => {
+              const nom = tx.nominal || 0;
+              if (tx.tipe === 'masuk') {
+                run += nom;
+                if (tx.kategori === 'pokok') p += nom;
+                else if (tx.kategori === 'qurban') q += nom;
+                else if (tx.kategori === 'zakat') z += nom;
+                else u += nom;
+              } else {
+                run = Math.max(0, run - nom);
+                if (tx.kategori === 'pokok') p = Math.max(0, p - nom);
+                else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
+                else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
+                else u = Math.max(0, u - nom);
+              }
+              tx.saldoSetelah = run;
+            });
+
+            mem.saldoPokok = p;
+            mem.saldoUmum = u;
+            mem.saldoZakatFitrah = z;
+            mem.saldoQurban = q;
+            mem.totalSimpanan = p + u + z + q;
+          }
+        });
+      };
+
+      // Tentukan anggota yang terkena dampak
+      let affectedIds: string[] = [];
+      if (memberId && memberId !== 'semua') {
+        affectedIds = [memberId];
+      } else if (wilayah && wilayah !== 'semua') {
+        affectedIds = (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id);
+      } else {
+        affectedIds = (currentState.members || []).map((m: any) => m.id);
       }
+
+      syncMemberBalancesAndRunningHistory(affectedIds, !!resetBalance);
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
@@ -1220,7 +1254,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Hapus Transaksi Anggota',
-        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Verifikasi password admin disetujui.`,
+        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Saldo & mutasi rekening disinkronkan otomatis.`,
       });
 
       saveDatabase(currentState);
@@ -1252,21 +1286,40 @@ async function startServer() {
       }
 
       const deletedTx = currentState.memberTransactions[txIndex];
+      const targetMemberId = deletedTx.memberId;
       currentState.memberTransactions.splice(txIndex, 1);
 
-      // Hitung dan sesuaikan kembali saldo simpanan anggota terkait
-      const member = (currentState.members || []).find((m: any) => m.id === deletedTx.memberId);
+      // Hitung dan sesuaikan kembali saldo simpanan & running history anggota terkait
+      const member = (currentState.members || []).find((m: any) => m.id === targetMemberId);
       if (member) {
-        const nominalImpact = deletedTx.tipe === 'masuk' ? -deletedTx.nominal : deletedTx.nominal;
-        if (deletedTx.kategori === 'pokok') {
-          member.saldoPokok = Math.max(0, (member.saldoPokok || 0) + nominalImpact);
-        } else if (deletedTx.kategori === 'qurban') {
-          member.saldoQurban = Math.max(0, (member.saldoQurban || 0) + nominalImpact);
-        } else if (deletedTx.kategori === 'zakat') {
-          member.saldoZakatFitrah = Math.max(0, (member.saldoZakatFitrah || 0) + nominalImpact);
-        } else {
-          member.saldoUmum = Math.max(0, (member.saldoUmum || 0) + nominalImpact);
-        }
+        const mTx = (currentState.memberTransactions || [])
+          .filter((tx: any) => tx.memberId === targetMemberId)
+          .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+        let p = 0, u = 0, z = 0, q = 0, run = 0;
+        mTx.forEach((tx: any) => {
+          const nom = tx.nominal || 0;
+          if (tx.tipe === 'masuk') {
+            run += nom;
+            if (tx.kategori === 'pokok') p += nom;
+            else if (tx.kategori === 'qurban') q += nom;
+            else if (tx.kategori === 'zakat') z += nom;
+            else u += nom;
+          } else {
+            run = Math.max(0, run - nom);
+            if (tx.kategori === 'pokok') p = Math.max(0, p - nom);
+            else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
+            else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
+            else u = Math.max(0, u - nom);
+          }
+          tx.saldoSetelah = run;
+        });
+
+        member.saldoPokok = p;
+        member.saldoUmum = u;
+        member.saldoZakatFitrah = z;
+        member.saldoQurban = q;
+        member.totalSimpanan = p + u + z + q;
       }
 
       currentState.auditLogs = currentState.auditLogs || [];

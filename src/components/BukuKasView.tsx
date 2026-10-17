@@ -32,6 +32,7 @@ import {
   FileText,
   X,
   Clock,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 interface BukuKasViewProps {
@@ -77,6 +78,16 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const [newCatTipe, setNewCatTipe] = useState<'pemasukan' | 'pengeluaran'>('pengeluaran');
   const [newCatName, setNewCatName] = useState('');
 
+  // Transfer Antar Buku Kas State (Req 2: Kas Anggota ⇄ Kas Koperasi)
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [tfDariKas, setTfDariKas] = useState<'anggota' | 'koperasi'>('anggota');
+  const [tfKeKas, setTfKeKas] = useState<'anggota' | 'koperasi'>('koperasi');
+  const [tfJenis, setTfJenis] = useState<'pinjaman_kas' | 'pengembalian_kas'>('pinjaman_kas');
+  const [tfNominal, setTfNominal] = useState('');
+  const [tfTanggal, setTfTanggal] = useState(new Date().toISOString().split('T')[0]);
+  const [tfKeterangan, setTfKeterangan] = useState('');
+  const [tfNamaPetugas, setTfNamaPetugas] = useState('');
+
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
     const handleDeviceBack = (e: Event) => {
@@ -92,11 +103,14 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       } else if (isAddCatModalOpen) {
         e.preventDefault();
         setIsAddCatModalOpen(false);
+      } else if (isTransferModalOpen) {
+        e.preventDefault();
+        setIsTransferModalOpen(false);
       }
     };
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
-  }, [selectedReceiptKas, editingKasEntry, isInputModalOpen, isAddCatModalOpen]);
+  }, [selectedReceiptKas, editingKasEntry, isInputModalOpen, isAddCatModalOpen, isTransferModalOpen]);
 
   // Check roles
   const isSuperAdmin = currentAdmin.role === 'super_admin';
@@ -206,6 +220,101 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       (isSuperAdmin || isApproval)
         ? '✓ Transaksi kas berhasil dicatat dan disetujui!'
         : '✓ Transaksi berhasil ditulis oleh Admin Write! Dokumen masuk status MENUNGGU PERSETUJUAN (Approval) oleh Admin Approval / Super Admin.'
+    );
+  };
+
+  // Handle Transfer Antar Buku Kas (Req 2: Kas Anggota ⇄ Kas Koperasi)
+  // Pinjaman Kas (sesuai dari mana buku kas diterima) dan Pengembalian Kas (sesuai dari mana buku kas diambil)
+  const handleTransferBukuKasSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canInput) {
+      alert('Akses Ditolak: Anda tidak memiliki wewenang untuk melakukan transfer kas.');
+      return;
+    }
+
+    const nominal = Number(tfNominal);
+    if (!nominal || nominal <= 0) {
+      alert('Nominal transfer harus lebih dari Rp 0.');
+      return;
+    }
+
+    if (tfDariKas === tfKeKas) {
+      alert('Buku kas sumber dan buku kas tujuan tidak boleh sama.');
+      return;
+    }
+
+    const labelSumber = tfDariKas === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi';
+    const labelTujuan = tfKeKas === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi';
+
+    const isPinjaman = tfJenis === 'pinjaman_kas';
+    const now = new Date();
+    const idKeluar = `tf-out-${Date.now()}`;
+    const idMasuk = `tf-in-${Date.now() + 1}`;
+
+    // Req 2: Pinjaman Kas (sesuai dari mana buku kas diterima) & Pengembalian Kas (sesuai dari mana buku kas diambil)
+    const kategoriKeluar = isPinjaman ? 'Pinjaman Kas' : 'Pengembalian Kas';
+    const kategoriMasuk = isPinjaman ? 'Pinjaman Kas' : 'Pengembalian Buku Kas';
+
+    const ketKeluar = isPinjaman
+      ? `Penyaluran Pinjaman Kas ke ${labelTujuan}${tfKeterangan.trim() ? ` - ${tfKeterangan.trim()}` : ''}`
+      : `Pengembalian Kas ke ${labelTujuan}${tfKeterangan.trim() ? ` - ${tfKeterangan.trim()}` : ''}`;
+
+    const ketMasuk = isPinjaman
+      ? `Penerimaan Pinjaman Kas dari ${labelSumber}${tfKeterangan.trim() ? ` - ${tfKeterangan.trim()}` : ''}`
+      : `Penerimaan Pengembalian Kas dari ${labelSumber}${tfKeterangan.trim() ? ` - ${tfKeterangan.trim()}` : ''}`;
+
+    const statusTransaksi = (isSuperAdmin || isApproval) ? 'approved' : 'pending_approval';
+
+    const entryKeluar: KasEntry = {
+      id: idKeluar,
+      bukuKas: tfDariKas,
+      tanggal: tfTanggal,
+      kategori: kategoriKeluar,
+      keterangan: ketKeluar,
+      namaPenerima: labelTujuan,
+      tipe: 'keluar',
+      nominal,
+      saldoKasSetelah: 0,
+      inputBy: tfNamaPetugas || currentAdmin.nama,
+      status: statusTransaksi,
+      createdAt: now.toISOString(),
+    };
+
+    const entryMasuk: KasEntry = {
+      id: idMasuk,
+      bukuKas: tfKeKas,
+      tanggal: tfTanggal,
+      kategori: kategoriMasuk,
+      keterangan: ketMasuk,
+      namaPenerima: labelTujuan,
+      tipe: 'masuk',
+      nominal,
+      saldoKasSetelah: 0,
+      inputBy: tfNamaPetugas || currentAdmin.nama,
+      status: statusTransaksi,
+      createdAt: now.toISOString(),
+    };
+
+    const audit = createAuditLog(
+      currentAdmin,
+      'Transfer Antar Buku Kas',
+      `Transfer ${labelSumber} ➔ ${labelTujuan} sebesar ${formatRupiah(nominal)} (${isPinjaman ? 'Pinjaman Kas' : 'Pengembalian Kas'})${tfKeterangan ? ` - ${tfKeterangan}` : ''}`,
+      idKeluar
+    );
+
+    await updateState((prev) => ({
+      ...prev,
+      kasList: [entryKeluar, entryMasuk, ...prev.kasList],
+      auditLogs: [audit, ...prev.auditLogs],
+    }));
+
+    setIsTransferModalOpen(false);
+    setTfNominal('');
+    setTfKeterangan('');
+    alert(
+      statusTransaksi === 'approved'
+        ? `✓ Transfer antar buku kas sebesar ${formatRupiah(nominal)} berhasil dibukukan (${labelSumber} ➔ ${labelTujuan})!`
+        : `✓ Pengajuan transfer antar buku kas sebesar ${formatRupiah(nominal)} berhasil dibuat oleh Admin Write! Menunggu approval.`
     );
   };
 
@@ -547,6 +656,15 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 >
                   <Edit className="w-4 h-4 text-sky-400" />
                   Kelola Kategori
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsTransferModalOpen(true)}
+                  className="py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="Transfer dana antar Buku Kas Anggota dan Kas Koperasi"
+                >
+                  <ArrowLeftRight className="w-4 h-4" />
+                  Transfer Antar Kas
                 </button>
               </>
             )}
@@ -1968,6 +2086,197 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 Cetak / Unduh PDF Tanda Terima
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL TRANSFER ANTAR BUKU KAS (REQ 2: KAS ANGGOTA ⇄ KAS KOPERASI) ================= */}
+      {isTransferModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-5 shadow-2xl max-h-[92vh] overflow-y-auto space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <ArrowLeftRight className="w-5 h-5 text-indigo-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">
+                    Transfer Antar Buku Kas Koperasi
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Pencatatan Pinjaman Kas & Pengembalian Kas ganda otomatis
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTransferModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleTransferBukuKasSubmit} className="space-y-3.5 text-xs">
+              {/* Petunjuk Sistem */}
+              <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-indigo-200 text-[11px] space-y-1">
+                <div className="font-bold flex items-center gap-1.5 text-indigo-300">
+                  <span>ℹ️</span> Ketentuan Pencatatan Transfer Kas:
+                </div>
+                <div>• <b>Pinjaman Kas:</b> Dicatat dalam kategori <i>Pinjaman Kas</i> pada kas penerima & pengeluaran kas sumber.</div>
+                <div>• <b>Pengembalian Kas:</b> Dicatat dalam kategori <i>Pengembalian Kas</i> pada kas yang diambil dan <i>Pengembalian Buku Kas</i> pada kas yang menerima.</div>
+              </div>
+
+              {/* Tipe Transfer: Pinjaman Kas vs Pengembalian Kas */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1.5">
+                  Jenis Transaksi Antar Kas: *
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTfJenis('pinjaman_kas')}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      tfJenis === 'pinjaman_kas'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-extrabold shadow-sm'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                    }`}
+                  >
+                    <div className="font-bold text-xs">1. Pinjaman Kas</div>
+                    <div className="text-[10px] opacity-80 mt-0.5">Talangan likuiditas antar kas</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTfJenis('pengembalian_kas')}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      tfJenis === 'pengembalian_kas'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-extrabold shadow-sm'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-750'
+                    }`}
+                  >
+                    <div className="font-bold text-xs">2. Pengembalian Kas</div>
+                    <div className="text-[10px] opacity-80 mt-0.5">Pengembalian dana pinjaman kas</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Pemilihan Sumber dan Tujuan Kas */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-900 rounded-2xl border border-slate-800">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Dari Buku Kas (Sumber):
+                  </label>
+                  <select
+                    value={tfDariKas}
+                    onChange={(e) => {
+                      const val = e.target.value as 'anggota' | 'koperasi';
+                      setTfDariKas(val);
+                      setTfKeKas(val === 'anggota' ? 'koperasi' : 'anggota');
+                    }}
+                    className="w-full py-2 px-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold text-xs focus:ring-1 focus:ring-amber-400"
+                  >
+                    <option value="anggota">Buku Kas Anggota (Saldo: {formatRupiah(saldoKasAnggota)})</option>
+                    <option value="koperasi">Buku Kas Koperasi (Saldo: {formatRupiah(saldoKasKoperasi)})</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Ke Buku Kas (Tujuan Penerima):
+                  </label>
+                  <div className="w-full py-2 px-2.5 bg-slate-800/80 border border-slate-700/80 rounded-xl text-amber-400 font-bold text-xs flex items-center justify-between">
+                    <span>{tfKeKas === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi'}</span>
+                    <span className="text-[10px] text-slate-400 font-mono">Tujuan</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Nominal Transfer */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Nominal Transfer Kas (Rp): *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">Rp</span>
+                  <input
+                    type="number"
+                    required
+                    min="1000"
+                    step="1000"
+                    placeholder="Contoh: 1000000"
+                    value={tfNominal}
+                    onChange={(e) => setTfNominal(e.target.value)}
+                    className="w-full pl-10 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono font-bold text-sm focus:ring-1 focus:ring-amber-400"
+                  />
+                </div>
+                {tfNominal && Number(tfNominal) > 0 && (
+                  <div className="text-[11px] text-amber-400 font-bold mt-1">
+                    Terbilang: {formatRupiah(Number(tfNominal))}
+                  </div>
+                )}
+              </div>
+
+              {/* Tanggal & Petugas */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Tanggal Transaksi: *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={tfTanggal}
+                    onChange={(e) => setTfTanggal(e.target.value)}
+                    className="w-full py-2 px-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold text-xs focus:ring-1 focus:ring-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Petugas Input:
+                  </label>
+                  <input
+                    type="text"
+                    value={tfNamaPetugas || currentAdmin.nama}
+                    onChange={(e) => setTfNamaPetugas(e.target.value)}
+                    className="w-full py-2 px-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold text-xs focus:ring-1 focus:ring-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Catatan / Keterangan */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Catatan / Berita Transfer Kas:
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Pinjaman kas sementara likuiditas pos operasional koperasi"
+                  value={tfKeterangan}
+                  onChange={(e) => setTfKeterangan(e.target.value)}
+                  className="w-full py-2 px-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:ring-1 focus:ring-amber-400"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsTransferModalOpen(false)}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={!tfNominal || Number(tfNominal) <= 0}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 disabled:opacity-50 text-white font-black rounded-xl text-xs shadow-lg transition-all flex items-center justify-center gap-1.5"
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                  Eksekusi Transfer Antar Kas
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

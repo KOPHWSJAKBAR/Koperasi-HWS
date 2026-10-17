@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   AppState,
   AdminUser,
@@ -21,6 +21,7 @@ import {
   CheckSquare,
   Square,
   AlertTriangle,
+  Search,
 } from 'lucide-react';
 
 interface HapusTransaksiAnggotaModalProps {
@@ -49,6 +50,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [selectedTxIds, setSelectedTxIds] = useState<string[]>([]);
   const [selectAllTx, setSelectAllTx] = useState<boolean>(true);
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
@@ -84,6 +86,29 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
     });
   }, [state.memberTransactions, availableMembers, selectedMemberId, selectedWilayah]);
 
+  // Search filtered transactions for display in list
+  const displayedTransactions = useMemo(() => {
+    if (!searchQuery.trim()) return matchingTransactions;
+    const q = searchQuery.toLowerCase();
+    return matchingTransactions.filter((tx) => {
+      const mem = state.members.find((m) => m.id === tx.memberId);
+      return (
+        tx.keterangan?.toLowerCase().includes(q) ||
+        tx.tanggal?.toLowerCase().includes(q) ||
+        tx.nominal?.toString().includes(q) ||
+        mem?.nama?.toLowerCase().includes(q) ||
+        mem?.nomorAnggota?.toLowerCase().includes(q)
+      );
+    });
+  }, [matchingTransactions, searchQuery, state.members]);
+
+  // Auto sync selection when matching transactions change
+  useEffect(() => {
+    if (selectAllTx) {
+      setSelectedTxIds(matchingTransactions.map((t) => t.id));
+    }
+  }, [matchingTransactions.length, selectAllTx]);
+
   // Calculate totals
   const totalMasuk = useMemo(() => {
     return matchingTransactions
@@ -100,13 +125,14 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   // Toggle selection
   const handleToggleTx = (id: string) => {
     if (selectAllTx) {
-      // Switch from select-all mode to manual selection
       const allIds = matchingTransactions.map((t) => t.id);
       setSelectedTxIds(allIds.filter((txId) => txId !== id));
       setSelectAllTx(false);
     } else {
       if (selectedTxIds.includes(id)) {
-        setSelectedTxIds(selectedTxIds.filter((txId) => txId !== id));
+        const next = selectedTxIds.filter((txId) => txId !== id);
+        setSelectedTxIds(next);
+        setSelectAllTx(false);
       } else {
         const next = [...selectedTxIds, id];
         setSelectedTxIds(next);
@@ -190,7 +216,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           adminName: currentAdmin.nama,
           wilayah: selectedWilayah,
           memberId: selectedMemberId,
-          transactionIds: selectAllTx ? undefined : activeSelectedIds,
+          transactionIds: activeSelectedIds,
           resetBalance,
           password: adminPassword,
         }),
@@ -208,36 +234,69 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
       await updateState((prev) => {
         const remainingTx = prev.memberTransactions.filter((tx) => !targetIdsSet.has(tx.id));
 
-        let updatedMembers = prev.members;
-        if (resetBalance) {
-          if (selectedMemberId !== 'semua') {
-            updatedMembers = prev.members.map((m) =>
-              m.id === selectedMemberId
-                ? { ...m, saldoPokok: 0, saldoZakatFitrah: 0, saldoQurban: 0, saldoUmum: 0, totalSimpanan: 0 }
-                : m
-            );
-          } else if (selectedWilayah !== 'semua') {
-            updatedMembers = prev.members.map((m) =>
-              m.wilayah === selectedWilayah
-                ? { ...m, saldoPokok: 0, saldoZakatFitrah: 0, saldoQurban: 0, saldoUmum: 0, totalSimpanan: 0 }
-                : m
-            );
-          } else {
-            updatedMembers = prev.members.map((m) => ({
+        // Tentukan anggota yang terpengaruh
+        const affectedMemberIds = new Set<string>();
+        if (selectedMemberId !== 'semua') {
+          affectedMemberIds.add(selectedMemberId);
+        } else if (selectedWilayah !== 'semua') {
+          prev.members.filter((m) => m.wilayah === selectedWilayah).forEach((m) => affectedMemberIds.add(m.id));
+        } else {
+          prev.members.forEach((m) => affectedMemberIds.add(m.id));
+        }
+
+        // Sinkronisasi saldo simpanan & recompute running balances
+        const updatedMembers = prev.members.map((m) => {
+          if (!affectedMemberIds.has(m.id)) return m;
+
+          if (resetBalance) {
+            return {
               ...m,
               saldoPokok: 0,
               saldoZakatFitrah: 0,
               saldoQurban: 0,
               saldoUmum: 0,
               totalSimpanan: 0,
-            }));
+            };
           }
-        }
+
+          // Hitung ulang akumulasi persis dari mutasi yang tersisa
+          const mTx = remainingTx
+            .filter((t) => t.memberId === m.id)
+            .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+          let p = 0, u = 0, z = 0, q = 0, run = 0;
+          mTx.forEach((tx) => {
+            const nom = tx.nominal || 0;
+            if (tx.tipe === 'masuk') {
+              run += nom;
+              if (tx.kategori === 'pokok') p += nom;
+              else if (tx.kategori === 'qurban') q += nom;
+              else if (tx.kategori === 'zakat') z += nom;
+              else u += nom;
+            } else {
+              run = Math.max(0, run - nom);
+              if (tx.kategori === 'pokok') p = Math.max(0, p - nom);
+              else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
+              else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
+              else u = Math.max(0, u - nom);
+            }
+            tx.saldoSetelah = run;
+          });
+
+          return {
+            ...m,
+            saldoPokok: p,
+            saldoUmum: u,
+            saldoZakatFitrah: z,
+            saldoQurban: q,
+            totalSimpanan: p + u + z + q,
+          };
+        });
 
         const audit = createAuditLog(
           currentAdmin,
           'Hapus Transaksi Anggota',
-          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Password admin berhasil diverifikasi.`
+          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Saldo simpanan & histori rekening berhasil disinkronkan.`
         );
 
         return {
@@ -248,7 +307,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         };
       });
 
-      alert(`✓ Berhasil! Sebanyak ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel} telah resmi dihapus setelah persetujuan Super Admin.`);
+      alert(`✓ Berhasil! Sebanyak ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel} telah resmi dihapus dan saldo rekening disesuaikan.`);
       onClose();
     } catch (err: any) {
       setErrorMessage('Terjadi kesalahan saat memproses penghapusan: ' + (err.message || 'Error'));
@@ -259,9 +318,9 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
 
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-[#0f172a] text-slate-100 border border-rose-500/50 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden my-4">
-        {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-rose-500/30 flex items-center justify-between bg-gradient-to-r from-rose-950/70 via-slate-900 to-slate-900">
+      <div className="bg-[#0f172a] text-slate-100 border border-rose-500/50 w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-150">
+        {/* Header - Fixed on top */}
+        <div className="p-4 sm:p-5 border-b border-rose-500/30 flex items-center justify-between bg-gradient-to-r from-rose-950/70 via-slate-900 to-slate-900 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0 shadow">
               <Trash2 className="w-5 h-5" />
@@ -276,7 +335,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                 </span>
               </div>
               <p className="text-[11px] text-rose-300/80 mt-0.5">
-                Pilih wilayah / nama anggota, masukkan password Super Admin, lalu klik persetujuan.
+                Pilih wilayah & nama anggota, seleksi mutasi yang ingin dihapus, masukkan sandi admin untuk konfirmasi.
               </p>
             </div>
           </div>
@@ -289,8 +348,8 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           </button>
         </div>
 
-        {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 text-xs">
+        {/* Form Body - Scrollable */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs">
           {errorMessage && (
             <div className="p-3 bg-red-950/80 border border-red-500/60 text-red-200 rounded-2xl flex items-center gap-2.5 shadow animate-shake">
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -308,7 +367,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               <select
                 value={selectedWilayah}
                 onChange={(e) => handleWilayahChange(e.target.value as any)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:ring-2 focus:ring-rose-500"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:ring-2 focus:ring-rose-500 cursor-pointer"
               >
                 <option value="semua">Semua Wilayah</option>
                 <option value="Cengkareng">Cengkareng (CKR)</option>
@@ -329,7 +388,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                   setSelectedMemberId(e.target.value);
                   setErrorMessage('');
                 }}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:ring-2 focus:ring-rose-500"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:ring-2 focus:ring-rose-500 cursor-pointer"
               >
                 <option value="semua">
                   {selectedWilayah === 'semua'
@@ -345,7 +404,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
             </div>
           </div>
 
-          {/* 2. Ringkasan Transaksi yang Terpilih */}
+          {/* 2. Ringkasan & Alat Seleksi */}
           <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="font-extrabold text-white text-xs flex items-center gap-1.5">
@@ -354,7 +413,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                   {matchingTransactions.length} Transaksi
                 </span>
                 <span className="text-slate-400 font-normal">
-                  ({activeSelectedIds.length} dipilih)
+                  ({activeSelectedIds.length} dipilih untuk dihapus)
                 </span>
               </span>
 
@@ -362,9 +421,9 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                 <button
                   type="button"
                   onClick={handleToggleSelectAll}
-                  className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer"
+                  className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer bg-slate-800/80 px-2 py-1 rounded-lg border border-slate-700"
                 >
-                  {selectAllTx ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                  {selectAllTx ? <CheckSquare className="w-3.5 h-3.5 text-rose-400" /> : <Square className="w-3.5 h-3.5" />}
                   <span>{selectAllTx ? 'Batal Pilih Semua' : 'Pilih Semua Transaksi'}</span>
                 </button>
               )}
@@ -374,67 +433,123 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               <div>Total Mutasi Masuk: <span className="font-mono font-bold text-emerald-400">{formatRupiah(totalMasuk)}</span></div>
               <div>Total Mutasi Keluar: <span className="font-mono font-bold text-rose-400">{formatRupiah(totalKeluar)}</span></div>
             </div>
-          </div>
 
-          {/* List Preview Transaksi */}
-          <div className="max-h-48 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900/50 divide-y divide-slate-800">
-            {matchingTransactions.length === 0 ? (
-              <div className="p-4 text-center text-slate-500 text-xs">
-                Tidak ada riwayat transaksi anggota untuk kriteria yang dipilih.
+            {/* Input Pencarian Mutasi */}
+            {matchingTransactions.length > 5 && (
+              <div className="pt-1.5">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Cari mutasi berdasarkan nama, tanggal, atau keterangan..."
+                    className="w-full pl-8 pr-3 py-1.5 bg-slate-800/80 border border-slate-700/80 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
-            ) : (
-              matchingTransactions.map((tx) => {
-                const isChecked = selectAllTx || selectedTxIds.includes(tx.id);
-                const mem = state.members.find((m) => m.id === tx.memberId);
-                return (
-                  <div
-                    key={tx.id}
-                    onClick={() => handleToggleTx(tx.id)}
-                    className={`p-2.5 flex items-center justify-between gap-2.5 transition-colors cursor-pointer ${
-                      isChecked ? 'bg-rose-950/20 hover:bg-rose-950/30' : 'hover:bg-slate-800/40 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {}}
-                        className="rounded border-slate-700 text-rose-500 focus:ring-rose-500 shrink-0"
-                      />
-                      <div className="truncate">
-                        <div className="font-bold text-white text-[11px] truncate">
-                          {tx.keterangan}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {tx.tanggal} {tx.jam} • {mem?.nama || 'Anggota'} ({tx.kategori})
-                        </div>
-                      </div>
-                    </div>
-                    <span className={`font-mono font-bold text-xs shrink-0 ${
-                      tx.tipe === 'masuk' ? 'text-emerald-400' : 'text-rose-400'
-                    }`}>
-                      {tx.tipe === 'masuk' ? '+' : '-'}{formatRupiah(tx.nominal)}
-                    </span>
-                  </div>
-                );
-              })
             )}
           </div>
 
+          {/* List Scrollable Pemilihan Transaksi yang Akan Dihapus */}
+          <div>
+            <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold mb-1.5 px-1">
+              <span>Daftar Transaksi (Klik baris atau kotak untuk memilih/membatalkan):</span>
+              <span className="text-[10px] text-amber-400/90 font-bold">
+                {activeSelectedIds.length} dari {matchingTransactions.length} dipilih
+              </span>
+            </div>
+
+            {/* Scrollable Container dengan smooth scroll dan touch support */}
+            <div
+              className="h-72 sm:h-80 overflow-y-auto overscroll-auto rounded-2xl border-2 border-slate-700 bg-slate-900/95 divide-y divide-slate-800/90 p-1.5 shadow-inner custom-scrollbar touch-pan-y"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+            >
+              {displayedTransactions.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-xs flex flex-col items-center justify-center h-full">
+                  <span className="text-2xl mb-1">🔍</span>
+                  <span>{searchQuery ? 'Tidak ada transaksi yang cocok dengan pencarian.' : 'Tidak ada riwayat transaksi anggota untuk kriteria ini.'}</span>
+                </div>
+              ) : (
+                displayedTransactions.map((tx) => {
+                  const isChecked = activeSelectedIds.includes(tx.id);
+                  const mem = state.members.find((m) => m.id === tx.memberId);
+                  return (
+                    <div
+                      key={tx.id}
+                      onClick={() => handleToggleTx(tx.id)}
+                      className={`p-2.5 rounded-xl flex items-center justify-between gap-2.5 transition-all cursor-pointer select-none my-0.5 ${
+                        isChecked
+                          ? 'bg-rose-950/40 border border-rose-500/50 text-white shadow-sm'
+                          : 'hover:bg-slate-800/60 opacity-65 text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
+                        <div
+                          className="shrink-0 p-1"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleTx(tx.id);
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            readOnly
+                            className="w-4 h-4 rounded border-slate-600 text-rose-500 focus:ring-rose-500 cursor-pointer pointer-events-none"
+                          />
+                        </div>
+                        <div className="truncate min-w-0">
+                          <div className="font-bold text-white text-[11px] truncate flex items-center gap-1.5">
+                            <span className="truncate">{tx.keterangan || 'Transaksi Simpanan'}</span>
+                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono shrink-0">
+                              {tx.kategori}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                            {tx.tanggal} {tx.jam || ''} • <b className="text-slate-300">{mem?.nama || 'Anggota'}</b> ({mem?.wilayah || '-'})
+                          </div>
+                        </div>
+                      </div>
+                      <span className={`font-mono font-bold text-xs shrink-0 ${
+                        tx.tipe === 'masuk' ? 'text-emerald-400' : 'text-rose-400'
+                      }`}>
+                        {tx.tipe === 'masuk' ? '+' : '-'}{formatRupiah(tx.nominal)}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 px-1 pt-1">
+              <span>↕ Gunakan scroll untuk melihat transaksi lainnya</span>
+              <span>Total Ditemukan: {matchingTransactions.length}</span>
+            </div>
+          </div>
+
           {/* Opsi Reset Saldo Simpanan Anggota ke 0 */}
-          <label className="flex items-center gap-2 p-3 bg-slate-800/80 rounded-2xl border border-slate-700 cursor-pointer">
+          <label className="flex items-start gap-2.5 p-3 bg-slate-800/80 rounded-2xl border border-slate-700 cursor-pointer hover:bg-slate-800 transition-colors">
             <input
               type="checkbox"
               checked={resetBalance}
               onChange={(e) => setResetBalance(e.target.checked)}
-              className="rounded border-slate-700 text-rose-500 focus:ring-rose-500"
+              className="mt-0.5 w-4 h-4 rounded border-slate-700 text-rose-500 focus:ring-rose-500 shrink-0 cursor-pointer"
             />
             <div>
               <div className="font-extrabold text-white text-xs">
                 Reset Saldo Simpanan Anggota ke Rp 0 (Mulai Dari 0)
               </div>
-              <div className="text-[10px] text-slate-400">
-                Otomatis mengembalikan saldo pokok, umum, zakat, qurban anggota yang dipilih kembali ke Rp 0.
+              <div className="text-[10px] text-slate-400 leading-relaxed">
+                Jika dicentang: Seluruh saldo simpanan (pokok, umum, zakat, qurban) anggota terkait akan kembali ke Rp 0. Jika tidak dicentang: Saldo anggota akan dihitung ulang secara akurat dari mutasi tersisa.
               </div>
             </div>
           </label>
@@ -442,7 +557,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           {/* 3. Masukan Password Super Admin */}
           <div className="p-3.5 bg-rose-950/30 border border-rose-500/40 rounded-2xl space-y-2">
             <label className="block font-black text-rose-200 text-xs">
-              3. Masukan Password Admin (Super Admin) *
+              3. Masukan Kata Sandi Super Admin untuk Konfirmasi *
             </label>
             <div className="relative">
               <input
@@ -459,13 +574,13 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white"
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white cursor-pointer"
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
             <p className="text-[10px] text-rose-300/80">
-              * Keamanan Otoritas: Diperlukan verifikasi kata sandi Super Admin untuk menghapus transaksi anggota.
+              * Keamanan Otoritas: Diperlukan verifikasi kata sandi Super Admin untuk menghapus transaksi anggota. Riwayat yang dihapus juga otomatis terhapus dari cetak mutasi rekening.
             </p>
           </div>
 
@@ -485,7 +600,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               className="flex-[2] py-3 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs shadow-lg shadow-rose-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
             >
               <Check className="w-4 h-4" />
-              <span>{isSubmitting ? 'Memproses Penghapusan...' : '✓ Klik Persetujuan & Hapus Transaksi'}</span>
+              <span>{isSubmitting ? 'Memproses Penghapusan...' : `✓ Klik Persetujuan & Hapus ${activeSelectedIds.length} Transaksi`}</span>
             </button>
           </div>
         </form>

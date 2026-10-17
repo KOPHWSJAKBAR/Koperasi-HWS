@@ -16,12 +16,14 @@ import { ChatOnlineView } from './ChatOnlineView';
 import { SettingModal } from './SettingModal';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { InstallAppModal } from './InstallAppModal';
+import { MenuBerbagiModal } from './MenuBerbagiModal';
 import {
   CreditCard,
   ArrowUpRight,
   User,
   FileText,
   HeartHandshake,
+  Heart,
   Mail,
   MessageSquare,
   Settings,
@@ -98,6 +100,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tarikNominal, setTarikNominal] = useState('');
   const [tarikCatatan, setTarikCatatan] = useState('');
   const [tarikError, setTarikError] = useState('');
+  const [showBerbagiModal, setShowBerbagiModal] = useState(false);
 
   const [backToast, setBackToast] = useState<string | null>(null);
   const [memberToasts, setMemberToasts] = useState<Array<{
@@ -140,6 +143,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       if (e.defaultPrevented) return;
       if (showSettings) {
         setShowSettings(false);
+      } else if (showBerbagiModal) {
+        setShowBerbagiModal(false);
       } else if (showTransferModal) {
         setShowTransferModal(false);
       } else if (showTarikModal) {
@@ -152,7 +157,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     };
     window.addEventListener('app:back_press', onAppBack);
     return () => window.removeEventListener('app:back_press', onAppBack);
-  }, [showSettings, showTransferModal, showTarikModal, showKtaModal, activeMenu]);
+  }, [showSettings, showBerbagiModal, showTransferModal, showTarikModal, showKtaModal, activeMenu]);
 
   // Auto-lookup recipient for transfer (Req 2: Transfer sesama anggota terkirim akurat)
   const cleanTargetQuery = tfTargetRek.trim().toLowerCase();
@@ -763,6 +768,33 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   <span>Transfer Sesama Anggota</span>
                 </button>
               </div>
+
+              {/* User Req 2: Tombol Menu Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum) */}
+              <button
+                type="button"
+                onClick={() => setShowBerbagiModal(true)}
+                className="w-full mt-3 py-3 px-4 bg-gradient-to-r from-rose-500/20 via-amber-500/20 to-rose-500/20 hover:from-rose-500/30 hover:to-amber-500/30 border border-rose-500/40 rounded-2xl flex items-center justify-between text-xs sm:text-sm font-black text-rose-300 shadow-md active:scale-[0.99] transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="p-1.5 rounded-xl bg-rose-500 text-slate-950 group-hover:scale-110 transition-transform">
+                    <Heart className="w-4 h-4 fill-slate-950" />
+                  </span>
+                  <div className="text-left">
+                    <div className="text-white font-extrabold text-xs sm:text-sm flex items-center gap-2">
+                      <span>Menu Berbagi (Sedekah Subuh, Jumat & Umum)</span>
+                      <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-bold">
+                        Buku Kas Koperasi
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-rose-300/80 font-normal mt-0.5">
+                      Pilihan sedekah berkah tercatat di kas koperasi • Tidak dapat ditarik kembali
+                    </div>
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-xl group-hover:bg-amber-500/20 transition-colors">
+                  Salurkan Berkah →
+                </span>
+              </button>
             </div>
 
             {/* ================= RECHARTS: GRAFIK RINGKASAN MUTASI SALDO & TRANSAKSI 30 HARI TERAKHIR ================= */}
@@ -1029,7 +1061,32 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   <span className="text-slate-400 text-lg">›</span>
                 </button>
 
-                {/* 8. Pengaturan Keamanan (Security Settings - Biometrik) */}
+                {/* 8. Menu Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum) */}
+                <button
+                  type="button"
+                  onClick={() => setShowBerbagiModal(true)}
+                  className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-rose-950/40 to-slate-900 border border-rose-500/40 text-white flex items-center justify-between text-left transition-all hover:border-rose-400 cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/30">
+                      <Heart className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400 fill-rose-400/20" />
+                    </div>
+                    <div>
+                      <div className="text-xs sm:text-sm font-extrabold flex items-center gap-1.5 text-rose-300">
+                        <span>8. Menu Berbagi (Sedekah)</span>
+                        <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-bold">
+                          Sosial Syariah
+                        </span>
+                      </div>
+                      <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
+                        Sedekah Subuh, Sedekah Jumat & Sedekah Umum
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-rose-400 text-lg">›</span>
+                </button>
+
+                {/* 9. Pengaturan Keamanan (Security Settings - Biometrik) */}
                 <button
                   type="button"
                   onClick={() => setShowSettings(true)}
@@ -1041,7 +1098,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     </div>
                     <div>
                       <div className="text-xs sm:text-sm font-extrabold flex items-center gap-1.5 text-amber-300">
-                        <span>8. Pengaturan Keamanan (Biometrik Device)</span>
+                        <span>9. Pengaturan Keamanan (Biometrik Device)</span>
                         <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
                           Fingerprint / Face ID
                         </span>
@@ -1673,6 +1730,15 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           <span>{backToast}</span>
         </div>
       )}
+
+      {/* ================= MODAL MENU BERBAGI (REQ 2: SEDEKAH SUBUH, JUMAT, UMUM & LAPORAN) ================= */}
+      <MenuBerbagiModal
+        isOpen={showBerbagiModal}
+        onClose={() => setShowBerbagiModal(false)}
+        state={state}
+        updateState={updateState}
+        currentMember={currentMember}
+      />
     </div>
   );
 };

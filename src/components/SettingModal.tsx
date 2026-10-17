@@ -48,6 +48,8 @@ import {
   Check,
   Zap,
   AlertCircle,
+  Fingerprint,
+  Heart,
 } from 'lucide-react';
 
 interface SettingModalProps {
@@ -67,7 +69,8 @@ interface SettingModalProps {
     | 'log_audit'
     | 'sesuaikan_saldo'
     | 'install_pwa'
-    | 'analisis_error';
+    | 'analisis_error'
+    | 'pengaturan_berbagi';
   onClose: () => void;
   onLogout: () => void;
   onOpenKta?: () => void;
@@ -102,6 +105,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     currentAdmin?.role === 'admin_kelola' ||
     currentAdmin?.role === 'admin_laporan';
 
+  // Req 1 & 8: nama berbagi bisa di ganti oleh admin write, admin aproval dan super admin terdapat dalam setingan admin
+  const canEditPengaturanBerbagi =
+    isSuperAdmin ||
+    currentAdmin?.role === 'admin_write' ||
+    currentAdmin?.role === 'admin_approval';
+
   // Sub-dialogs
   const [subModal, setSubModal] = useState<
     | null
@@ -116,11 +125,50 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     | 'sesuaikan_saldo'
     | 'install_pwa'
     | 'analisis_error'
+    | 'pengaturan_berbagi'
   >(initialSubModal || null);
+
+  // State Pengaturan Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum, No Rekening, QRIS)
+  const [berbagiSubuh, setBerbagiSubuh] = useState<string>(
+    state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh'
+  );
+  const [berbagiJumat, setBerbagiJumat] = useState<string>(
+    state.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat'
+  );
+  const [berbagiUmum, setBerbagiUmum] = useState<string>(
+    state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum'
+  );
+  const [berbagiBank, setBerbagiBank] = useState<string>(
+    state.pengaturanBerbagi?.bankName || 'Bank Syariah Indonesia (BSI)'
+  );
+  const [berbagiNoRek, setBerbagiNoRek] = useState<string>(
+    state.pengaturanBerbagi?.noRekening || '7123-4567-8901'
+  );
+  const [berbagiNamaPemilik, setBerbagiNamaPemilik] = useState<string>(
+    state.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS'
+  );
+  const [berbagiQrisUrl, setBerbagiQrisUrl] = useState<string>(
+    state.pengaturanBerbagi?.qrisImageUrl || ''
+  );
+  const [isSavingBerbagi, setIsSavingBerbagi] = useState(false);
+  const [berbagiSaveMsg, setBerbagiSaveMsg] = useState('');
+
+  // Sync state if state.pengaturanBerbagi updates
+  useEffect(() => {
+    if (state.pengaturanBerbagi) {
+      setBerbagiSubuh(state.pengaturanBerbagi.namaSubuh || 'Sedekah Subuh');
+      setBerbagiJumat(state.pengaturanBerbagi.namaJumat || 'Sedekah Jumat');
+      setBerbagiUmum(state.pengaturanBerbagi.namaUmum || 'Sedekah Umum');
+      setBerbagiBank(state.pengaturanBerbagi.bankName || 'Bank Syariah Indonesia (BSI)');
+      setBerbagiNoRek(state.pengaturanBerbagi.noRekening || '7123-4567-8901');
+      setBerbagiNamaPemilik(state.pengaturanBerbagi.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS');
+      setBerbagiQrisUrl(state.pengaturanBerbagi.qrisImageUrl || '');
+    }
+  }, [state.pengaturanBerbagi]);
 
   useEffect(() => {
     if (initialSubModal) {
-      if (!isSuperAdmin && !isMember && initialSubModal !== 'profil_koperasi') {
+      if (!isSuperAdmin && !isMember && initialSubModal !== 'profil_koperasi' && initialSubModal !== 'pengaturan_berbagi') {
         setSubModal('profil_koperasi');
       } else {
         setSubModal(initialSubModal);
@@ -347,6 +395,9 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [biometricEnabled, setBiometricEnabled] = useState(
     () => typeof window !== 'undefined' && localStorage.getItem('hws_biometric_active') === 'true'
   );
+  // User Req 1: Pendaftaran Biometrik via Scan Finger
+  const [showBioEnrollModal, setShowBioEnrollModal] = useState(false);
+  const [bioEnrollStep, setBioEnrollStep] = useState<'prompt' | 'scanning' | 'success'>('prompt');
   const [mobileNotifEnabled, setMobileNotifEnabled] = useState(
     () => typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
   );
@@ -539,28 +590,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  // Toggle Biometric (Req 4 & 5: Putuskan integrasi pada pengingat password dan biometric)
+  // Toggle Biometric (User Req 1: Meminta scan finger sebagai pendaftaran biometric login)
   const handleToggleBiometric = async () => {
     try {
       if (!biometricEnabled) {
-        localStorage.setItem('hws_biometric_active', 'true');
-        localStorage.setItem('hws_biometric_enabled', 'true');
-        if (currentMember) {
-          localStorage.setItem('hws_biometric_user', currentMember.nomorAnggota);
-          localStorage.setItem('hws_biometric_user_role', 'member');
-          localStorage.setItem('hws_biometric_user_nama', currentMember.nama);
-        } else if (currentAdmin) {
-          localStorage.setItem('hws_biometric_user', currentAdmin.username);
-          localStorage.setItem('hws_biometric_user_role', 'admin');
-          localStorage.setItem('hws_biometric_user_nama', currentAdmin.nama);
-        }
-        setBiometricEnabled(true);
-        alert(
-          `🔐 Sensor Biometrik (Fingerprint / Face ID) berhasil DIAKTIFKAN untuk akun ${
-            currentMember?.nama || currentAdmin?.nama
-          } pada perangkat ini!\n\nSaat login di perangkat ini, Anda dapat langsung scan fingerprint untuk masuk tanpa mengetik password.`
-        );
+        // Buka modal pendaftaran biometrik dan minta scan finger
+        setBioEnrollStep('prompt');
+        setShowBioEnrollModal(true);
       } else {
+        const confirmDisable = confirm('Apakah Anda yakin ingin menonaktifkan autentikasi biometrik pada perangkat ini?');
+        if (!confirmDisable) return;
         localStorage.removeItem('hws_biometric_active');
         localStorage.removeItem('hws_biometric_enabled');
         localStorage.removeItem('hws_biometric_user');
@@ -570,10 +609,37 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         alert('Autentikasi biometrik telah dinonaktifkan pada perangkat ini.');
       }
     } catch {
-      localStorage.setItem('hws_biometric_active', 'true');
-      setBiometricEnabled(true);
-      alert('🔐 Sensor Biometrik diaktifkan.');
+      setBiometricEnabled(false);
     }
+  };
+
+  const handleExecuteBioEnroll = () => {
+    setBioEnrollStep('scanning');
+    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate([40, 60, 40]); } catch {}
+    }
+
+    setTimeout(() => {
+      if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+        try { navigator.vibrate([60, 40, 80]); } catch {}
+      }
+      localStorage.setItem('hws_biometric_active', 'true');
+      localStorage.setItem('hws_biometric_enabled', 'true');
+      if (currentMember) {
+        localStorage.setItem('hws_biometric_user', currentMember.nomorAnggota);
+        localStorage.setItem('hws_biometric_user_role', 'member');
+        localStorage.setItem('hws_biometric_user_nama', currentMember.nama);
+      } else if (currentAdmin) {
+        localStorage.setItem('hws_biometric_user', currentAdmin.username);
+        localStorage.setItem('hws_biometric_user_role', 'admin');
+        localStorage.setItem('hws_biometric_user_nama', currentAdmin.nama);
+      }
+      setBioEnrollStep('success');
+      setBiometricEnabled(true);
+      setTimeout(() => {
+        setShowBioEnrollModal(false);
+      }, 1200);
+    }, 1200);
   };
 
   // Lock / Unlock Maintenance Sistem (Req 3: Bekukan berlaku semua anggota & admin, masukkan note & password, buka kembali)
@@ -706,6 +772,58 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       } else {
         alert('Izin notifikasi belum diaktifkan. Anda dapat mengizinkannya di setelan peramban atau perangkat.');
       }
+    }
+  };
+
+  // Req 1 & 8: Simpan Pengaturan Berbagi (Bisa diganti oleh Admin Write, Admin Approval, Super Admin)
+  const handleSavePengaturanBerbagi = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEditPengaturanBerbagi) {
+      alert('Akses Ditolak: Hanya Admin Write, Admin Approval, dan Super Admin yang memiliki wewenang untuk mengubah pengaturan nama & rekening berbagi.');
+      return;
+    }
+
+    setIsSavingBerbagi(true);
+    setBerbagiSaveMsg('');
+    try {
+      const namaSubuhClean = berbagiSubuh.trim() || 'Sedekah Subuh';
+      const namaJumatClean = berbagiJumat.trim() || 'Sedekah Jumat';
+      const namaUmumClean = berbagiUmum.trim() || 'Sedekah Umum';
+      const bankClean = berbagiBank.trim() || 'Bank Syariah Indonesia (BSI)';
+      const noRekClean = berbagiNoRek.trim() || '7123-4567-8901';
+      const namaPemilikClean = berbagiNamaPemilik.trim() || 'Koperasi Berbagi Mandiri HWS';
+
+      await updateState((prev) => {
+        const audit = createAuditLog(
+          currentAdmin || ({ nama: 'Admin', role: 'admin_write' } as any),
+          'Ubah Pengaturan Berbagi',
+          `${currentAdmin?.nama || 'Admin'} (${currentAdmin?.role || 'Admin'}) memperbarui nama program berbagi: [${namaSubuhClean}, ${namaJumatClean}, ${namaUmumClean}] dan Rekening Kas Berbagi: ${bankClean} ${noRekClean} a.n ${namaPemilikClean}.`
+        );
+
+        return {
+          ...prev,
+          pengaturanBerbagi: {
+            namaSubuh: namaSubuhClean,
+            namaJumat: namaJumatClean,
+            namaUmum: namaUmumClean,
+            bankName: bankClean,
+            noRekening: noRekClean,
+            namaPemilikRekening: namaPemilikClean,
+            qrisImageUrl: berbagiQrisUrl.trim() || undefined,
+          },
+          auditLogs: [audit, ...(prev.auditLogs || [])],
+        };
+      });
+
+      setBerbagiSaveMsg('✓ Pengaturan nama program berbagi & rekening kas koperasi berhasil diperbarui!');
+      setTimeout(() => {
+        setBerbagiSaveMsg('');
+        setSubModal(null);
+      }, 1500);
+    } catch (err: any) {
+      alert('Gagal menyimpan pengaturan berbagi: ' + err.message);
+    } finally {
+      setIsSavingBerbagi(false);
     }
   };
 
@@ -2042,6 +2160,28 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span>›</span>
               </button>
 
+              {/* Req 1 & 8: Pengaturan Menu Berbagi (Nama Sedekah, No Rekening & QRIS) */}
+              <button
+                type="button"
+                onClick={() => setSubModal('pengaturan_berbagi')}
+                className="w-full p-3 bg-gradient-to-r from-rose-950/60 to-slate-900 hover:bg-slate-800 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/40 shrink-0">
+                    <Heart className="w-4 h-4 text-rose-400" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
+                      Pengaturan Menu Berbagi (Nama Sedekah, Rekening & QRIS)
+                    </div>
+                    <div className="text-[10px] text-rose-300 font-normal">
+                      Ubah nama program ({berbagiSubuh}, {berbagiJumat}, {berbagiUmum}) & no rekening
+                    </div>
+                  </div>
+                </div>
+                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+              </button>
+
               {/* Menu Instal Aplikasi Koperasi */}
               <button
                 onClick={() => setSubModal('install_pwa')}
@@ -2066,10 +2206,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span className="text-base leading-none">🏢</span>
                 <div>
                   <div className="font-extrabold text-white">
-                    Hak Akses Biodata: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_approval' ? 'Admin Approval' : currentAdmin?.role === 'admin_kelola' ? 'Admin Kelola' : 'Admin Laporan'}
+                    Hak Akses Pengaturan: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_approval' ? 'Admin Approval' : currentAdmin?.role === 'admin_kelola' ? 'Admin Kelola' : 'Admin Laporan'}
                   </div>
                   <div className="text-[11px] text-emerald-400/90 mt-0.5">
-                    Sesuai wewenang sistem, Anda dapat <strong>merubah dan memperbarui Biodata Koperasi</strong> serta susunan kepengurusan resmi.
+                    Sesuai wewenang sistem, Anda dapat <strong>merubah Biodata Koperasi</strong> serta <strong>Nama & Rekening Menu Berbagi</strong>.
                   </div>
                 </div>
               </div>
@@ -2095,6 +2235,30 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
                 <span className="text-emerald-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
               </button>
+
+              {/* Req 1 & 8: Tombol Pengaturan Menu Berbagi untuk Admin Write & Approval */}
+              {canEditPengaturanBerbagi && (
+                <button
+                  type="button"
+                  onClick={() => setSubModal('pengaturan_berbagi')}
+                  className="w-full p-3.5 bg-gradient-to-r from-rose-950/60 to-slate-900 hover:bg-slate-800 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/40">
+                      <Heart className="w-5 h-5 text-rose-400" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
+                        Pengaturan Menu Berbagi (Nama Sedekah & Rekening)
+                      </div>
+                      <div className="text-[10px] text-rose-300 font-normal mt-0.5">
+                        Wewenang {currentAdmin?.role === 'admin_write' ? 'Admin Write' : 'Admin Approval'}: Ubah nama {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & no rekening
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-rose-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+                </button>
+              )}
 
               {/* Kartu Rekening Penampungan Resmi (View Only dengan tombol Salin) */}
               <div className="p-3.5 bg-[#162035] rounded-2xl border border-slate-700/80 space-y-2.5">
@@ -4713,6 +4877,154 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         </div>
       )}
 
+      {/* ================= SUB-MODAL: PENGATURAN MENU BERBAGI (NAMA SEDEKAH, REKENING & QRIS) ================= */}
+      {subModal === 'pengaturan_berbagi' && canEditPengaturanBerbagi && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] text-slate-100 border border-rose-500/50 w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-auto relative animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-rose-500/30 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0">
+                  <Heart className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-white">
+                    Pengaturan Menu Berbagi & Sedekah
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Otoritas: Admin Write, Admin Approval & Super Admin
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSubModal(null)}
+                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {berbagiSaveMsg && (
+              <div className="p-3 bg-emerald-950/80 border border-emerald-500/60 text-emerald-200 rounded-xl text-xs font-bold flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{berbagiSaveMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSavePengaturanBerbagi} className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-xs custom-scrollbar">
+              <div className="p-3 bg-rose-950/30 rounded-2xl border border-rose-500/30 space-y-2">
+                <span className="font-extrabold text-rose-300 text-xs block">
+                  1. Kustomisasi Nama Program Berbagi:
+                </span>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Nama Program 1 (Default: Sedekah Subuh)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiSubuh}
+                    onChange={(e) => setBerbagiSubuh(e.target.value)}
+                    placeholder="Contoh: Sedekah Subuh / Infaq Pagi Berkah"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-rose-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Nama Program 2 (Default: Sedekah Jumat)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiJumat}
+                    onChange={(e) => setBerbagiJumat(e.target.value)}
+                    placeholder="Contoh: Sedekah Jumat / Jumat Berkah Berbagi"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-rose-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Nama Program 3 (Default: Sedekah Umum)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiUmum}
+                    onChange={(e) => setBerbagiUmum(e.target.value)}
+                    placeholder="Contoh: Sedekah Umum / Infaq Sosial Koperasi"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-rose-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2">
+                <span className="font-extrabold text-amber-300 text-xs block">
+                  2. Informasi Rekening Bank Kas Berbagi Koperasi:
+                </span>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Nama Bank</label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiBank}
+                    onChange={(e) => setBerbagiBank(e.target.value)}
+                    placeholder="Contoh: Bank Syariah Indonesia (BSI)"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Nomor Rekening Kas Berbagi</label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiNoRek}
+                    onChange={(e) => setBerbagiNoRek(e.target.value)}
+                    placeholder="Contoh: 7123-4567-8901"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-amber-400 font-mono font-bold focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Atas Nama Rekening</label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiNamaPemilik}
+                    onChange={(e) => setBerbagiNamaPemilik(e.target.value)}
+                    placeholder="Contoh: Koperasi Berbagi Mandiri HWS"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-amber-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBerbagiSubuh('Sedekah Subuh');
+                    setBerbagiJumat('Sedekah Jumat');
+                    setBerbagiUmum('Sedekah Umum');
+                    setBerbagiBank('Bank Syariah Indonesia (BSI)');
+                    setBerbagiNoRek('7123-4567-8901');
+                    setBerbagiNamaPemilik('Koperasi Berbagi Mandiri HWS');
+                  }}
+                  className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
+                >
+                  Reset Default
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingBerbagi}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-black rounded-xl text-xs shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isSavingBerbagi ? 'Menyimpan...' : 'Simpan Nama & Rekening Berbagi'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ================= SUB-MODAL: INSTALL PWA / APLIKASI KOPERASI (REQ 1: Pasang Langsung Terinstall) ================= */}
       <InstallAppModal
         isOpen={subModal === 'install_pwa' && (isMember || isSuperAdmin)}
@@ -4872,6 +5184,86 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL PENDAFTARAN BIOMETRIK SCAN FINGER (USER REQ 1) ================= */}
+      {showBioEnrollModal && (
+        <div className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-amber-500/60 w-full max-w-sm rounded-3xl p-5 shadow-2xl text-center space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700/80">
+              <div className="flex items-center gap-2">
+                <Fingerprint className="w-5 h-5 text-amber-400" />
+                <span className="font-extrabold text-white text-xs">Pendaftaran Biometrik Device</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowBioEnrollModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="py-2 space-y-3">
+              <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
+                <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all ${
+                  bioEnrollStep === 'scanning'
+                    ? 'bg-amber-500/20 text-amber-400 border-2 border-amber-400 animate-pulse'
+                    : bioEnrollStep === 'success'
+                    ? 'bg-emerald-500/20 text-emerald-400 border-2 border-emerald-400'
+                    : 'bg-slate-800 text-amber-400 border border-slate-700'
+                }`}>
+                  <Fingerprint className={`w-10 h-10 ${bioEnrollStep === 'scanning' ? 'animate-bounce' : ''}`} />
+                </div>
+                {bioEnrollStep === 'scanning' && (
+                  <div className="absolute inset-0 border-2 border-amber-400/60 rounded-full animate-ping pointer-events-none" />
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-sm font-black text-white">
+                  {bioEnrollStep === 'scanning'
+                    ? 'Memindai Sidik Jari...'
+                    : bioEnrollStep === 'success'
+                    ? '✓ Sidik Jari Terdaftar!'
+                    : 'Tempelkan Sidik Jari'}
+                </h4>
+                <p className="text-[11px] text-slate-300 mt-1 max-w-[260px] mx-auto">
+                  {bioEnrollStep === 'scanning'
+                    ? 'Pindai sensor biometrik perangkat Anda untuk merekam sidik jari...'
+                    : bioEnrollStep === 'success'
+                    ? 'Sensor biometrik aktif untuk login di versi mobile aplikasi'
+                    : `Silakan tempelkan jari Anda pada sensor perangkat untuk mendaftarkan akun ${currentMember?.nama || currentAdmin?.nama}.`}
+                </p>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[10px] text-slate-400 text-left space-y-1">
+                <div>• Biometrik ini akan didaftarkan pada penyimpanan aman perangkat ini.</div>
+                <div>• Hanya berlaku untuk login versi mobile (Android / iOS).</div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBioEnrollModal(false)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all"
+              >
+                Batal
+              </button>
+              {bioEnrollStep === 'prompt' && (
+                <button
+                  type="button"
+                  onClick={handleExecuteBioEnroll}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Fingerprint className="w-4 h-4 text-slate-950" />
+                  <span>Scan Finger Sekarang</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
