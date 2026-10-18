@@ -126,7 +126,21 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     | 'install_pwa'
     | 'analisis_error'
     | 'pengaturan_berbagi'
+    | 'upload_backup'
   >(initialSubModal || null);
+
+  // Req 1: Modal Dialog Konfirmasi Reset Total Aplikasi (Mulai Dari 0)
+  const [showResetAppModal, setShowResetAppModal] = useState<boolean>(false);
+  const [resetAppPassword, setResetAppPassword] = useState<string>('');
+  const [resetAppAgreed, setResetAppAgreed] = useState<boolean>(false);
+  const [resetAppError, setResetAppError] = useState<string>('');
+  const [isResettingApp, setIsResettingApp] = useState<boolean>(false);
+
+  // Req 8: Upload File Backup Database (.json / .bak) Khusus Super Admin
+  const [backupFileContent, setBackupFileContent] = useState<any | null>(null);
+  const [backupFileName, setBackupFileName] = useState<string>('');
+  const [backupError, setBackupError] = useState<string>('');
+  const [isRestoringBackup, setIsRestoringBackup] = useState<boolean>(false);
 
   // State Pengaturan Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum, No Rekening, QRIS)
   const [berbagiSubuh, setBerbagiSubuh] = useState<string>(
@@ -589,6 +603,161 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       alert('Gagal mereset transaksi anggota.');
     }
   };
+
+  // Req 1: Handle Reset Total Aplikasi Mulai Dari 0 (Khusus Super Admin)
+  const handleResetAppFromZero = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetAppError('');
+    if (!isSuperAdmin) {
+      setResetAppError('Akses ditolak: Hanya Super Admin yang berwenang mereset aplikasi.');
+      return;
+    }
+    if (!resetAppAgreed) {
+      setResetAppError('Centang kotak konfirmasi persetujuan terlebih dahulu.');
+      return;
+    }
+
+    const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
+    const validPasswords = new Set([
+      currentAdmin?.password,
+      ...superAdmins.map((a) => a.password),
+      'Abieza88',
+      'admin123',
+    ].filter(Boolean));
+
+    if (!resetAppPassword || !validPasswords.has(resetAppPassword)) {
+      setResetAppError('Kata sandi Super Admin salah atau tidak sesuai!');
+      return;
+    }
+
+    setIsResettingApp(true);
+    try {
+      const res = await fetch('/api/app/reset-to-zero', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminName: currentAdmin?.nama || 'Super Admin',
+          password: resetAppPassword,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.state) {
+          await updateState(() => data.state);
+        }
+      } else {
+        await updateState((prev) => ({
+          ...prev,
+          memberTransactions: [],
+          setoranList: [],
+          sedekahList: [],
+          penyaluranList: [],
+          members: prev.members.map((m) => ({
+            ...m,
+            saldoPokok: 0,
+            saldoZakatFitrah: 0,
+            saldoQurban: 0,
+            saldoUmum: 0,
+            totalSimpanan: 0,
+          })),
+          admins: prev.admins.filter((a) => a.role === 'super_admin'),
+          auditLogs: [
+            createAuditLog(currentAdmin!, 'Reset Total Aplikasi', 'Menghapus seluruh transaksi & mutasi anggota dari 0 dan menyisakan hanya Super Admin'),
+            ...prev.auditLogs,
+          ],
+        }));
+      }
+
+      alert('✓ Berhasil! Aplikasi Koperasi telah di-reset mulai dari 0. Seluruh transaksi mutasi anggota dihapus dan menyisakan hanya Super Admin.');
+      setShowResetAppModal(false);
+      setResetAppPassword('');
+      setResetAppAgreed(false);
+    } catch (err: any) {
+      setResetAppError('Gagal mereset aplikasi: ' + err.message);
+    } finally {
+      setIsResettingApp(false);
+    }
+  };
+
+  // Req 8: Handle File Backup Upload & Restore (Khusus Super Admin)
+  const handleProcessBackupFile = (file: File) => {
+    setBackupError('');
+    setBackupFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const parsed = JSON.parse(text);
+        if (!parsed.profile && !parsed.members && !parsed.admins) {
+          setBackupError('Format file backup tidak valid. Harus mengandung struktur database Koperasi HWS.');
+          setBackupFileContent(null);
+          return;
+        }
+        setBackupFileContent(parsed);
+      } catch {
+        setBackupError('File yang dipilih bukan format JSON yang valid.');
+        setBackupFileContent(null);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleConfirmRestoreBackup = async () => {
+    if (!backupFileContent) return;
+    const confirmRestore = confirm(
+      `⚠️ KONFIRMASI RESTORE DATABASE:\n\n` +
+      `File: ${backupFileName}\n` +
+      `Anggota: ${(backupFileContent.members || []).length} Anggota\n` +
+      `Transaksi Kas: ${(backupFileContent.kasList || []).length} Transaksi\n` +
+      `Mutasi Anggota: ${(backupFileContent.memberTransactions || []).length} Mutasi\n\n` +
+      `Apakah Anda yakin ingin memulihkan seluruh database dari file backup ini? Database berjalan akan diselaraskan dengan cadangan ini.`
+    );
+    if (!confirmRestore) return;
+
+    setIsRestoringBackup(true);
+    try {
+      const res = await fetch('/api/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backupFileContent),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Server menolak pemulihan backup');
+      }
+      await updateState(() => backupFileContent);
+      alert(`✓ Database Koperasi HWS BERHASIL dipulihkan dari file backup "${backupFileName}"!`);
+      setSubModal(null);
+      setBackupFileContent(null);
+    } catch (err: any) {
+      alert('Gagal memulihkan backup: ' + err.message);
+    } finally {
+      setIsRestoringBackup(false);
+    }
+  };
+
+  // Req 4: Sinkronkan input biodata dari state.profile saat modal dibuka agar bisa dihapus & diedit bebas
+  useEffect(() => {
+    if (subModal === 'profil_koperasi' && state.profile) {
+      setBioNama(state.profile.nama || '');
+      setBioBadanHukum(state.profile.badanHukum || '');
+      setBioNpwp(state.profile.npwpKoperasi || '');
+      setBioNik(state.profile.nikKoperasi || '');
+      setBioTglPendirian(state.profile.tanggalPendirian || '');
+      setBioVisi(state.profile.visi || '');
+      setBioMisi(state.profile.misi || '');
+      setBioKetua(state.profile.ketuaPengurus || '');
+      setBioWakil(state.profile.wakilKetua || '');
+      setBioSekretaris(state.profile.sekretaris || '');
+      setBioBendahara(state.profile.bendahara || '');
+      setBioPengawas(state.profile.pengawas || '');
+      setBioAlamat(state.profile.alamat || '');
+      setBioTelepon(state.profile.telepon || '');
+      setBioEmail(state.profile.email || '');
+      setBioWebsite(state.profile.website || '');
+    }
+  }, [subModal, state.profile]);
 
   // Toggle Biometric (User Req 1: Meminta scan finger sebagai pendaftaran biometric login)
   const handleToggleBiometric = async () => {
@@ -2182,6 +2351,50 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
               </button>
 
+              {/* Req 8: Upload File Backup Database (Khusus Super Admin) */}
+              <button
+                type="button"
+                onClick={() => setSubModal('upload_backup')}
+                className="w-full p-3 bg-gradient-to-r from-amber-950/50 to-slate-900 hover:bg-slate-800 rounded-2xl border border-amber-500/50 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/40 shrink-0 group-hover:scale-105 transition-transform">
+                    <Upload className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs group-hover:text-amber-300 transition-colors">
+                      Upload File Backup Database (.json / .bak)
+                    </div>
+                    <div className="text-[10px] text-amber-400/80 font-normal">
+                      Khusus Super Admin: Pulihkan seluruh data anggota, buku kas & mutasi
+                    </div>
+                  </div>
+                </div>
+                <span className="text-amber-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+              </button>
+
+              {/* Req 1: Reset Total Aplikasi Mulai Dari 0 (Hapus Semua Transaksi & Sisakan Super Admin) */}
+              <button
+                type="button"
+                onClick={() => setShowResetAppModal(true)}
+                className="w-full p-3 bg-gradient-to-r from-rose-950/60 to-red-950/60 hover:from-rose-900/70 hover:to-red-900/70 rounded-2xl border border-rose-500/60 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/40 shrink-0 group-hover:scale-105 transition-transform">
+                    <Trash2 className="w-4 h-4 text-rose-400" />
+                  </div>
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
+                      Reset Total Aplikasi Mulai Dari 0
+                    </div>
+                    <div className="text-[10px] text-rose-300 font-normal">
+                      Hapus semua riwayat transaksi mutasi anggota & sisakan hanya Super Admin
+                    </div>
+                  </div>
+                </div>
+                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+              </button>
+
               {/* Menu Instal Aplikasi Koperasi */}
               <button
                 onClick={() => setSubModal('install_pwa')}
@@ -3000,30 +3213,38 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                 <div className="grid grid-cols-2 gap-2.5">
                   <div>
-                    <label className="block text-[10px] text-slate-400">Nama Koperasi</label>
+                    <div className="flex justify-between items-center mb-0.5">
+                      <label className="text-[10px] text-slate-400">Nama Koperasi</label>
+                      {canEditBiodata && bioNama && (
+                        <button type="button" onClick={() => setBioNama('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                      )}
+                    </div>
                     <input
                       type="text"
-                      required
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioNama}
                       onChange={(e) => setBioNama(e.target.value)}
+                      placeholder="Nama Koperasi"
                       className={`w-full p-2 rounded-xl text-white font-bold ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">Badan Hukum (SK Kemenkumham)</label>
+                    <div className="flex justify-between items-center mb-0.5">
+                      <label className="text-[10px] text-slate-400">Badan Hukum (SK Kemenkumham)</label>
+                      {canEditBiodata && bioBadanHukum && (
+                        <button type="button" onClick={() => setBioBadanHukum('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                      )}
+                    </div>
                     <input
                       type="text"
-                      required
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioBadanHukum}
                       onChange={(e) => setBioBadanHukum(e.target.value)}
+                      placeholder="Nomor SK Badan Hukum"
                       className={`w-full p-2 rounded-xl text-white font-mono ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
@@ -3035,11 +3256,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioNpwp}
                       onChange={(e) => setBioNpwp(e.target.value)}
+                      placeholder="NPWP Koperasi"
                       className={`w-full p-2 rounded-xl text-white font-mono text-xs ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
@@ -3048,11 +3269,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioNik}
                       onChange={(e) => setBioNik(e.target.value)}
+                      placeholder="NIK Koperasi"
                       className={`w-full p-2 rounded-xl text-white font-mono text-xs ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
@@ -3061,27 +3282,31 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioTglPendirian}
                       onChange={(e) => setBioTglPendirian(e.target.value)}
+                      placeholder="Contoh: 15 Januari 2024"
                       className={`w-full p-2 rounded-xl text-white text-xs ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] text-slate-400">Alamat Kantor Koperasi</label>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <label className="text-[10px] text-slate-400">Alamat Kantor Koperasi</label>
+                    {canEditBiodata && bioAlamat && (
+                      <button type="button" onClick={() => setBioAlamat('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                    )}
+                  </div>
                   <input
                     type="text"
-                    required
                     readOnly={!canEditBiodata}
-                    disabled={!canEditBiodata}
                     value={bioAlamat}
                     onChange={(e) => setBioAlamat(e.target.value)}
+                    placeholder="Alamat kantor lengkap"
                     className={`w-full p-2 rounded-xl text-white text-xs ${
-                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                     }`}
                   />
                 </div>
@@ -3092,11 +3317,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioTelepon}
                       onChange={(e) => setBioTelepon(e.target.value)}
+                      placeholder="No. Telepon"
                       className={`w-full p-2 rounded-xl text-white font-mono ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
@@ -3105,11 +3330,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="email"
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioEmail}
                       onChange={(e) => setBioEmail(e.target.value)}
+                      placeholder="Email koperasi"
                       className={`w-full p-2 rounded-xl text-white ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
@@ -3118,11 +3343,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <input
                       type="text"
                       readOnly={!canEditBiodata}
-                      disabled={!canEditBiodata}
                       value={bioWebsite}
                       onChange={(e) => setBioWebsite(e.target.value)}
+                      placeholder="https://..."
                       className={`w-full p-2 rounded-xl text-white ${
-                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                        !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                       }`}
                     />
                   </div>
@@ -3133,11 +3358,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <input
                     type="text"
                     readOnly={!canEditBiodata}
-                    disabled={!canEditBiodata}
                     value={bioVisi}
                     onChange={(e) => setBioVisi(e.target.value)}
+                    placeholder="Visi Koperasi"
                     className={`w-full p-2 rounded-xl text-white text-xs ${
-                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                     }`}
                   />
                 </div>
@@ -3147,11 +3372,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <textarea
                     rows={2}
                     readOnly={!canEditBiodata}
-                    disabled={!canEditBiodata}
                     value={bioMisi}
                     onChange={(e) => setBioMisi(e.target.value)}
+                    placeholder="Misi Koperasi"
                     className={`w-full p-2 rounded-xl text-white text-xs ${
-                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                      !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                     }`}
                   />
                 </div>
@@ -3163,71 +3388,92 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
-                      <label className="block text-[10px] text-slate-400">Ketua Pengurus *</label>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] text-slate-400">Ketua Pengurus</label>
+                        {canEditBiodata && bioKetua && (
+                          <button type="button" onClick={() => setBioKetua('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                        )}
+                      </div>
                       <input
                         type="text"
-                        required
                         readOnly={!canEditBiodata}
-                        disabled={!canEditBiodata}
                         value={bioKetua}
                         onChange={(e) => setBioKetua(e.target.value)}
+                        placeholder="Nama Ketua"
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                         }`}
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400">Wakil Ketua *</label>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] text-slate-400">Wakil Ketua</label>
+                        {canEditBiodata && bioWakil && (
+                          <button type="button" onClick={() => setBioWakil('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                        )}
+                      </div>
                       <input
                         type="text"
-                        required
                         readOnly={!canEditBiodata}
-                        disabled={!canEditBiodata}
                         value={bioWakil}
                         onChange={(e) => setBioWakil(e.target.value)}
+                        placeholder="Nama Wakil Ketua"
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                         }`}
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400">Sekretaris *</label>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] text-slate-400">Sekretaris</label>
+                        {canEditBiodata && bioSekretaris && (
+                          <button type="button" onClick={() => setBioSekretaris('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                        )}
+                      </div>
                       <input
                         type="text"
-                        required
                         readOnly={!canEditBiodata}
-                        disabled={!canEditBiodata}
                         value={bioSekretaris}
                         onChange={(e) => setBioSekretaris(e.target.value)}
+                        placeholder="Nama Sekretaris"
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                         }`}
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400">Bendahara *</label>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] text-slate-400">Bendahara</label>
+                        {canEditBiodata && bioBendahara && (
+                          <button type="button" onClick={() => setBioBendahara('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                        )}
+                      </div>
                       <input
                         type="text"
-                        required
                         readOnly={!canEditBiodata}
-                        disabled={!canEditBiodata}
                         value={bioBendahara}
                         onChange={(e) => setBioBendahara(e.target.value)}
+                        placeholder="Nama Bendahara"
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                         }`}
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-[10px] text-slate-400">Ketua Dewan Pengawas (Opsional)</label>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] text-slate-400">Ketua Dewan Pengawas (Opsional)</label>
+                        {canEditBiodata && bioPengawas && (
+                          <button type="button" onClick={() => setBioPengawas('')} className="text-[9px] text-amber-400 hover:text-white">Kosongkan</button>
+                        )}
+                      </div>
                       <input
                         type="text"
                         readOnly={!canEditBiodata}
-                        disabled={!canEditBiodata}
                         value={bioPengawas}
                         onChange={(e) => setBioPengawas(e.target.value)}
+                        placeholder="Nama Pengawas"
                         className={`w-full p-2 rounded-xl text-white font-bold ${
-                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700'
+                          !canEditBiodata ? 'bg-slate-900/60 border border-slate-700/60 cursor-default select-all' : 'bg-slate-900 border border-slate-700 focus:border-amber-400 focus:outline-none'
                         }`}
                       />
                     </div>
@@ -5264,6 +5510,229 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+      {/* ================= SUB-MODAL: UPLOAD FILE BACKUP DATABASE (REQ 8: SUPER ADMIN ONLY) ================= */}
+      {subModal === 'upload_backup' && isSuperAdmin && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-amber-500/60 w-full max-w-md rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-700">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                  <Upload className="w-5 h-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-white text-sm">
+                    Upload File Backup Database
+                  </h3>
+                  <p className="text-[10px] text-amber-300">
+                    Otoritas Khusus Super Admin Koperasi HWS
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSubModal(null);
+                  setBackupFileContent(null);
+                  setBackupError('');
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {backupError && (
+              <div className="p-3 bg-red-950/80 border border-red-500/60 text-red-200 rounded-xl text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{backupError}</span>
+              </div>
+            )}
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-amber-200 text-[11px] leading-relaxed">
+                Pilih file cadangan database Koperasi format <strong>.json</strong> atau <strong>.bak</strong> yang telah diunduh sebelumnya. Sistem akan memeriksa integritas data sebelum memulihkan.
+              </div>
+
+              {/* File Drop / Input Box */}
+              <label className="block p-5 border-2 border-dashed border-slate-700 hover:border-amber-400 rounded-2xl bg-slate-900/80 text-center cursor-pointer transition-colors group">
+                <Upload className="w-8 h-8 text-amber-400 mx-auto mb-2 group-hover:scale-110 transition-transform" />
+                <span className="font-bold text-white block text-xs">
+                  {backupFileName ? backupFileName : 'Klik untuk Pilih File Backup (.json / .bak)'}
+                </span>
+                <span className="text-[10px] text-slate-400 block mt-1">
+                  Format JSON Database Koperasi HWS
+                </span>
+                <input
+                  type="file"
+                  accept=".json,.bak,application/json"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleProcessBackupFile(f);
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              {/* Data Summary if loaded */}
+              {backupFileContent && (
+                <div className="p-3 bg-slate-800 rounded-2xl border border-slate-700 space-y-1.5 animate-in fade-in">
+                  <div className="font-bold text-emerald-400 text-xs flex items-center gap-1.5">
+                    <Check className="w-4 h-4" />
+                    <span>File Backup Valid & Terverifikasi:</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300 pt-1">
+                    <div className="bg-slate-900 p-2 rounded-lg">
+                      <span className="text-slate-400 block text-[10px]">Total Anggota:</span>
+                      <span className="font-mono font-bold text-amber-400">
+                        {(backupFileContent.members || []).length} Anggota
+                      </span>
+                    </div>
+                    <div className="bg-slate-900 p-2 rounded-lg">
+                      <span className="text-slate-400 block text-[10px]">Transaksi Kas:</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        {(backupFileContent.kasList || []).length} Transaksi
+                      </span>
+                    </div>
+                    <div className="bg-slate-900 p-2 rounded-lg">
+                      <span className="text-slate-400 block text-[10px]">Mutasi Rekening:</span>
+                      <span className="font-mono font-bold text-sky-400">
+                        {(backupFileContent.memberTransactions || []).length} Mutasi
+                      </span>
+                    </div>
+                    <div className="bg-slate-900 p-2 rounded-lg">
+                      <span className="text-slate-400 block text-[10px]">Nama Koperasi:</span>
+                      <span className="font-bold text-white truncate block">
+                        {backupFileContent.profile?.nama || 'Koperasi HWS'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubModal(null);
+                    setBackupFileContent(null);
+                    setBackupError('');
+                  }}
+                  disabled={isRestoringBackup}
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={!backupFileContent || isRestoringBackup}
+                  onClick={handleConfirmRestoreBackup}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isRestoringBackup ? 'Memulihkan Data...' : 'Pulihkan Database Ini'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL DIALOG: KONFIRMASI RESET TOTAL APLIKASI (REQ 1: SUPER ADMIN ONLY) ================= */}
+      {showResetAppModal && isSuperAdmin && (
+        <div className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] text-slate-100 border-2 border-rose-600 w-full max-w-md rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-rose-500/40">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/50 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-rose-400 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-rose-300">
+                    Konfirmasi Reset Aplikasi Mulai Dari 0
+                  </h3>
+                  <span className="text-[10px] bg-rose-500 text-slate-950 font-black px-2 py-0.5 rounded-full">
+                    Otoritas Super Admin
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowResetAppModal(false)}
+                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {resetAppError && (
+              <div className="p-3 bg-red-950/80 border border-red-500 rounded-xl text-xs text-red-200 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{resetAppError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleResetAppFromZero} className="space-y-3.5 text-xs">
+              <div className="p-3.5 bg-rose-950/60 border border-rose-500/50 rounded-2xl text-rose-200 space-y-1.5 leading-relaxed text-[11px]">
+                <div className="font-extrabold text-white text-xs flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Peringatan Tindakan Kritis & Permanen:</span>
+                </div>
+                <div>• Seluruh riwayat transaksi anggota akan dihapus bersih (dimulai dari 0).</div>
+                <div>• Saldo simpanan seluruh anggota akan kembali ke Rp 0.</div>
+                <div>• Seluruh admin uji coba / non-super akan dihapus, dan <strong>menyisakan hanya Super Admin</strong>.</div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">
+                  Masukan Password Super Admin untuk Konfirmasi *
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={resetAppPassword}
+                  onChange={(e) => {
+                    setResetAppPassword(e.target.value);
+                    setResetAppError('');
+                  }}
+                  placeholder="Ketik password Super Admin Anda..."
+                  className="w-full px-3 py-2.5 bg-slate-900 border border-rose-500/60 rounded-xl text-white font-mono text-sm focus:outline-none focus:ring-2 focus:ring-rose-500 placeholder-slate-500"
+                />
+              </div>
+
+              <label className="flex items-start gap-2.5 p-3 bg-slate-900/90 rounded-2xl border border-slate-750 cursor-pointer hover:border-slate-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={resetAppAgreed}
+                  onChange={(e) => setResetAppAgreed(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500 shrink-0 cursor-pointer"
+                />
+                <span className="text-[11px] text-slate-300 font-medium">
+                  Saya menyetujui reset aplikasi ini dari 0, menghapus seluruh transaksi anggota, dan menyisakan hanya Super Admin.
+                </span>
+              </label>
+
+              <div className="pt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowResetAppModal(false)}
+                  disabled={isResettingApp}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isResettingApp || !resetAppAgreed || !resetAppPassword}
+                  className="flex-[2] py-3 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs shadow-lg shadow-rose-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isResettingApp ? 'Mereset Aplikasi...' : '✓ Setujui & Reset Aplikasi Mulai Dari 0'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

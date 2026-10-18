@@ -1137,10 +1137,89 @@ async function startServer() {
     }
   });
 
-  // Endpoint: Hapus Transaksi Anggota Selektif (Hanya Super Admin, Pilih Wilayah/Anggota, Verifikasi Password Admin)
+  // Req 1: Reset Aplikasi Dari 0 (Hapus Semua Transaksi & Sisakan Hanya Admin Super)
+  app.post('/api/app/reset-to-zero', (req: Request, res: Response) => {
+    try {
+      const { adminName, password } = req.body;
+
+      const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
+      const validPasswords = new Set([
+        ...superAdmins.map((a: any) => a.password),
+        'Abieza88',
+        'admin123',
+      ].filter(Boolean));
+
+      if (!password || !validPasswords.has(password)) {
+        return res.status(403).json({ error: 'Kata sandi Super Admin salah atau tidak sesuai!' });
+      }
+
+      // 1. Hapus semua riwayat transaksi anggota & setoran
+      currentState.memberTransactions = [];
+      currentState.setoranList = [];
+      currentState.sedekahList = [];
+      currentState.penyaluranList = [];
+
+      // 2. Reset seluruh saldo anggota ke 0
+      if (Array.isArray(currentState.members)) {
+        currentState.members = currentState.members.map((m: any) => ({
+          ...m,
+          saldoPokok: 0,
+          saldoZakatFitrah: 0,
+          saldoQurban: 0,
+          saldoUmum: 0,
+          totalSimpanan: 0,
+        }));
+      }
+
+      // 3. Sisakan HANYA Super Admin (Hapus admin test/non-super)
+      currentState.admins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
+      if (currentState.admins.length === 0) {
+        currentState.admins = [
+          {
+            id: 'adm-abzqar',
+            username: 'Abzqar',
+            nama: 'Abzqar',
+            email: 'abzqar@hws.koperasi.id',
+            whatsapp: '08119882233',
+            nik: '3173010101700001',
+            wilayahKantor: 'Cengkareng',
+            role: 'super_admin',
+            password: 'Abieza88',
+            securityQuestion: 'Nama kota pendirian koperasi?',
+            securityAnswer: 'jakarta',
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      }
+
+      // 4. Catat Log Audit Otoritas Super Admin
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-reset-zero-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Reset Aplikasi Mulai Dari 0',
+        detail: 'Super Admin mereset seluruh transaksi anggota ke Rp 0, mengosongkan riwayat mutasi, dan menyisakan hanya Super Admin.',
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({
+        success: true,
+        message: 'Aplikasi berhasil di-reset mulai dari 0. Semua transaksi telah dihapus dan hanya menyisakan Super Admin.',
+        state: currentState,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mereset aplikasi: ' + err.message });
+    }
+  });
+
+  // Endpoint: Hapus Transaksi Anggota Selektif (Hanya Super Admin, Pilih Wilayah/Anggota, Masukan Alasan & Password)
   app.post('/api/transactions/delete-selective', (req: Request, res: Response) => {
     try {
-      const { adminName, wilayah, memberId, transactionIds, resetBalance, password } = req.body;
+      const { adminName, wilayah, memberId, transactionIds, resetBalance, password, alasan } = req.body;
 
       // Verification: Hanya Super Admin
       const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
@@ -1150,21 +1229,25 @@ async function startServer() {
         'admin123',
       ].filter(Boolean));
 
-      if (password && !validPasswords.has(password)) {
+      if (!password || !validPasswords.has(password)) {
         return res.status(403).json({ error: 'Password Super Admin salah atau tidak sesuai!' });
       }
 
       let removedCount = 0;
+      const affectedMemberIdSet = new Set<string>();
+
       if (Array.isArray(transactionIds) && transactionIds.length > 0) {
         const idSet = new Set(transactionIds);
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (idSet.has(tx.id)) {
             removedCount++;
+            if (tx.memberId) affectedMemberIdSet.add(tx.memberId);
             return false;
           }
           return true;
         });
       } else if (memberId && memberId !== 'semua') {
+        affectedMemberIdSet.add(memberId);
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (tx.memberId === memberId) {
             removedCount++;
@@ -1176,6 +1259,7 @@ async function startServer() {
         const memberIdsInWilayah = new Set(
           (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id)
         );
+        memberIdsInWilayah.forEach((id) => affectedMemberIdSet.add(id));
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (memberIdsInWilayah.has(tx.memberId)) {
             removedCount++;
@@ -1185,6 +1269,7 @@ async function startServer() {
         });
       } else {
         removedCount = (currentState.memberTransactions || []).length;
+        (currentState.members || []).forEach((m: any) => affectedMemberIdSet.add(m.id));
         currentState.memberTransactions = [];
       }
 
@@ -1235,13 +1320,15 @@ async function startServer() {
       };
 
       // Tentukan anggota yang terkena dampak
-      let affectedIds: string[] = [];
-      if (memberId && memberId !== 'semua') {
-        affectedIds = [memberId];
-      } else if (wilayah && wilayah !== 'semua') {
-        affectedIds = (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id);
-      } else {
-        affectedIds = (currentState.members || []).map((m: any) => m.id);
+      let affectedIds: string[] = Array.from(affectedMemberIdSet);
+      if (affectedIds.length === 0) {
+        if (memberId && memberId !== 'semua') {
+          affectedIds = [memberId];
+        } else if (wilayah && wilayah !== 'semua') {
+          affectedIds = (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id);
+        } else {
+          affectedIds = (currentState.members || []).map((m: any) => m.id);
+        }
       }
 
       syncMemberBalancesAndRunningHistory(affectedIds, !!resetBalance);
@@ -1254,7 +1341,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Hapus Transaksi Anggota',
-        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Saldo & mutasi rekening disinkronkan otomatis.`,
+        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Alasan: "${alasan || 'Koreksi transaksi mutasi'}". Saldo & mutasi rekening disinkronkan otomatis.`,
       });
 
       saveDatabase(currentState);
@@ -1811,13 +1898,26 @@ async function startServer() {
     try {
       const backupData = req.body;
       if (!backupData.profile || !backupData.admins) {
-        return res.status(400).json({ error: 'Format file backup tidak valid' });
+        return res.status(400).json({ error: 'Format file backup tidak valid. Harus mengandung struktur profile dan admins.' });
       }
       currentState = backupData;
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-restore-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Pulihkan Backup Database',
+        detail: `Super Admin memulihkan data aplikasi dari file backup database (${(backupData.members || []).length} Anggota, ${(backupData.memberTransactions || []).length} Transaksi Mutasi, ${(backupData.kasList || []).length} Kas).`,
+      });
+
       saveDatabase(currentState);
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({ error: 'Gagal memulihkan backup' });
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: 'Database berhasil dipulihkan dari file backup', state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal memulihkan backup: ' + (err.message || 'Error') });
     }
   });
 

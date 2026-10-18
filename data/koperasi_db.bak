@@ -863,6 +863,15 @@
   "suratList": [],
   "auditLogs": [
     {
+      "id": "log-maint-unlock-1792159968741",
+      "timestamp": "2026-10-16T14:12:48.741Z",
+      "adminId": "super_admin",
+      "adminNama": "Abzqar",
+      "adminRole": "super_admin",
+      "action": "Buka Lock Maintenance Sistem",
+      "detail": "Super Admin MEMBUKA KUNCI MAINTENANCE sistem. Seluruh anggota dan admin kini dapat login dan mengakses kembali secara normal."
+    },
+    {
       "id": "log-maint-lock-1792159962641",
       "timestamp": "2026-10-16T14:12:42.641Z",
       "adminId": "super_admin",
@@ -1033,16 +1042,16 @@
   "lastRunningNumber": 66681,
   "serverSyncStatus": {
     "online": true,
-    "lastSynced": "2026-10-16T14:12:42.641Z",
+    "lastSynced": "2026-10-16T14:12:48.741Z",
     "googleCloudBackup": true,
     "firestoreActive": true,
     "filesProtected": true,
     "permanentStorage": true
   },
   "maintenanceLock": {
-    "isLocked": true,
-    "lockedAt": "2026-10-16T14:12:42.641Z",
-    "lockedByName": "Abzqar",
-    "note": "Uji coba maintenance"
+    "isLocked": false,
+    "note": "",
+    "unlockedAt": "2026-10-16T14:12:48.741Z",
+    "unlockedByName": "Abzqar"
   }
 }

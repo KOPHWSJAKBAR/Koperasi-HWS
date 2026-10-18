@@ -41,6 +41,8 @@ import {
   Building,
   Smartphone,
   TrendingUp,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -101,6 +103,39 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tarikCatatan, setTarikCatatan] = useState('');
   const [tarikError, setTarikError] = useState('');
   const [showBerbagiModal, setShowBerbagiModal] = useState(false);
+
+  // Req 6: Grafik pada anggota dapat di hide atau di lihat
+  const [showGrafik, setShowGrafik] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('hws_member_show_grafik');
+      return saved !== null ? saved === 'true' : true;
+    }
+    return true;
+  });
+
+  // Req 3C: Saldo Sedekah Anggota (berkurang sesuai penyaluran, tidak tercatat di mutasi tabungan)
+  const sedekahList = state.sedekahList || [];
+  const totalSedekahPenerimaan = sedekahList
+    .filter((e) => e.tipe === 'penerimaan' && e.status === 'approved')
+    .reduce((s, e) => s + e.nominal, 0);
+  const totalSedekahPenyaluran = sedekahList
+    .filter((e) => e.tipe === 'penyaluran' && e.status === 'approved')
+    .reduce((s, e) => s + e.nominal, 0);
+
+  const memberApprovedSedekah = sedekahList
+    .filter(
+      (e) =>
+        (e.donaturMemberId === currentMember.id ||
+          (e.donaturNama && e.donaturNama.toLowerCase() === currentMember.nama.toLowerCase())) &&
+        e.tipe === 'penerimaan' &&
+        e.status === 'approved'
+    )
+    .reduce((s, e) => s + e.nominal, 0);
+
+  const memberDisbursedAllocation = totalSedekahPenerimaan > 0
+    ? Math.round(memberApprovedSedekah * Math.min(1, totalSedekahPenyaluran / totalSedekahPenerimaan))
+    : 0;
+  const memberSaldoSedekah = Math.max(0, memberApprovedSedekah - memberDisbursedAllocation);
 
   const [backToast, setBackToast] = useState<string | null>(null);
   const [memberToasts, setMemberToasts] = useState<Array<{
@@ -682,8 +717,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 </button>
               </div>
 
-              {/* 4 Sub-Cards Grid */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-5 relative z-10">
+              {/* 5 Sub-Cards Grid: Pokok, Fitrah, Qurban, Umum, Saldo Sedekah (Req 3C) */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mt-5 relative z-10">
                 {/* 1. Tabungan Pokok */}
                 <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3.5 sm:p-4">
                   <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block">
@@ -734,6 +769,27 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   </div>
                   <div className="text-[10px] text-sky-400 font-bold mt-1">
                     Bebas Setor & Tarik
+                  </div>
+                </div>
+
+                {/* 5. Saldo Sedekah Anggota (Req 3C) */}
+                <div
+                  onClick={() => setShowBerbagiModal(true)}
+                  className="bg-gradient-to-br from-[#141d33] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-2xl p-3.5 sm:p-4 cursor-pointer transition-all hover:scale-[1.02] shadow-md group col-span-2 sm:col-span-1"
+                  title="Klik untuk membuka Menu Sedekah (Setor QRIS & Transfer Bank)"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] sm:text-xs text-rose-300 font-semibold block">
+                      Saldo Sedekah
+                    </span>
+                    <Heart className="w-3.5 h-3.5 text-rose-400 fill-rose-400/30 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-base sm:text-lg font-black text-rose-300 mt-1">
+                    {formatRupiah(memberSaldoSedekah)}
+                  </div>
+                  <div className="text-[10px] text-rose-400/90 mt-1 flex items-center justify-between">
+                    <span>Siap Disalurkan</span>
+                    <span className="font-bold underline text-[9px] group-hover:text-rose-200">Setor ›</span>
                   </div>
                 </div>
               </div>
@@ -813,86 +869,115 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 text-[10px] font-bold">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
-                    <span className="text-amber-300">Total Simpanan</span>
+
+                <div className="flex items-center gap-3">
+                  <div className="hidden sm:flex items-center gap-3 text-[10px] font-bold">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                      <span className="text-amber-300">Total Simpanan</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
+                      <span className="text-sky-300">Tabungan Umum</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
-                    <span className="text-sky-300">Tabungan Umum</span>
-                  </div>
+
+                  {/* Req 6: Tombol Sembunyikan / Lihat Grafik */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowGrafik((prev) => {
+                        const next = !prev;
+                        try {
+                          localStorage.setItem('hws_member_show_grafik', String(next));
+                        } catch {}
+                        return next;
+                      });
+                    }}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm active:scale-95"
+                    title={showGrafik ? 'Sembunyikan grafik mutasi' : 'Tampilkan grafik mutasi'}
+                  >
+                    {showGrafik ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Eye className="w-3.5 h-3.5 text-emerald-400" />}
+                    <span>{showGrafik ? 'Sembunyikan Grafik' : 'Lihat Grafik'}</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="w-full h-56 sm:h-64 pt-2">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData30Days} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35}/>
-                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
-                      </linearGradient>
-                      <linearGradient id="colorUmum" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35}/>
-                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
-                    <XAxis
-                      dataKey="label"
-                      stroke="#94a3b8"
-                      fontSize={10}
-                      tickLine={false}
-                      interval={4}
-                    />
-                    <YAxis
-                      stroke="#94a3b8"
-                      fontSize={10}
-                      tickLine={false}
-                      tickFormatter={(val) => val >= 1000000 ? `${(val/1000000).toFixed(1)}jt` : val >= 1000 ? `${(val/1000).toFixed(0)}rb` : String(val)}
-                    />
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (active && payload && payload.length) {
-                          return (
-                            <div className="bg-slate-900 border border-slate-700 p-2.5 rounded-xl shadow-xl text-xs space-y-1">
-                              <p className="font-bold text-slate-200 border-b border-slate-800 pb-1">{label}</p>
-                              <p className="text-amber-400 font-bold">
-                                Total: {formatRupiah(Number(payload[0]?.value || 0))}
-                              </p>
-                              {payload[1] && (
-                                <p className="text-sky-400 font-semibold text-[11px]">
-                                  Tabungan Umum: {formatRupiah(Number(payload[1]?.value || 0))}
+              {showGrafik ? (
+                <div className="w-full h-56 sm:h-64 pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={chartData30Days} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35}/>
+                          <stop offset="95%" stopColor="#f59e0b" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorUmum" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.35}/>
+                          <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
+                      <XAxis
+                        dataKey="label"
+                        stroke="#94a3b8"
+                        fontSize={10}
+                        tickLine={false}
+                        interval={4}
+                      />
+                      <YAxis
+                        stroke="#94a3b8"
+                        fontSize={10}
+                        tickLine={false}
+                        tickFormatter={(val) => val >= 1000000 ? `${(val/1000000).toFixed(1)}jt` : val >= 1000 ? `${(val/1000).toFixed(0)}rb` : String(val)}
+                      />
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (active && payload && payload.length) {
+                            return (
+                              <div className="bg-slate-900 border border-slate-700 p-2.5 rounded-xl shadow-xl text-xs space-y-1">
+                                <p className="font-bold text-slate-200 border-b border-slate-800 pb-1">{label}</p>
+                                <p className="text-amber-400 font-bold">
+                                  Total: {formatRupiah(Number(payload[0]?.value || 0))}
                                 </p>
-                              )}
-                            </div>
-                          );
-                        }
-                        return null;
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="total"
-                      stroke="#f59e0b"
-                      strokeWidth={2.5}
-                      fillOpacity={1}
-                      fill="url(#colorTotal)"
-                      name="Total Simpanan"
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="umum"
-                      stroke="#38bdf8"
-                      strokeWidth={2}
-                      fillOpacity={1}
-                      fill="url(#colorUmum)"
-                      name="Tabungan Umum"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+                                {payload[1] && (
+                                  <p className="text-sky-400 font-semibold text-[11px]">
+                                    Tabungan Umum: {formatRupiah(Number(payload[1]?.value || 0))}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="total"
+                        stroke="#f59e0b"
+                        strokeWidth={2.5}
+                        fillOpacity={1}
+                        fill="url(#colorTotal)"
+                        name="Total Simpanan"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="umum"
+                        stroke="#38bdf8"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#colorUmum)"
+                        name="Tabungan Umum"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="py-7 text-center text-slate-400 text-xs italic bg-slate-900/60 rounded-2xl border border-slate-800 flex flex-col items-center justify-center gap-1.5">
+                  <span className="text-xl">📊</span>
+                  <span>Grafik mutasi tabungan sedang disembunyikan. Klik tombol "Lihat Grafik" untuk menampilkan.</span>
+                </div>
+              )}
             </div>
 
             {/* Menu Pilihan Anggota Grid (Vertical stack on mobile, 2-col on PC) */}

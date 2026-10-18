@@ -61,6 +61,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [showHapusTxModal, setShowHapusTxModal] = useState(false);
   const [hapusTxInitialMemberId, setHapusTxInitialMemberId] = useState<string>('semua');
   const [hapusTxInitialWilayah, setHapusTxInitialWilayah] = useState<WilayahKoperasi | 'semua'>('semua');
+  const [hapusTxInitialTxId, setHapusTxInitialTxId] = useState<string | undefined>(undefined);
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -745,100 +746,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     }
 
     const member = state.members.find((m) => m.id === tx.memberId);
-    const memberName = member?.nama || tx.memberId;
-
-    const pwd = prompt(
-      `⚠️ HAPUS MUTASI ANGGOTA (KHUSUS SUPER ADMIN)\n\n` +
-      `Anggota: ${memberName}\n` +
-      `Tanggal: ${tx.tanggal} ${tx.jam || ''}\n` +
-      `Keterangan: ${tx.keterangan}\n` +
-      `Nominal: ${formatRupiah(tx.nominal)} (${tx.tipe.toUpperCase()})\n\n` +
-      `Masukkan Password Super Admin untuk menyetujui penghapusan:`
-    );
-
-    if (pwd === null) return;
-
-    const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
-    const validPasswords = new Set([
-      currentAdmin.password,
-      ...superAdmins.map((a) => a.password),
-      'Abieza88',
-      'admin123',
-    ].filter(Boolean));
-
-    if (!validPasswords.has(pwd)) {
-      alert('Kata sandi Super Admin salah! Penghapusan mutasi dibatalkan.');
-      return;
-    }
-
-    try {
-      await fetch('/api/transactions/delete-single', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transactionId: tx.id,
-          adminName: currentAdmin.nama,
-          password: pwd,
-        }),
-      }).catch(() => {});
-
-      await updateState((prev) => {
-        const remainingTx = prev.memberTransactions.filter((t) => t.id !== tx.id);
-
-        // Hitung ulang akumulasi persis dan running balance untuk anggota ini
-        const memberTx = remainingTx
-          .filter((t) => t.memberId === tx.memberId)
-          .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
-
-        let p = 0, u = 0, z = 0, q = 0, run = 0;
-        memberTx.forEach((t) => {
-          const nom = t.nominal || 0;
-          if (t.tipe === 'masuk') {
-            run += nom;
-            if (t.kategori === 'pokok') p += nom;
-            else if (t.kategori === 'qurban') q += nom;
-            else if (t.kategori === 'zakat') z += nom;
-            else u += nom;
-          } else {
-            run = Math.max(0, run - nom);
-            if (t.kategori === 'pokok') p = Math.max(0, p - nom);
-            else if (t.kategori === 'qurban') q = Math.max(0, q - nom);
-            else if (t.kategori === 'zakat') z = Math.max(0, z - nom);
-            else u = Math.max(0, u - nom);
-          }
-          t.saldoSetelah = run;
-        });
-
-        const updatedMembers = prev.members.map((m) => {
-          if (m.id !== tx.memberId) return m;
-          return {
-            ...m,
-            saldoPokok: p,
-            saldoUmum: u,
-            saldoZakatFitrah: z,
-            saldoQurban: q,
-            totalSimpanan: p + u + z + q,
-          };
-        });
-
-        const audit = createAuditLog(
-          currentAdmin,
-          'Hapus Mutasi Anggota',
-          `Super Admin menghapus 1 mutasi transaksi [${tx.tanggal} ${tx.keterangan || ''} - ${formatRupiah(tx.nominal)}] untuk anggota ${memberName}. Saldo disesuaikan otomatis.`
-        );
-
-        return {
-          ...prev,
-          members: updatedMembers,
-          memberTransactions: remainingTx,
-          auditLogs: [audit, ...prev.auditLogs],
-        };
-      });
-
-      alert(`✓ Mutasi transaksi [${tx.keterangan}] berhasil dihapus dan saldo simpanan diperbarui.`);
-    } catch (err: any) {
-      alert('Gagal menghapus mutasi: ' + err.message);
-    }
+    setHapusTxInitialMemberId(tx.memberId);
+    setHapusTxInitialWilayah(member?.wilayah || 'semua');
+    setHapusTxInitialTxId(tx.id);
+    setShowHapusTxModal(true);
+    setViewingMemberProfile(null);
   };
 
   // Export Rekap Anggota (User Req 12 & 13)
@@ -2502,7 +2414,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
           currentAdmin={currentAdmin}
           initialWilayah={hapusTxInitialWilayah}
           initialMemberId={hapusTxInitialMemberId}
-          onClose={() => setShowHapusTxModal(false)}
+          initialTxId={hapusTxInitialTxId}
+          onClose={() => {
+            setShowHapusTxModal(false);
+            setHapusTxInitialTxId(undefined);
+          }}
         />
       )}
     </div>

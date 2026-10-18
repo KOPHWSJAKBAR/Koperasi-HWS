@@ -30,6 +30,7 @@ interface HapusTransaksiAnggotaModalProps {
   currentAdmin: AdminUser;
   initialWilayah?: WilayahKoperasi | 'semua';
   initialMemberId?: string;
+  initialTxId?: string;
   onClose: () => void;
 }
 
@@ -39,6 +40,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   currentAdmin,
   initialWilayah = 'semua',
   initialMemberId = 'semua',
+  initialTxId,
   onClose,
 }) => {
   const isSuperAdmin = currentAdmin.role === 'super_admin';
@@ -47,9 +49,10 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   const [selectedMemberId, setSelectedMemberId] = useState<string>(initialMemberId);
   const [resetBalance, setResetBalance] = useState<boolean>(true);
   const [adminPassword, setAdminPassword] = useState<string>('');
+  const [alasan, setAlasan] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
-  const [selectedTxIds, setSelectedTxIds] = useState<string[]>([]);
-  const [selectAllTx, setSelectAllTx] = useState<boolean>(true);
+  const [selectedTxIds, setSelectedTxIds] = useState<string[]>(() => initialTxId ? [initialTxId] : []);
+  const [selectAllTx, setSelectAllTx] = useState<boolean>(() => !initialTxId);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -177,6 +180,11 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
       return;
     }
 
+    if (!alasan.trim()) {
+      setErrorMessage('Alasan penghapusan mutasi wajib diisi untuk catatan audit!');
+      return;
+    }
+
     // Verifikasi Password Admin Super
     const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
     const validPasswords = new Set([
@@ -198,14 +206,6 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
       ? `Semua Anggota di Wilayah ${selectedWilayah}`
       : 'Seluruh Anggota di Semua Wilayah';
 
-    const confirmExecute = confirm(
-      `⚠️ KONFIRMASI PERSETUJUAN SUPER ADMIN:\n\n` +
-      `Apakah Anda menyetujui untuk MENGHAPUS ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}?\n\n` +
-      (resetBalance ? `✓ Saldo simpanan anggota terkait juga akan di-reset ke Rp 0.\n\n` : '') +
-      `Klik OK untuk melanjutkan.`
-    );
-    if (!confirmExecute) return;
-
     setIsSubmitting(true);
     try {
       // Panggil server endpoint /api/transactions/delete-selective
@@ -219,6 +219,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           transactionIds: activeSelectedIds,
           resetBalance,
           password: adminPassword,
+          alasan: alasan.trim(),
         }),
       });
 
@@ -236,6 +237,11 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
 
         // Tentukan anggota yang terpengaruh
         const affectedMemberIds = new Set<string>();
+        // Catat memberId dari mutasi yang dihapus
+        prev.memberTransactions
+          .filter((tx) => targetIdsSet.has(tx.id))
+          .forEach((tx) => { if (tx.memberId) affectedMemberIds.add(tx.memberId); });
+
         if (selectedMemberId !== 'semua') {
           affectedMemberIds.add(selectedMemberId);
         } else if (selectedWilayah !== 'semua') {
@@ -296,7 +302,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         const audit = createAuditLog(
           currentAdmin,
           'Hapus Transaksi Anggota',
-          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Saldo simpanan & histori rekening berhasil disinkronkan.`
+          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan & histori rekening berhasil disinkronkan.`
         );
 
         return {
@@ -554,10 +560,32 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
             </div>
           </label>
 
-          {/* 3. Masukan Password Super Admin */}
+          {/* 3. Masukan Alasan Penghapusan Mutasi */}
+          <div className="p-3.5 bg-slate-800/80 rounded-2xl border border-slate-700 space-y-1.5">
+            <label className="block font-black text-amber-300 text-xs flex items-center justify-between">
+              <span>3. Masukan Alasan Penghapusan Mutasi *</span>
+              <span className="text-[10px] text-amber-400 font-normal">Wajib diisi</span>
+            </label>
+            <input
+              type="text"
+              required
+              value={alasan}
+              onChange={(e) => {
+                setAlasan(e.target.value);
+                setErrorMessage('');
+              }}
+              placeholder="Contoh: Koreksi transaksi salah input tanggal / pembatalan mutasi..."
+              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 focus:border-rose-500 rounded-xl text-white text-xs placeholder-slate-500 font-medium"
+            />
+            <p className="text-[10px] text-slate-400">
+              * Alasan penghapusan akan tercatat otomatis pada Log Audit Super Admin untuk akuntabilitas.
+            </p>
+          </div>
+
+          {/* 4. Masukan Password Super Admin */}
           <div className="p-3.5 bg-rose-950/30 border border-rose-500/40 rounded-2xl space-y-2">
             <label className="block font-black text-rose-200 text-xs">
-              3. Masukan Kata Sandi Super Admin untuk Konfirmasi *
+              4. Masukan Kata Sandi Super Admin untuk Konfirmasi *
             </label>
             <div className="relative">
               <input
@@ -596,7 +624,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || matchingTransactions.length === 0 || activeSelectedIds.length === 0 || !adminPassword}
+              disabled={isSubmitting || matchingTransactions.length === 0 || activeSelectedIds.length === 0 || !adminPassword || !alasan.trim()}
               className="flex-[2] py-3 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs shadow-lg shadow-rose-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
             >
               <Check className="w-4 h-4" />
