@@ -237,6 +237,60 @@ export default function App() {
     };
   }, []);
 
+  // Enforce Maintenance Lock: Blokir seluruh anggota & admin non-super saat sistem dikunci
+  const isMaintenanceActive = !!state.maintenanceLock?.isLocked;
+  const isSuperAdminUser = currentAdmin?.role === 'super_admin';
+
+  if (isMaintenanceActive && (currentMember || (currentAdmin && !isSuperAdminUser))) {
+    return (
+      <div className="min-h-screen bg-[#0a0f1d] text-white flex items-center justify-center p-4">
+        <div className="w-full max-w-lg bg-[#0f172a] border-2 border-rose-500/80 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5 animate-in fade-in">
+          <div className="w-16 h-16 rounded-3xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center mx-auto shadow-lg shadow-rose-950/50">
+            <svg className="w-8 h-8 text-rose-400 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-black uppercase tracking-wider">
+              Mode Lock Maintenance Aktif
+            </span>
+            <h2 className="text-xl sm:text-2xl font-black text-white">
+              Sistem Dalam Pemeliharaan
+            </h2>
+            <p className="text-xs text-slate-400 max-w-md mx-auto">
+              Akses akun Anda dibekukan sementara oleh Super Admin demi pemeliharaan dan rekonsiliasi data koperasi.
+            </p>
+          </div>
+
+          {state.maintenanceLock?.note && (
+            <div className="p-4 bg-slate-900/90 rounded-2xl border border-rose-500/30 text-left space-y-1 text-xs">
+              <div className="font-extrabold text-amber-400 text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+                <span>⚠️ Catatan Resmi Super Admin:</span>
+              </div>
+              <p className="text-slate-200 leading-relaxed italic">
+                "{state.maintenanceLock.note}"
+              </p>
+              <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-800">
+                Dikunci: {state.maintenanceLock.lockedAt ? new Date(state.maintenanceLock.lockedAt).toLocaleString('id-ID') : '-'}
+              </div>
+            </div>
+          )}
+
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => handleLogout('Keluar dari mode maintenance.')}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+            >
+              Kembali ke Layar Login
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {currentMember ? (

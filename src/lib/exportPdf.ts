@@ -1610,6 +1610,7 @@ export function exportLaporanBerbagiPdf(payload: LaporanBerbagiExportPayload) {
     return jenis;
   };
 
+  let runningTotalPdf = 0;
   const rowsHtml = entries.length === 0
     ? `<tr><td colspan="8" style="text-align: center; padding: 20px; color: #64748b; font-style: italic;">Belum ada catatan mutasi dana berbagi / sedekah pada kriteria filter ini.</td></tr>`
     : entries
@@ -1620,12 +1621,15 @@ export function exportLaporanBerbagiPdf(payload: LaporanBerbagiExportPayload) {
             : (e.penerimaManfaat || 'Penerima Manfaat');
           const wilayahOrang = isMasuk ? (e.donaturWilayah || '-') : 'Penyaluran Sosial';
           const namaBerbagi = e.namaBerbagiKustom || getJenisLabel(e.jenis);
+          const perOrangNominal = e.nominal;
+          runningTotalPdf += (isMasuk ? perOrangNominal : -perOrangNominal);
+
           const statusText = isMasuk
             ? (e.status === 'approved' ? 'Terverifikasi' : e.status === 'rejected' ? 'Ditolak' : 'Pending Verifikasi')
-            : 'Tersalurkan Resmi';
+            : (e.status === 'approved' ? 'Tersalurkan Resmi' : 'Menunggu Approval');
           const statusColor = isMasuk
             ? (e.status === 'approved' ? '#047857' : e.status === 'rejected' ? '#b91c1c' : '#d97706')
-            : '#0284c7';
+            : (e.status === 'approved' ? '#0284c7' : '#d97706');
 
           return `
             <tr>
@@ -1634,11 +1638,13 @@ export function exportLaporanBerbagiPdf(payload: LaporanBerbagiExportPayload) {
               <td style="font-weight: 700; color: #0f172a;">${namaOrang}</td>
               <td style="font-size: 8.5pt; font-weight: 600; color: #475569;">${wilayahOrang}</td>
               <td><span style="font-weight: 700; color: #0284c7;">${namaBerbagi}</span></td>
-              <td style="font-size: 8pt; color: #334155;">${e.keterangan || '-'}</td>
-              <td style="text-align: center; font-size: 8pt; font-weight: 700; color: ${statusColor};">${statusText}</td>
               <td class="num" style="font-weight: 800; color: ${isMasuk ? '#047857' : '#b45309'}; white-space: nowrap;">
-                ${isMasuk ? '+' : '-'}${formatRupiah(e.nominal)}
+                ${isMasuk ? '+' : '-'}${formatRupiah(perOrangNominal)}
               </td>
+              <td class="num" style="font-weight: 900; color: #0f172a; white-space: nowrap;">
+                ${formatRupiah(runningTotalPdf)}
+              </td>
+              <td style="text-align: center; font-size: 8pt; font-weight: 700; color: ${statusColor};">${statusText}</td>
             </tr>
           `;
         })
@@ -1711,10 +1717,10 @@ export function exportLaporanBerbagiPdf(payload: LaporanBerbagiExportPayload) {
           <th style="width: 80px;">Tanggal</th>
           <th style="width: 130px;">Nama</th>
           <th style="width: 85px;">Wilayah</th>
-          <th style="width: 100px;">Nama Berbagi</th>
-          <th>Keterangan / Pesan Doa</th>
+          <th style="width: 105px;">Nama Sedekah</th>
+          <th style="width: 105px;" class="num">Jumlah Per Orang</th>
+          <th style="width: 115px;" class="num">Jumlah Keseluruhan</th>
           <th style="width: 85px; text-align: center;">Status</th>
-          <th style="width: 110px;" class="num">Jumlah (Rp)</th>
         </tr>
       </thead>
       <tbody>
@@ -1722,16 +1728,16 @@ export function exportLaporanBerbagiPdf(payload: LaporanBerbagiExportPayload) {
       </tbody>
       <tfoot>
         <tr class="total-row">
-          <td colspan="7" style="text-align: right; font-weight: 800;">TOTAL PENERIMAAN DANA (JUMLAH KESELURUHAN):</td>
-          <td class="num" style="font-size: 10pt; color: #047857; font-weight: 900;">${formatRupiah(totalPenerimaan)}</td>
+          <td colspan="6" style="text-align: right; font-weight: 800;">TOTAL PENERIMAAN DANA (JUMLAH KESELURUHAN):</td>
+          <td colspan="2" class="num" style="font-size: 10pt; color: #047857; font-weight: 900;">${formatRupiah(totalPenerimaan)}</td>
         </tr>
         <tr class="total-row">
-          <td colspan="7" style="text-align: right; font-weight: 800;">TOTAL PENYALURAN DANA OLEH ADMIN:</td>
-          <td class="num" style="font-size: 10pt; color: #b45309; font-weight: 900;">${formatRupiah(totalPenyaluran)}</td>
+          <td colspan="6" style="text-align: right; font-weight: 800;">TOTAL PENYALURAN DANA OLEH ADMIN:</td>
+          <td colspan="2" class="num" style="font-size: 10pt; color: #b45309; font-weight: 900;">${formatRupiah(totalPenyaluran)}</td>
         </tr>
         <tr class="total-row" style="background-color: #e0f2fe;">
-          <td colspan="7" style="text-align: right; font-weight: 900; color: #0369a1;">SISA SALDO KAS BERBAGI SIAP SALUR:</td>
-          <td class="num" style="font-size: 11pt; color: #0369a1; font-weight: 900;">${formatRupiah(saldoTersedia)}</td>
+          <td colspan="6" style="text-align: right; font-weight: 900; color: #0369a1;">SISA SALDO KAS BERBAGI SIAP SALUR:</td>
+          <td colspan="2" class="num" style="font-size: 11pt; color: #0369a1; font-weight: 900;">${formatRupiah(saldoTersedia)}</td>
         </tr>
       </tfoot>
     </table>
@@ -1784,6 +1790,7 @@ export function exportLaporanBerbagiExcel(payload: LaporanBerbagiExportPayload) 
     return jenis;
   };
 
+  let runningTotalExcel = 0;
   const rowsExcel = entries.length === 0
     ? `<tr><td colspan="8" style="text-align:center; padding:12px; color:#64748b;">Belum ada catatan mutasi dana berbagi / sedekah pada kriteria filter ini.</td></tr>`
     : entries
@@ -1794,9 +1801,12 @@ export function exportLaporanBerbagiExcel(payload: LaporanBerbagiExportPayload) 
             : (e.penerimaManfaat || 'Penerima Manfaat');
           const wilayahOrang = isMasuk ? (e.donaturWilayah || '-') : 'Penyaluran Sosial';
           const namaBerbagi = e.namaBerbagiKustom || getJenisLabel(e.jenis);
+          const perOrang = e.nominal;
+          runningTotalExcel += (isMasuk ? perOrang : -perOrang);
+
           const statusText = isMasuk
             ? (e.status === 'approved' ? 'Terverifikasi' : e.status === 'rejected' ? 'Ditolak' : 'Pending Verifikasi')
-            : 'Tersalurkan Resmi';
+            : (e.status === 'approved' ? 'Tersalurkan Resmi' : 'Menunggu Approval');
 
           return `
             <tr>
@@ -1805,9 +1815,9 @@ export function exportLaporanBerbagiExcel(payload: LaporanBerbagiExportPayload) 
               <td style="font-weight:bold;">${namaOrang}</td>
               <td style="text-align:center;">${wilayahOrang}</td>
               <td style="font-weight:bold;">${namaBerbagi}</td>
-              <td>${e.keterangan || '-'}</td>
+              <td class="num" style="font-weight:bold; color:${isMasuk ? '#166534' : '#854d0e'};">${isMasuk ? '' : '-'}${perOrang}</td>
+              <td class="num" style="font-weight:bold; color:#0f172a;">${runningTotalExcel}</td>
               <td style="text-align:center; font-weight:bold;">${statusText}</td>
-              <td class="num" style="font-weight:bold; color:${isMasuk ? '#166534' : '#854d0e'};">${isMasuk ? '' : '-'}${e.nominal}</td>
             </tr>
           `;
         })
@@ -1870,10 +1880,10 @@ export function exportLaporanBerbagiExcel(payload: LaporanBerbagiExportPayload) 
           <th>TANGGAL & JAM</th>
           <th>NAMA</th>
           <th>WILAYAH</th>
-          <th>NAMA BERBAGI</th>
-          <th>KETERANGAN / PESAN DOA</th>
-          <th>STATUS</th>
+          <th>NAMA SEDEKAH</th>
           <th>JUMLAH PER ORANG (RP)</th>
+          <th>JUMLAH KESELURUHAN (RP)</th>
+          <th>STATUS</th>
         </tr>
       </thead>
       <tbody>
@@ -1881,16 +1891,16 @@ export function exportLaporanBerbagiExcel(payload: LaporanBerbagiExportPayload) 
       </tbody>
       <tfoot>
         <tr class="total-row">
-          <td colspan="7" style="text-align:right; font-weight:bold;">TOTAL PENERIMAAN (JUMLAH KESELURUHAN):</td>
-          <td class="num" style="color:#166534; font-weight:bold;">${formatRupiah(totalPenerimaan)}</td>
+          <td colspan="5" style="text-align:right; font-weight:bold;">TOTAL PENERIMAAN (JUMLAH KESELURUHAN):</td>
+          <td colspan="3" class="num" style="color:#166534; font-weight:bold;">${formatRupiah(totalPenerimaan)}</td>
         </tr>
         <tr class="total-row">
-          <td colspan="7" style="text-align:right; font-weight:bold;">TOTAL PENYALURAN OLEH ADMIN:</td>
-          <td class="num" style="color:#854d0e; font-weight:bold;">${formatRupiah(totalPenyaluran)}</td>
+          <td colspan="5" style="text-align:right; font-weight:bold;">TOTAL PENYALURAN OLEH ADMIN:</td>
+          <td colspan="3" class="num" style="color:#854d0e; font-weight:bold;">${formatRupiah(totalPenyaluran)}</td>
         </tr>
         <tr class="total-row" style="background-color:#e0f2fe;">
-          <td colspan="7" style="text-align:right; font-weight:bold; color:#0369a1;">SISA SALDO KAS BERBAGI SIAP SALUR:</td>
-          <td class="num" style="color:#0369a1; font-weight:bold;">${formatRupiah(saldoTersedia)}</td>
+          <td colspan="5" style="text-align:right; font-weight:bold; color:#0369a1;">SISA SALDO KAS BERBAGI SIAP SALUR:</td>
+          <td colspan="3" class="num" style="color:#0369a1; font-weight:bold;">${formatRupiah(saldoTersedia)}</td>
         </tr>
       </tfoot>
     </table>

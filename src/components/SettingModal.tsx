@@ -331,13 +331,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   }, [currentMember]);
 
   useEffect(() => {
-    if (currentAdmin) {
+    if (subModal === 'edit_profile' && currentAdmin) {
       setEditAdminNama(currentAdmin.nama || '');
       setEditAdminWa(currentAdmin.whatsapp || '');
       setEditAdminEmail(currentAdmin.email || '');
       setEditAdminNik(currentAdmin.nik || '');
     }
-  }, [currentAdmin]);
+  }, [subModal]);
 
   // Tambah Admin Baru State (Wajib lengkap seperti pendaftaran anggota - Req 1 & 2)
   const [newAdminUsername, setNewAdminUsername] = useState('');
@@ -737,7 +737,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  // Req 4: Sinkronkan input biodata dari state.profile saat modal dibuka agar bisa dihapus & diedit bebas
+  // Req 4: Sinkronkan input biodata saat modal dibuka agar bisa dihapus & diedit bebas tanpa ter-reset
   useEffect(() => {
     if (subModal === 'profil_koperasi' && state.profile) {
       setBioNama(state.profile.nama || '');
@@ -757,7 +757,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       setBioEmail(state.profile.email || '');
       setBioWebsite(state.profile.website || '');
     }
-  }, [subModal, state.profile]);
+  }, [subModal]);
 
   // Toggle Biometric (User Req 1: Meminta scan finger sebagai pendaftaran biometric login)
   const handleToggleBiometric = async () => {

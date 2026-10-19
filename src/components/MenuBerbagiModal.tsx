@@ -451,11 +451,12 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     alert('Donasi telah ditolak.');
   };
 
-  // Submit Penyaluran Sedekah (Admin Only - Req: yang hanya bisa disalurkan oleh admin)
+  // Submit Penyaluran Sedekah (Admin Write / Approval / Super Admin)
+  // Req E: Penyaluran sedekah = input admin write di aproval adminaproval / superadmin
   const handleKirimPenyaluran = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
-      alert('Akses Ditolak: Penyaluran dana berbagi hanya dapat disahkan oleh Admin.');
+      alert('Akses Ditolak: Penyaluran dana berbagi hanya dapat diakses oleh Admin.');
       return;
     }
 
@@ -472,7 +473,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       const confirmExceed = confirm(
         `Perhatian: Saldo ${getJenisLabel(salurJenis)} saat ini sebesar ${formatRupiah(
           availableForType
-        )}. Nominal penyaluran (${formatRupiah(nominal)}) melebihi saldo kategori tersebut. Lanjutkan penyaluran menggunakan total kas berbagi koperasi?`
+        )}. Nominal penyaluran (${formatRupiah(nominal)}) melebihi saldo kategori tersebut. Lanjutkan pengajuan penyaluran?`
       );
       if (!confirmExceed) return;
     }
@@ -481,6 +482,10 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       alert('Nama penerima manfaat / lembaga wajib diisi.');
       return;
     }
+
+    const isSuperAdmin = currentAdmin?.role === 'super_admin';
+    const isApproval = currentAdmin?.role === 'admin_approval';
+    const isDirectApprove = isSuperAdmin || isApproval;
 
     const jenisLabel = getJenisLabel(salurJenis);
     const kategoriPengeluaran = `Penyaluran ${jenisLabel}`;
@@ -500,57 +505,179 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         namaBerbagiKustom: jenisLabel,
         tipe: 'penyaluran',
         nominal,
-        status: 'approved',
+        status: isDirectApprove ? 'approved' : 'pending',
         penerimaManfaat: salurPenerima.trim(),
         keterangan: `Penyaluran ${jenisLabel} kepada ${salurPenerima.trim()}${
           salurKeterangan.trim() ? ` - Ket: ${salurKeterangan.trim()}` : ''
         }`,
-        kasKoperasiId: kasId,
+        kasKoperasiId: isDirectApprove ? kasId : undefined,
         inputBy: currentAdmin?.nama || 'Admin Pengurus',
+        verifiedBy: isDirectApprove ? (currentAdmin?.nama || 'Super Admin') : undefined,
+        verifiedAt: isDirectApprove ? now.toISOString() : undefined,
         createdAt: now.toISOString(),
       };
 
-      // Catat pengeluaran di Buku Kas Koperasi
-      const kasKeluarEntry: KasEntry = {
-        id: kasId,
-        bukuKas: 'koperasi',
-        tanggal: salurTanggal,
-        kategori: kategoriPengeluaran,
-        keterangan: `Penyaluran ${jenisLabel} kepada ${salurPenerima.trim()}${
-          salurKeterangan.trim() ? ` - ${salurKeterangan.trim()}` : ''
-        }`,
-        namaPenerima: salurPenerima.trim(),
-        tipe: 'keluar',
-        nominal,
-        saldoKasSetelah: 0,
-        inputBy: currentAdmin?.nama || 'Admin Pengurus',
-        status: 'approved',
-        createdAt: now.toISOString(),
-      };
+      // Jika langsung disetujui oleh Super Admin atau Admin Approval: catat ke Buku Kas Koperasi
+      let newKasListEntries: KasEntry[] = [];
+      if (isDirectApprove) {
+        newKasListEntries = [
+          {
+            id: kasId,
+            bukuKas: 'koperasi',
+            tanggal: salurTanggal,
+            kategori: kategoriPengeluaran,
+            keterangan: `Penyaluran ${jenisLabel} kepada ${salurPenerima.trim()}${
+              salurKeterangan.trim() ? ` - ${salurKeterangan.trim()}` : ''
+            }`,
+            namaPenerima: salurPenerima.trim(),
+            tipe: 'keluar',
+            nominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin?.nama || 'Admin Pengurus',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          },
+        ];
+      }
 
       await updateState((prev) => {
         const audit = createAuditLog(
           currentAdmin || ({ nama: 'Admin', role: 'admin_write' } as any),
-          'Penyaluran Dana Berbagi',
-          `${currentAdmin?.nama || 'Admin'} menyalurkan ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Tercatat pada Buku Kas Koperasi.`
+          isDirectApprove ? 'Penyaluran Dana Berbagi Disahkan' : 'Pengajuan Penyaluran Sedekah',
+          isDirectApprove
+            ? `${currentAdmin?.nama || 'Admin'} menyetujui langsung penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Tercatat di Buku Kas Koperasi.`
+            : `Admin Write (${currentAdmin?.nama || 'Admin'}) mengajukan penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Menunggu persetujuan Admin Approval / Super Admin.`
         );
 
         return {
           ...prev,
-          kasList: [kasKeluarEntry, ...(prev.kasList || [])],
+          kasList: [...newKasListEntries, ...(prev.kasList || [])],
           sedekahList: [newSalurEntry, ...(prev.sedekahList || [])],
           auditLogs: [audit, ...(prev.auditLogs || [])],
         };
       });
 
-      alert(`✓ Penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} berhasil disahkan dan tercatat di Buku Kas Koperasi!`);
+      if (isDirectApprove) {
+        alert(`✓ Penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} berhasil disahkan dan resmi dicatat di Buku Kas Koperasi!`);
+      } else {
+        alert(`✓ Pengajuan penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} berhasil diajukan oleh Admin Write! Menunggu persetujuan (approval) dari Admin Approval atau Super Admin.`);
+      }
+
       setSalurNominal('');
       setSalurPenerima('');
       setSalurKeterangan('');
-      setActiveTab('laporan');
+      setActiveTab('salurkan');
     } finally {
       setIsSubmittingSalur(false);
     }
+  };
+
+  // Otorisasi / Approval Penyaluran Sedekah oleh Admin Approval atau Super Admin (Req E)
+  const handleApprovePenyaluran = async (entry: SedekahBerbagiEntry) => {
+    const isSuperAdmin = currentAdmin?.role === 'super_admin';
+    const isApproval = currentAdmin?.role === 'admin_approval';
+    if (!isSuperAdmin && !isApproval) {
+      alert('Akses Ditolak: Hanya Admin Approval atau Super Admin yang berwenang menyetujui penyaluran sedekah.');
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const kasId = entry.kasKoperasiId || `kas-salur-${Date.now()}`;
+      const jenisLabel = entry.namaBerbagiKustom || getJenisLabel(entry.jenis);
+      const kategoriPengeluaran = `Penyaluran ${jenisLabel}`;
+
+      const kasKeluarEntry: KasEntry = {
+        id: kasId,
+        bukuKas: 'koperasi',
+        tanggal: entry.tanggal,
+        kategori: kategoriPengeluaran,
+        keterangan: `Penyaluran ${jenisLabel} kepada ${entry.penerimaManfaat || 'Penerima'}${
+          entry.keterangan ? ` - ${entry.keterangan}` : ''
+        }`,
+        namaPenerima: entry.penerimaManfaat || 'Penerima Manfaat',
+        tipe: 'keluar',
+        nominal: entry.nominal,
+        saldoKasSetelah: 0,
+        inputBy: currentAdmin?.nama || 'Admin Approval',
+        status: 'approved',
+        createdAt: now.toISOString(),
+      };
+
+      await updateState((prev) => {
+        const updatedSedekahList = (prev.sedekahList || []).map((s) =>
+          s.id === entry.id
+            ? {
+                ...s,
+                status: 'approved' as const,
+                kasKoperasiId: kasId,
+                verifiedBy: currentAdmin?.nama || 'Admin Approval',
+                verifiedAt: now.toISOString(),
+              }
+            : s
+        );
+
+        const audit = createAuditLog(
+          currentAdmin!,
+          'Persetujuan Penyaluran Sedekah',
+          `${currentAdmin?.nama} (Approval) menyetujui pengajuan penyaluran ${jenisLabel} senilai ${formatRupiah(
+            entry.nominal
+          )} kepada "${entry.penerimaManfaat}". Resmi dibukukan ke Buku Kas Koperasi.`
+        );
+
+        return {
+          ...prev,
+          sedekahList: updatedSedekahList,
+          kasList: [kasKeluarEntry, ...(prev.kasList || [])],
+          auditLogs: [audit, ...(prev.auditLogs || [])],
+        };
+      });
+
+      alert(`✓ Penyaluran ${jenisLabel} senilai ${formatRupiah(entry.nominal)} berhasil DISETUJUI dan resmi dicatat pada Buku Kas Koperasi!`);
+    } catch (err: any) {
+      alert('Gagal menyetujui penyaluran: ' + err.message);
+    }
+  };
+
+  // Tolak Penyaluran Sedekah oleh Admin Approval atau Super Admin (Req E)
+  const handleRejectPenyaluran = async (entry: SedekahBerbagiEntry) => {
+    const isSuperAdmin = currentAdmin?.role === 'super_admin';
+    const isApproval = currentAdmin?.role === 'admin_approval';
+    if (!isSuperAdmin && !isApproval) {
+      alert('Akses Ditolak: Hanya Admin Approval atau Super Admin yang berwenang menolak penyaluran sedekah.');
+      return;
+    }
+
+    const reason = prompt(`Masukkan alasan penolakan pengajuan penyaluran kepada ${entry.penerimaManfaat || 'Penerima'}:`, 'Anggaran kas belum mencukupi / perlu verifikasi ulang');
+    if (reason === null) return;
+
+    await updateState((prev) => {
+      const updatedSedekahList = (prev.sedekahList || []).map((s) =>
+        s.id === entry.id
+          ? {
+              ...s,
+              status: 'rejected' as const,
+              rejectionReason: reason,
+              verifiedBy: currentAdmin?.nama || 'Admin Approval',
+              verifiedAt: new Date().toISOString(),
+            }
+          : s
+      );
+
+      const audit = createAuditLog(
+        currentAdmin!,
+        'Tolak Pengajuan Penyaluran Sedekah',
+        `${currentAdmin?.nama} menolak pengajuan penyaluran senilai ${formatRupiah(entry.nominal)} kepada "${entry.penerimaManfaat}". Alasan: ${reason}`
+      );
+
+      return {
+        ...prev,
+        sedekahList: updatedSedekahList,
+        auditLogs: [audit, ...(prev.auditLogs || [])],
+      };
+    });
+
+    alert('Pengajuan penyaluran sedekah telah ditolak.');
   };
 
   // Unduh Laporan PDF (Req 3: Pilihan wilayah / keseluruhan / peranggota, harian / bulanan / tahunan)
@@ -638,25 +765,40 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex bg-[#162035] p-1 rounded-2xl border border-slate-700 text-xs font-bold shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('berbagi');
-              setDonasiSuccessEntry(null);
-            }}
-            className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-              activeTab === 'berbagi'
-                ? 'bg-rose-500 text-white font-black shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Heart className="w-3.5 h-3.5" />
-            <span>Kirim Berbagi</span>
-          </button>
+        {/* Tab Navigation - Khusus Admin (Anggota murni setor sedekah tanpa tab laporan / penyaluran) */}
+        {isAdmin ? (
+          <div className="flex bg-[#162035] p-1 rounded-2xl border border-slate-700 text-xs font-bold shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveTab('laporan')}
+              className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                activeTab === 'laporan'
+                  ? 'bg-sky-500 text-slate-950 font-black shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Laporan Sedekah</span>
+            </button>
 
-          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('salurkan')}
+              className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer relative ${
+                activeTab === 'salurkan'
+                  ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Penyaluran Sedekah</span>
+              {pendingSalurList.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse" title={`${pendingSalurList.length} Pengajuan Penyaluran Menunggu Otorisasi`}>
+                  {pendingSalurList.length} Butuh Approval
+                </span>
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => setActiveTab('konfirmasi')}
@@ -667,84 +809,112 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               }`}
             >
               <CheckSquare className="w-3.5 h-3.5" />
-              <span>Konfirmasi Berbagi</span>
+              <span>Konfirmasi Masuk</span>
               {pendingSedekahList.length > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
                   {pendingSedekahList.length}
                 </span>
               )}
             </button>
-          )}
 
-          {isAdmin && (
             <button
               type="button"
-              onClick={() => setActiveTab('salurkan')}
-              className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                activeTab === 'salurkan'
-                  ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+              onClick={() => {
+                setActiveTab('berbagi');
+                setDonasiSuccessEntry(null);
+              }}
+              className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                activeTab === 'berbagi'
+                  ? 'bg-rose-500 text-white font-black shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
+              title="Input Setoran Donasi"
             >
-              <Send className="w-3.5 h-3.5" />
-              <span>Salurkan Dana (Admin)</span>
+              <Heart className="w-3.5 h-3.5" />
+              <span>Setor Sedekah</span>
             </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('laporan')}
-            className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-              activeTab === 'laporan'
-                ? 'bg-sky-500 text-slate-950 font-black shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Laporan & Penyaluran</span>
-          </button>
-        </div>
+          </div>
+        ) : (
+          /* Header Banner Khusus Anggota */
+          <div className="p-3 bg-gradient-to-r from-rose-950/60 via-slate-900 to-amber-950/60 rounded-2xl border border-rose-500/40 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2.5">
+              <span className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
+                <Heart className="w-4 h-4 fill-rose-400" />
+              </span>
+              <div>
+                <div className="text-xs font-black text-white">Form Setor Sedekah Anggota</div>
+                <div className="text-[10px] text-rose-300">Metode QRIS & Transfer Bank Penampungan Koperasi</div>
+              </div>
+            </div>
+            <span className="text-[10px] font-extrabold bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2.5 py-1 rounded-xl">
+              Sosial Syariah
+            </span>
+          </div>
+        )}
 
         {/* Scrollable Body Content */}
         <div className="flex-1 overflow-y-auto pr-1 space-y-4 custom-scrollbar">
-          {/* Summary Card */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
-              <span className="text-[10px] text-slate-400 font-semibold block">Total Diterima (Disetujui)</span>
-              <div className="text-sm font-black text-emerald-400 mt-0.5">{formatRupiah(totalPenerimaan)}</div>
-              <span className="text-[9px] text-slate-400">Tercatat di Kas Koperasi</span>
-            </div>
+          {/* Summary Card Khusus Admin */}
+          {isAdmin ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-semibold block">Total Diterima (Disetujui)</span>
+                <div className="text-sm font-black text-emerald-400 mt-0.5">{formatRupiah(totalPenerimaan)}</div>
+                <span className="text-[9px] text-slate-400">Tercatat di Kas Koperasi</span>
+              </div>
 
-            <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
-              <span className="text-[10px] text-slate-400 font-semibold block">Total Disalurkan</span>
-              <div className="text-sm font-black text-rose-400 mt-0.5">{formatRupiah(totalPenyaluran)}</div>
-              <span className="text-[9px] text-slate-400">Resmi oleh pengurus</span>
-            </div>
+              <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-semibold block">Total Disalurkan</span>
+                <div className="text-sm font-black text-rose-400 mt-0.5">{formatRupiah(totalPenyaluran)}</div>
+                <span className="text-[9px] text-slate-400">Resmi oleh pengurus</span>
+              </div>
 
-            <div className="p-3 bg-slate-800/80 rounded-2xl border border-amber-500/30">
-              <span className="text-[10px] text-amber-300 font-semibold block">Saldo Siap Salur</span>
-              <div className="text-sm font-black text-amber-400 mt-0.5">{formatRupiah(saldoTersedia)}</div>
-              <span className="text-[9px] text-emerald-400">Kas Berbagi</span>
-            </div>
+              <div className="p-3 bg-slate-800/80 rounded-2xl border border-amber-500/30">
+                <span className="text-[10px] text-amber-300 font-semibold block">Saldo Siap Salur</span>
+                <div className="text-sm font-black text-amber-400 mt-0.5">{formatRupiah(saldoTersedia)}</div>
+                <span className="text-[9px] text-emerald-400">Kas Berbagi</span>
+              </div>
 
-            <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
-              <span className="text-[10px] text-slate-400 font-semibold block">Saldo Per Program</span>
-              <div className="text-[10px] text-slate-300 font-mono mt-1 space-y-0.5">
-                <div className="flex justify-between">
-                  <span className="truncate pr-1">{namaSubuh}:</span>
-                  <span className="text-amber-400 font-bold">{formatRupiah(subuhSaldo)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="truncate pr-1">{namaJumat}:</span>
-                  <span className="text-emerald-400 font-bold">{formatRupiah(jumatSaldo)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="truncate pr-1">{namaUmum}:</span>
-                  <span className="text-sky-400 font-bold">{formatRupiah(umumSaldo)}</span>
+              <div className="p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 font-semibold block">Saldo Per Program</span>
+                <div className="text-[10px] text-slate-300 font-mono mt-1 space-y-0.5">
+                  <div className="flex justify-between">
+                    <span className="truncate pr-1">{namaSubuh}:</span>
+                    <span className="text-amber-400 font-bold">{formatRupiah(subuhSaldo)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="truncate pr-1">{namaJumat}:</span>
+                    <span className="text-emerald-400 font-bold">{formatRupiah(jumatSaldo)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="truncate pr-1">{namaUmum}:</span>
+                    <span className="text-sky-400 font-bold">{formatRupiah(umumSaldo)}</span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          ) : currentMember ? (
+            /* Saldo Sedekah Khusus Anggota (Req 1C & 2) */
+            <div className="p-4 bg-gradient-to-r from-rose-950/70 via-slate-900 to-[#1e1528] rounded-2xl border border-rose-500/50 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="text-[11px] font-bold text-rose-300 flex items-center gap-1.5">
+                  <Heart className="w-4 h-4 text-rose-400 fill-rose-400/40" />
+                  <span>Saldo Sedekah Saya:</span>
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-white font-mono">
+                  {formatRupiah(memberSaldoSedekah)}
+                </div>
+                <div className="text-[10px] text-rose-300/80">
+                  • Berkurang saat penyaluran resmi disahkan pengurus • Tidak tercatat di mutasi tabungan anggota
+                </div>
+              </div>
+              <div className="sm:text-right">
+                <span className="inline-block px-3 py-1 rounded-xl bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-extrabold uppercase">
+                  Siap Disalurkan
+                </span>
+              </div>
+            </div>
+          ) : null}
 
           {/* ================= TAB 1: FORM DONASI SEDEKAH (ANGGOTA / UMUM) ================= */}
           {activeTab === 'berbagi' && !donasiSuccessEntry && (

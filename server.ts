@@ -1153,23 +1153,17 @@ async function startServer() {
         return res.status(403).json({ error: 'Kata sandi Super Admin salah atau tidak sesuai!' });
       }
 
-      // 1. Hapus semua riwayat transaksi anggota & setoran
+      // 1. Hapus semua riwayat transaksi anggota, setoran, kas, sedekah & chat
       currentState.memberTransactions = [];
       currentState.setoranList = [];
       currentState.sedekahList = [];
       currentState.penyaluranList = [];
+      currentState.kasList = [];
+      currentState.chatMessages = [];
+      currentState.suratList = [];
 
-      // 2. Reset seluruh saldo anggota ke 0
-      if (Array.isArray(currentState.members)) {
-        currentState.members = currentState.members.map((m: any) => ({
-          ...m,
-          saldoPokok: 0,
-          saldoZakatFitrah: 0,
-          saldoQurban: 0,
-          saldoUmum: 0,
-          totalSimpanan: 0,
-        }));
-      }
+      // 2. Kosongkan seluruh data anggota
+      currentState.members = [];
 
       // 3. Sisakan HANYA Super Admin (Hapus admin test/non-super)
       currentState.admins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
