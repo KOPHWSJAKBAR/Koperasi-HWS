@@ -27,6 +27,8 @@ import {
   CheckCircle2,
   HeartHandshake,
   Heart,
+  FileSpreadsheet,
+  Send,
   Mail,
   MessageSquare,
   Settings,
@@ -85,6 +87,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [settingSubModal, setSettingSubModal] = useState<any>(null);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showBerbagiModal, setShowBerbagiModal] = useState(false);
+  const [berbagiInitialTab, setBerbagiInitialTab] = useState<'laporan' | 'salurkan' | 'konfirmasi'>('laporan');
 
   // Orcas Policy Engine confirmation modal state for Mobile & PC
   const [orcasConfirmation, setOrcasConfirmation] = useState<{
@@ -317,6 +320,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       else saldoKasKoperasi -= k.nominal;
     });
 
+  // Perhitungan Saldo Kas Berbagi & Sedekah Koperasi (Req 1D)
+  const namaSubuh = state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh';
+  const namaJumat = state.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat';
+  const namaUmum = state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum';
+  const allSedekah = state.sedekahList || [];
+  const totalSedekahMasuk = allSedekah.filter((e) => e.tipe === 'penerimaan' && e.status === 'approved').reduce((acc, e) => acc + e.nominal, 0);
+  const totalSedekahSalur = allSedekah.filter((e) => e.tipe === 'penyaluran' && e.status === 'approved').reduce((acc, e) => acc + e.nominal, 0);
+  const saldoSedekahTersedia = Math.max(0, totalSedekahMasuk - totalSedekahSalur);
+  const subuhSaldo = Math.max(0, allSedekah.filter((e) => e.jenis === 'sedekah_subuh' && e.tipe === 'penerimaan' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0)
+    - allSedekah.filter((e) => e.jenis === 'sedekah_subuh' && e.tipe === 'penyaluran' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0));
+  const jumatSaldo = Math.max(0, allSedekah.filter((e) => e.jenis === 'sedekah_jumat' && e.tipe === 'penerimaan' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0)
+    - allSedekah.filter((e) => e.jenis === 'sedekah_jumat' && e.tipe === 'penyaluran' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0));
+  const umumSaldo = Math.max(0, allSedekah.filter((e) => e.jenis === 'sedekah_umum' && e.tipe === 'penerimaan' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0)
+    - allSedekah.filter((e) => e.jenis === 'sedekah_umum' && e.tipe === 'penyaluran' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0));
+
   // Pending deposits count
   const pendingDepositsCount = state.setoranList.filter((s) => s.status === 'pending').length;
 
@@ -331,10 +349,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     (m) => m.senderType === 'member' && !m.isReadByAdmin
   ).length;
 
+  // Pending Penyaluran Sedekah Approval (Input Admin Write butuh persetujuan Approval / Super Admin per Req E)
+  const pendingSalurCount = (state.sedekahList || []).filter(
+    (e) => e.tipe === 'penyaluran' && e.status === 'pending'
+  ).length;
+
   const totalNotifCount =
     pendingDepositsCount +
     unreadChatCount +
-    ((isSuperAdmin || isApproval) ? pendingLockPokokCount + pendingKasCount : 0);
+    ((isSuperAdmin || isApproval) ? pendingLockPokokCount + pendingKasCount + pendingSalurCount : 0);
 
   // Print summary report
   const handlePrintSummary = () => {
@@ -677,15 +700,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             Zakat & Qurban
           </button>
 
-          {/* User Req 2: Tombol Menu Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum) */}
+          {/* User Req 3: Menu Laporan Sedekah & Penyaluran Sedekah pada Dashboard Admin */}
           <button
             type="button"
-            onClick={() => setShowBerbagiModal(true)}
-            className="py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer"
-            title="Kelola & Salurkan Dana Berbagi (Sedekah Subuh, Jumat, Umum) & Unduh Laporan"
+            onClick={() => {
+              setBerbagiInitialTab('laporan');
+              setShowBerbagiModal(true);
+            }}
+            className="py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer"
+            title="Laporan Sedekah (Filter Wilayah, Per Anggota & Periode Excel/PDF)"
           >
-            <Heart className="w-3.5 h-3.5 text-rose-400 fill-rose-400/20" />
-            <span>Menu Berbagi</span>
+            <FileSpreadsheet className="w-3.5 h-3.5 text-sky-400" />
+            <span>Laporan Sedekah</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setBerbagiInitialTab('salurkan');
+              setShowBerbagiModal(true);
+            }}
+            className="py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer relative"
+            title="Penyaluran Sedekah (Input Admin Write & Disetujui Approval/Super Admin)"
+          >
+            <Send className="w-3.5 h-3.5 text-amber-400" />
+            <span>Penyaluran Sedekah</span>
+            {pendingSalurCount > 0 && (
+              <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center animate-pulse" title={`${pendingSalurCount} Penyaluran Butuh Approval`}>
+                {pendingSalurCount}
+              </span>
+            )}
           </button>
 
           {!isLaporan && (
@@ -1134,6 +1178,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span>›</span>
                 </button>
 
+                {/* User Req 3: Menu Laporan Sedekah & Penyaluran Sedekah pada Mobile Admin */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBerbagiInitialTab('laporan');
+                    setShowBerbagiModal(true);
+                  }}
+                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-sky-500/40 text-white flex items-center justify-between text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center">
+                      <FileSpreadsheet className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-extrabold flex items-center gap-1.5">
+                        <span>7. Laporan Sedekah</span>
+                        <span className="text-[9px] bg-sky-500/20 text-sky-300 font-bold px-1.5 py-0.2 rounded">PDF / Excel</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Filter per wilayah, per anggota & periode harian/bulanan/tahunan
+                      </div>
+                    </div>
+                  </div>
+                  <span>›</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBerbagiInitialTab('salurkan');
+                    setShowBerbagiModal(true);
+                  }}
+                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-amber-500/40 text-white flex items-center justify-between text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center relative">
+                      <Send className="w-4 h-4" />
+                      {pendingSalurCount > 0 && (
+                        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">
+                          {pendingSalurCount}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-xs font-extrabold flex items-center gap-1.5">
+                        <span>8. Penyaluran Sedekah</span>
+                        {pendingSalurCount > 0 && (
+                          <span className="text-[9px] bg-rose-500 text-white font-black px-1.5 py-0.2 rounded animate-pulse">
+                            {pendingSalurCount} Butuh Approval
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Input Admin Write & Disetujui Approval/Super Admin
+                      </div>
+                    </div>
+                  </div>
+                  <span>›</span>
+                </button>
+
                 {!isLaporan && (
                   <button
                     type="button"
@@ -1450,6 +1554,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         state={state}
         updateState={updateState}
         currentAdmin={currentAdmin}
+        initialTab={berbagiInitialTab}
       />
     </div>
   );

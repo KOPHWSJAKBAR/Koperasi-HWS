@@ -122,6 +122,15 @@ const getInitialState = () => ({
   maintenanceLock: {
     isLocked: false,
   },
+  pengaturanBerbagi: {
+    namaSubuh: 'Sedekah Subuh',
+    namaJumat: 'Sedekah Jumat',
+    namaUmum: 'Sedekah Umum',
+    bankName: 'Bank Syariah Indonesia (BSI)',
+    noRekening: '7123-4567-8901',
+    namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
+    qrisImageUrl: '',
+  },
 });
 
 // Load DB
@@ -205,6 +214,18 @@ function archiveAllUploadedFiles(state: any) {
     if (state.profile?.qrisImageUrl) {
       archiveBase64File(state.profile.qrisImageUrl, 'qris_hws');
     }
+
+    // 5. Sedekah QRIS & Bukti Transfer
+    if (state.pengaturanBerbagi?.qrisImageUrl) {
+      archiveBase64File(state.pengaturanBerbagi.qrisImageUrl, 'qris_sedekah');
+    }
+    if (Array.isArray(state.sedekahList)) {
+      state.sedekahList.forEach((s: any) => {
+        if (s.buktiTransferUrl) {
+          archiveBase64File(s.buktiTransferUrl, `sedekah_${s.id || 'sdk'}`);
+        }
+      });
+    }
   } catch (e) {
     console.error('Error during archiveAllUploadedFiles:', e);
   }
@@ -278,7 +299,7 @@ function mergeServerState(current: any, incoming: any): any {
     if (!suratMap.has(s.id)) {
       suratMap.set(s.id, s);
     } else {
-      const existing = suratMap.get(s.id)!;
+      const existing = suratMap.get(s.id);
       suratMap.set(s.id, {
         ...existing,
         ...s,
@@ -329,6 +350,31 @@ function mergeServerState(current: any, incoming: any): any {
     qrisImageUrl: incoming.profile?.qrisImageUrl || current.profile?.qrisImageUrl,
   };
 
+  // 11. Sedekah List
+  const sedekahMap = new Map<string, any>();
+  (current.sedekahList || []).forEach((s: any) => sedekahMap.set(s.id, { ...s }));
+  (incoming.sedekahList || []).forEach((s: any) => {
+    const existing = sedekahMap.get(s.id);
+    if (!existing) {
+      sedekahMap.set(s.id, s);
+    } else {
+      sedekahMap.set(s.id, {
+        ...existing,
+        ...s,
+        buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
+      });
+    }
+  });
+
+  // 12. Pengaturan Berbagi (Names, rekening, & QRIS Sedekah)
+  const pengaturanBerbagi = {
+    ...current.pengaturanBerbagi,
+    ...(incoming.pengaturanBerbagi || {}),
+    qrisImageUrl: incoming.pengaturanBerbagi?.qrisImageUrl !== undefined
+      ? incoming.pengaturanBerbagi.qrisImageUrl
+      : current.pengaturanBerbagi?.qrisImageUrl,
+  };
+
   return {
     ...current,
     ...incoming,
@@ -341,6 +387,8 @@ function mergeServerState(current: any, incoming: any): any {
     memberTransactions: Array.from(txMap.values()).sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
     kasList: mergedKasList.sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
+    sedekahList: Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
+    pengaturanBerbagi,
     auditLogs: mergedAuditLogs.sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1)),
     lastRunningNumber: Math.max(current.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
     serverSyncStatus: {
@@ -1253,7 +1301,7 @@ async function startServer() {
         const memberIdsInWilayah = new Set(
           (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id)
         );
-        memberIdsInWilayah.forEach((id) => affectedMemberIdSet.add(id));
+        memberIdsInWilayah.forEach((id) => affectedMemberIdSet.add(String(id)));
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (memberIdsInWilayah.has(tx.memberId)) {
             removedCount++;

@@ -180,7 +180,7 @@ function notifyListeners() {
   }
 }
 
-const CLIENT_ID = typeof window !== 'undefined'
+export const CLIENT_ID = typeof window !== 'undefined'
   ? (sessionStorage.getItem('koperasi_client_id') || (() => {
       const id = 'client_' + Math.random().toString(36).substring(2, 10);
       try { sessionStorage.setItem('koperasi_client_id', id); } catch {}
@@ -412,6 +412,40 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     qrisImageUrl: incoming.profile?.qrisImageUrl || base.profile?.qrisImageUrl,
   };
 
+  // 11. Sedekah List (Preserve all donations & receipts)
+  const sedekahMap = new Map<string, any>();
+  (base.sedekahList || []).forEach((s) => sedekahMap.set(s.id, { ...s }));
+  (incoming.sedekahList || []).forEach((s) => {
+    const existing = sedekahMap.get(s.id);
+    if (!existing) {
+      sedekahMap.set(s.id, s);
+    } else {
+      sedekahMap.set(s.id, {
+        ...existing,
+        ...s,
+        buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
+      });
+    }
+  });
+
+  // 12. Pengaturan Berbagi (Names, rekening, & QRIS Sedekah)
+  const defaultBerbagi = {
+    namaSubuh: 'Sedekah Subuh',
+    namaJumat: 'Sedekah Jumat',
+    namaUmum: 'Sedekah Umum',
+    bankName: 'Bank Syariah Indonesia (BSI)',
+    noRekening: '7123-4567-8901',
+    namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
+  };
+  const pengaturanBerbagi = {
+    ...defaultBerbagi,
+    ...(base.pengaturanBerbagi || {}),
+    ...(incoming.pengaturanBerbagi || {}),
+    qrisImageUrl: incoming.pengaturanBerbagi?.qrisImageUrl !== undefined
+      ? incoming.pengaturanBerbagi.qrisImageUrl
+      : base.pengaturanBerbagi?.qrisImageUrl,
+  };
+
   return {
     ...base,
     ...incoming,
@@ -424,6 +458,8 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     memberTransactions: Array.from(txMap.values()).sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
     kasList: mergedKasList.sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
+    sedekahList: Array.from(sedekahMap.values()).sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
+    pengaturanBerbagi,
     auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     lastRunningNumber: Math.max(base.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
     serverSyncStatus: {

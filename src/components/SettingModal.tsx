@@ -1627,6 +1627,40 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     reader.readAsDataURL(file);
   };
 
+  // Handle QRIS Upload khusus Sedekah / Menu Berbagi
+  const handleUploadBerbagiQris = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Pilih berkas gambar (JPG, PNG, atau WEBP).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const url = reader.result as string;
+      setBerbagiQrisUrl(url);
+      try {
+        await updateState((prev) => ({
+          ...prev,
+          pengaturanBerbagi: {
+            ...(prev.pengaturanBerbagi || {
+              namaSubuh: 'Sedekah Subuh',
+              namaJumat: 'Sedekah Jumat',
+              namaUmum: 'Sedekah Umum',
+              bankName: 'Bank Syariah Indonesia (BSI)',
+              noRekening: '7123-4567-8901',
+              namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
+            }),
+            qrisImageUrl: url,
+          },
+        }));
+        setBerbagiSaveMsg('✓ Barcode QRIS Sedekah berhasil diunggah & langsung aktif untuk anggota!');
+        setTimeout(() => setBerbagiSaveMsg(''), 4000);
+      } catch (err: any) {
+        console.warn('Gagal auto-save QRIS Sedekah:', err);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Penyesuaian Saldo Anggota (Req 5: Penyesuaian saldo anggota terinput di kas anggota)
   const handlePenyesuaianSaldoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -5240,6 +5274,99 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-amber-500 focus:outline-none"
                   />
                 </div>
+              </div>
+
+              {/* Upload Gambar Barcode QRIS Khusus Sedekah / Menu Berbagi */}
+              <div className="p-3 bg-slate-900/90 rounded-2xl border border-rose-500/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-rose-300 text-xs block">
+                    3. Upload Barcode QRIS Khusus Menu Berbagi / Sedekah:
+                  </span>
+                  {berbagiQrisUrl && (
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30">
+                      ✓ QRIS Terpasang
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  Barcode QRIS ini akan otomatis tampil pada Menu Berbagi / Sedekah di dashboard anggota saat memilih metode QRIS.
+                </p>
+
+                {berbagiQrisUrl ? (
+                  <div className="flex flex-col sm:flex-row items-center gap-3 p-3 bg-slate-800/80 rounded-2xl border border-slate-700">
+                    <div className="w-28 h-28 bg-white rounded-xl p-1.5 border border-slate-300 shadow flex items-center justify-center shrink-0 overflow-hidden">
+                      <img
+                        src={berbagiQrisUrl}
+                        alt="Preview QRIS Sedekah"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div className="space-y-2 flex-1 w-full text-left">
+                      <div className="text-[11px] text-slate-200 font-bold">
+                        Gambar QRIS Berbagi Aktif
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Format gambar valid. Anggota dapat melihat dan memindai barcode ini langsung dari aplikasi.
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <label className="py-1 px-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-lg text-[10px] cursor-pointer transition-all shadow">
+                          Ganti QRIS
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleUploadBerbagiQris(f);
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setBerbagiQrisUrl('');
+                            try {
+                              await updateState((prev) => ({
+                                ...prev,
+                                pengaturanBerbagi: {
+                                  namaSubuh: prev.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh',
+                                  namaJumat: prev.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat',
+                                  namaUmum: prev.pengaturanBerbagi?.namaUmum || 'Sedekah Umum',
+                                  bankName: prev.pengaturanBerbagi?.bankName || 'Bank Syariah Indonesia (BSI)',
+                                  noRekening: prev.pengaturanBerbagi?.noRekening || '7123-4567-8901',
+                                  namaPemilikRekening: prev.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS',
+                                  qrisImageUrl: '',
+                                },
+                              }));
+                            } catch {}
+                          }}
+                          className="py-1 px-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-[10px] font-bold cursor-pointer transition-all"
+                        >
+                          Hapus QRIS
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <label className="block p-4 border-2 border-dashed border-rose-500/40 hover:border-rose-400 rounded-2xl bg-slate-800/60 text-center cursor-pointer transition-colors group">
+                    <QrCode className="w-8 h-8 text-rose-400 mx-auto mb-1.5 group-hover:scale-110 transition-transform" />
+                    <span className="font-extrabold text-white text-xs block">
+                      Klik untuk Upload Gambar Barcode QRIS Sedekah
+                    </span>
+                    <span className="text-[10px] text-slate-400 block mt-0.5">
+                      Pilih berkas JPG, PNG, atau WEBP barcode QRIS koperasi
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleUploadBerbagiQris(f);
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                )}
               </div>
 
               <div className="pt-2 flex gap-2">

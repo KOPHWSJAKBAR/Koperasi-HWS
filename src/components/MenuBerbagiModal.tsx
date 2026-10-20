@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppState,
   MemberUser,
@@ -35,6 +35,7 @@ import {
   Users,
   CheckSquare,
   XCircle,
+  Download,
 } from 'lucide-react';
 
 interface MenuBerbagiModalProps {
@@ -65,6 +66,18 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const bankName = state.pengaturanBerbagi?.bankName || 'Bank Syariah Indonesia (BSI)';
   const noRekening = state.pengaturanBerbagi?.noRekening || '7123-4567-8901';
   const namaPemilikRekening = state.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS';
+  // Gambar QRIS khusus sedekah dari pengaturan berbagi atau fallback profil koperasi
+  const sedekahQrisUrl = state.pengaturanBerbagi?.qrisImageUrl || state.profile.qrisImageUrl;
+
+  const handleDownloadQrisJpg = () => {
+    if (!sedekahQrisUrl) return;
+    const link = document.createElement('a');
+    link.href = sedekahQrisUrl;
+    link.download = `QRIS_Sedekah_Koperasi_HWS_${Date.now()}.jpg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const getJenisLabel = (jenis: JenisSedekahBerbagi) => {
     if (jenis === 'sedekah_subuh') return namaSubuh;
@@ -74,11 +87,54 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
   const allSedekahList: SedekahBerbagiEntry[] = state.sedekahList || [];
   const pendingSedekahList = allSedekahList.filter((e) => e.status === 'pending');
-
-  // Active Tab
-  const [activeTab, setActiveTab] = useState<'berbagi' | 'konfirmasi' | 'salurkan' | 'laporan'>(
-    initialTab || (isAdmin ? (pendingSedekahList.length > 0 ? 'konfirmasi' : 'laporan') : 'berbagi')
+  const pendingSalurList = allSedekahList.filter(
+    (e) => e.tipe === 'penyaluran' && e.status === 'pending'
   );
+
+  // Perhitungan Saldo Sedekah Anggota
+  const totalSedekahPenerimaan = allSedekahList
+    .filter((e) => e.tipe === 'penerimaan' && e.status === 'approved')
+    .reduce((s, e) => s + e.nominal, 0);
+  const totalSedekahPenyaluran = allSedekahList
+    .filter((e) => e.tipe === 'penyaluran' && e.status === 'approved')
+    .reduce((s, e) => s + e.nominal, 0);
+  const memberApprovedSedekah = currentMember
+    ? allSedekahList
+        .filter(
+          (e) =>
+            (e.donaturMemberId === currentMember.id ||
+              (e.donaturNama && e.donaturNama.toLowerCase() === currentMember.nama.toLowerCase())) &&
+            e.tipe === 'penerimaan' &&
+            e.status === 'approved'
+        )
+        .reduce((s, e) => s + e.nominal, 0)
+    : 0;
+  const memberDisbursedAllocation = totalSedekahPenerimaan > 0
+    ? Math.round(memberApprovedSedekah * Math.min(1, totalSedekahPenyaluran / totalSedekahPenerimaan))
+    : 0;
+  const memberSaldoSedekah = Math.max(0, memberApprovedSedekah - memberDisbursedAllocation);
+
+  // Active Tab - Khusus Admin hanya laporan, salurkan, konfirmasi (Hilangkan kirim berbagi pada admin)
+  const [activeTab, setActiveTab] = useState<'berbagi' | 'konfirmasi' | 'salurkan' | 'laporan'>(() => {
+    if (isAdmin) {
+      if (initialTab && initialTab !== 'berbagi') return initialTab;
+      return pendingSedekahList.length > 0 ? 'konfirmasi' : 'laporan';
+    }
+    return 'berbagi';
+  });
+
+  // Guard ketat: Admin TIDAK BISA mengakses tab kirim berbagi, dan Anggota TIDAK BISA mengakses tab laporan & penyaluran
+  useEffect(() => {
+    if (isAdmin) {
+      if (activeTab === 'berbagi') {
+        setActiveTab(pendingSedekahList.length > 0 ? 'konfirmasi' : 'laporan');
+      }
+    } else {
+      if (activeTab !== 'berbagi') {
+        setActiveTab('berbagi');
+      }
+    }
+  }, [isAdmin, activeTab, pendingSedekahList.length]);
 
   // ================= STATE ANGGOTA / DONASI =================
   const [selectedJenis, setSelectedJenis] = useState<JenisSedekahBerbagi>('sedekah_subuh');
@@ -90,7 +146,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const [isSubmittingDonasi, setIsSubmittingDonasi] = useState(false);
   const [donasiSuccessEntry, setDonasiSuccessEntry] = useState<SedekahBerbagiEntry | null>(null);
   const [copiedRekening, setCopiedRekening] = useState(false);
-  const [showQrisPreview, setShowQrisPreview] = useState(false);
+  // Default tampilkan preview QRIS agar anggota langsung dapat melihat barcode ketika membuka sedekah
+  const [showQrisPreview, setShowQrisPreview] = useState(true);
   const [previewBukti, setPreviewBukti] = useState<string | null>(null);
 
   // ================= STATE ADMIN PENYALURAN =================
@@ -816,23 +873,6 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </span>
               )}
             </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('berbagi');
-                setDonasiSuccessEntry(null);
-              }}
-              className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                activeTab === 'berbagi'
-                  ? 'bg-rose-500 text-white font-black shadow-md'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Input Setoran Donasi"
-            >
-              <Heart className="w-3.5 h-3.5" />
-              <span>Setor Sedekah</span>
-            </button>
           </div>
         ) : (
           /* Header Banner Khusus Anggota */
@@ -917,7 +957,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           ) : null}
 
           {/* ================= TAB 1: FORM DONASI SEDEKAH (ANGGOTA / UMUM) ================= */}
-          {activeTab === 'berbagi' && !donasiSuccessEntry && (
+          {!isAdmin && activeTab === 'berbagi' && !donasiSuccessEntry && (
             <form onSubmit={handleKirimDonasi} className="space-y-4">
               {/* Pilihan 3 Program Berbagi */}
               <div>
@@ -1092,44 +1132,74 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </div>
 
                 {/* QRIS Code Preview Box */}
-                {showQrisPreview && (
-                  <div className="p-4 bg-white rounded-2xl text-slate-900 text-center space-y-2 border-2 border-rose-500 shadow-xl max-w-xs mx-auto animate-in zoom-in-95">
-                    <div className="flex items-center justify-center gap-1.5 border-b pb-1.5 border-slate-200">
-                      <span className="text-red-600 font-black text-base tracking-tighter">QRIS</span>
-                      <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">
-                        Pembayaran Cepat Nasional
+                {(showQrisPreview || sumberDana === 'qris') && (
+                  <div className="p-4 bg-white rounded-2xl text-slate-900 text-center space-y-2.5 border-2 border-rose-500 shadow-xl max-w-xs mx-auto animate-in zoom-in-95">
+                    <div className="flex items-center justify-between border-b pb-1.5 border-slate-200">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-red-600 font-black text-base tracking-tighter">QRIS</span>
+                        <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">
+                          Resmi Kas Berbagi
+                        </span>
+                      </div>
+                      <span className="text-[9px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded">
+                        Koperasi HWS
                       </span>
                     </div>
+
                     <div className="font-extrabold text-xs text-slate-800">
                       {namaPemilikRekening}
                     </div>
-                    {/* QR Code Canvas Visual Mockup */}
-                    <div className="w-44 h-44 mx-auto bg-slate-100 rounded-xl p-2 border-2 border-slate-800 flex items-center justify-center relative">
-                      <div className="w-full h-full bg-white p-1 grid grid-cols-7 grid-rows-7 gap-0.5">
-                        {Array.from({ length: 49 }).map((_, i) => {
-                          const isCorner =
-                            (i < 3 || (i >= 4 && i < 7) || (i >= 42 && i < 45)) ||
-                            (i % 7 < 3 && i < 21) ||
-                            (i % 7 >= 4 && i < 21) ||
-                            (i % 7 < 3 && i >= 28);
-                          const isDark = (i * 17 + 3) % 2 === 0 || isCorner;
-                          return (
-                            <div
-                              key={i}
-                              className={`${isDark ? 'bg-slate-950' : 'bg-white'} rounded-[1px]`}
-                            />
-                          );
-                        })}
-                      </div>
-                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                        <div className="bg-white p-1 rounded-md border border-slate-400 shadow">
-                          <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
+
+                    {/* QR Code Container */}
+                    <div className="w-48 h-48 mx-auto bg-slate-50 rounded-xl p-2 border-2 border-slate-800 flex items-center justify-center relative overflow-hidden">
+                      {sedekahQrisUrl ? (
+                        <img
+                          src={sedekahQrisUrl}
+                          alt="QRIS Resmi Sedekah Koperasi"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-white p-1 grid grid-cols-7 grid-rows-7 gap-0.5">
+                          {Array.from({ length: 49 }).map((_, i) => {
+                            const isCorner =
+                              (i < 3 || (i >= 4 && i < 7) || (i >= 42 && i < 45)) ||
+                              (i % 7 < 3 && i < 21) ||
+                              (i % 7 >= 4 && i < 21) ||
+                              (i % 7 < 3 && i >= 28);
+                            const isDark = (i * 17 + 3) % 2 === 0 || isCorner;
+                            return (
+                              <div
+                                key={i}
+                                className={`${isDark ? 'bg-slate-950' : 'bg-white'} rounded-[1px]`}
+                              />
+                            );
+                          })}
                         </div>
-                      </div>
+                      )}
+                      {!sedekahQrisUrl && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="bg-white p-1 rounded-md border border-slate-400 shadow">
+                            <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-[10px] text-slate-600 font-semibold">
-                      Scan via BCA Mobile, Livin, BRImo, GoPay, OVO, Dana, ShopeePay
+
+                    <div className="text-[10px] text-slate-600 font-semibold leading-tight">
+                      Scan via BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay
                     </div>
+
+                    {sedekahQrisUrl && (
+                      <button
+                        type="button"
+                        onClick={handleDownloadQrisJpg}
+                        className="w-full py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
+                        title="Unduh Berkas Gambar QRIS"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Unduh QRIS (JPG)</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1137,42 +1207,64 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               {/* Pilihan Sumber Dana */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  3. Pilih Metode Pembayaran:
+                  3. Pilih Metode Pembayaran Sedekah:
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSumberDana('qris');
+                      setShowQrisPreview(true);
+                    }}
+                    className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      sumberDana === 'qris'
+                        ? 'bg-rose-500/20 border-rose-500 text-white font-bold ring-1 ring-rose-500 shadow-sm'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs flex items-center gap-1.5">
+                        <QrCode className="w-3.5 h-3.5 text-rose-400" />
+                        <span className="font-extrabold text-white">QRIS Kas Berbagi</span>
+                      </div>
+                      <div className="text-[10px] text-rose-300">Scan via Semua E-Wallet & M-Banking</div>
+                    </div>
+                    {sumberDana === 'qris' && <span className="text-rose-400 text-xs font-black">✓</span>}
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => setSumberDana('transfer_bank')}
                     className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
                       sumberDana === 'transfer_bank'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-white font-bold ring-1 ring-emerald-500'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-white font-bold ring-1 ring-emerald-500 shadow-sm'
                         : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
                     }`}
                   >
                     <div>
-                      <div className="text-xs">Transfer Bank / QRIS</div>
-                      <div className="text-[10px] text-emerald-400">Rekening Resmi Kas Berbagi Koperasi</div>
+                      <div className="text-xs font-extrabold text-white">Transfer Bank Kas Berbagi</div>
+                      <div className="text-[10px] text-emerald-400">{bankName} - {noRekening}</div>
                     </div>
-                    {sumberDana === 'transfer_bank' && <span className="text-emerald-400 text-xs">✓</span>}
+                    {sumberDana === 'transfer_bank' && <span className="text-emerald-400 text-xs font-black">✓</span>}
                   </button>
 
                   {currentMember && (
                     <button
                       type="button"
                       onClick={() => setSumberDana('tabungan_umum')}
-                      className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer sm:col-span-2 ${
                         sumberDana === 'tabungan_umum'
-                          ? 'bg-sky-500/20 border-sky-500 text-white font-bold ring-1 ring-sky-500'
+                          ? 'bg-sky-500/20 border-sky-500 text-white font-bold ring-1 ring-sky-500 shadow-sm'
                           : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
                       }`}
                     >
                       <div>
-                        <div className="text-xs">Tabungan Umum Bebas Anggota</div>
+                        <div className="text-xs font-extrabold text-white">Tabungan Umum Bebas Anggota</div>
                         <div className="text-[10px] text-sky-400 font-mono">
-                          Saldo: {formatRupiah(currentMember.saldoUmum)}
+                          Saldo Tersedia: {formatRupiah(currentMember.saldoUmum)}
                         </div>
                       </div>
-                      {sumberDana === 'tabungan_umum' && <span className="text-sky-400 text-xs">✓</span>}
+                      {sumberDana === 'tabungan_umum' && <span className="text-sky-400 text-xs font-black">✓</span>}
                     </button>
                   )}
                 </div>
@@ -1258,7 +1350,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           )}
 
           {/* Notifikasi Bukti Pengajuan Berhasil */}
-          {donasiSuccessEntry && (
+          {!isAdmin && donasiSuccessEntry && (
             <div className="bg-emerald-950/70 border border-emerald-500/50 rounded-3xl p-5 text-center space-y-3 animate-in zoom-in-95">
               <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto text-2xl border border-emerald-500/40">
                 ✓
@@ -1299,16 +1391,16 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setDonasiSuccessEntry(null)}
-                  className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 rounded-xl cursor-pointer"
+                  className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 rounded-xl cursor-pointer transition-colors"
                 >
                   Kembali / Donasi Lagi
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('laporan')}
-                  className="py-2 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl cursor-pointer"
+                  onClick={onClose}
+                  className="py-2.5 px-5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-emerald-500/20 cursor-pointer transition-all"
                 >
-                  Lihat Rekapitulasi Berbagi
+                  Selesai & Tutup
                 </button>
               </div>
             </div>
@@ -1510,8 +1602,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             </form>
           )}
 
-          {/* ================= TAB 4: RIWAYAT & UNDUH LAPORAN BERBAGI ================= */}
-          {activeTab === 'laporan' && (
+          {/* ================= TAB 4: RIWAYAT & UNDUH LAPORAN BERBAGI (ADMIN ONLY) ================= */}
+          {activeTab === 'laporan' && isAdmin && (
             <div className="space-y-4">
               {/* Filter Wilayah / Per Anggota / Periode (Harian, Bulanan, Tahunan) */}
               <div className="p-3.5 bg-slate-800/90 rounded-2xl border border-slate-700 space-y-3">
