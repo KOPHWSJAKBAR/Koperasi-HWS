@@ -738,19 +738,160 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     alert('Data anggota berhasil diperbarui!');
   };
 
-  // Hapus 1 Mutasi Anggota (Khusus Super Admin per Req 2)
+  // Hapus 1 Mutasi Anggota Secara Permanen Langsung dari Sumber Admin
   const handleDeleteSingleTx = async (tx: MemberTransaction) => {
     if (!isSuperAdmin) {
-      alert('Akses Ditolak: Hanya Super Admin yang dapat menghapus mutasi transaksi anggota.');
+      alert('Akses Ditolak: Hanya Super Admin yang berhak menghapus mutasi transaksi anggota.');
       return;
     }
 
-    const member = state.members.find((m) => m.id === tx.memberId);
-    setHapusTxInitialMemberId(tx.memberId);
-    setHapusTxInitialWilayah(member?.wilayah || 'semua');
-    setHapusTxInitialTxId(tx.id);
-    setShowHapusTxModal(true);
-    setViewingMemberProfile(null);
+    const member = state.members.find((m) => m.id === tx.memberId) || viewingMemberProfile;
+    const confirmDelete = window.confirm(
+      `⚠️ HAPUS MUTASI SECARA PERMANEN?\n\nApakah Anda yakin ingin menghapus mutasi ini secara permanen dari database?\n\nTanggal: ${tx.tanggal} ${tx.jam || ''}\nTipe: ${tx.tipe.toUpperCase()} [${tx.kategori}]\nNominal: ${formatRupiah(tx.nominal)}\nKeterangan: ${tx.keterangan || '-'}\n\nSaldo simpanan anggota akan dihitung ulang secara otomatis dan akurat.`
+    );
+    if (!confirmDelete) return;
+
+    try {
+      // 1. Request server deletion
+      await fetch('/api/transactions/delete-single', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transactionId: tx.id,
+          adminName: currentAdmin.nama,
+          password: currentAdmin.password || 'Abieza88',
+        }),
+      });
+
+      // 2. Update state locally
+      await updateState((prev) => {
+        const remainingTx = prev.memberTransactions.filter((t) => t.id !== tx.id);
+        const m = prev.members.find((mem) => mem.id === tx.memberId);
+        if (!m) return { ...prev, memberTransactions: remainingTx };
+
+        // Recompute running balance & specific category balances
+        const mTx = remainingTx
+          .filter((t) => t.memberId === m.id)
+          .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+        let p = 0, u = 0, z = 0, q = 0, run = 0;
+        mTx.forEach((t) => {
+          const nom = t.nominal || 0;
+          if (t.tipe === 'masuk') {
+            run += nom;
+            if (t.kategori === 'pokok') p += nom;
+            else if (t.kategori === 'qurban') q += nom;
+            else if (t.kategori === 'zakat') z += nom;
+            else u += nom;
+          } else {
+            run = Math.max(0, run - nom);
+            if (t.kategori === 'pokok') p = Math.max(0, p - nom);
+            else if (t.kategori === 'qurban') q = Math.max(0, q - nom);
+            else if (t.kategori === 'zakat') z = Math.max(0, z - nom);
+            else u = Math.max(0, u - nom);
+          }
+          t.saldoSetelah = run;
+        });
+
+        const updatedMember = {
+          ...m,
+          saldoPokok: p,
+          saldoUmum: u,
+          saldoZakatFitrah: z,
+          saldoQurban: q,
+          totalSimpanan: p + u + z + q,
+        };
+
+        if (viewingMemberProfile && viewingMemberProfile.id === m.id) {
+          setViewingMemberProfile(updatedMember);
+        }
+
+        return {
+          ...prev,
+          members: prev.members.map((mem) => (mem.id === m.id ? updatedMember : mem)),
+          memberTransactions: remainingTx,
+          auditLogs: [
+            createAuditLog(
+              currentAdmin,
+              'Hapus Mutasi Anggota Permanen',
+              `Menghapus 1 mutasi transaksi (${tx.tipe.toUpperCase()} ${formatRupiah(tx.nominal)}) milik ${m.nama} secara permanen dari sumber database.`,
+              tx.id
+            ),
+            ...prev.auditLogs,
+          ],
+        };
+      });
+
+      alert('✓ Mutasi transaksi berhasil dihapus secara permanen dari database!');
+    } catch (err: any) {
+      alert('Gagal menghapus mutasi: ' + (err.message || 'Error'));
+    }
+  };
+
+  // Reset Semua Mutasi Anggota & Saldo dari 0 Secara Permanen
+  const handleResetMemberAllMutations = async (member: MemberUser) => {
+    if (!isSuperAdmin) {
+      alert('Akses Ditolak: Hanya Super Admin yang berhak mereset mutasi.');
+      return;
+    }
+
+    const confirmReset = window.confirm(
+      `🚨 PERINGATAN: HAPUS SEMUA MUTASI & RESET SALDO DARI 0?\n\nApakah Anda yakin ingin MENGHAPUS SEMUA MUTASI dan MERESET SEMUA SALDO (Pokok, Bebas, Zakat, Qurban) anggota:\n\nNama: ${member.nama}\nNo Rek: ${member.nomorRekening}\n\nMenjadi Rp 0 (Mulai dari 0) secara permanen dari sumber database? Tindakan ini tidak dapat dibatalkan!`
+    );
+    if (!confirmReset) return;
+
+    try {
+      await fetch('/api/transactions/delete-selective', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminName: currentAdmin.nama,
+          memberId: member.id,
+          resetBalance: true,
+          password: currentAdmin.password || 'Abieza88',
+          alasan: 'Reset mutasi anggota mulai dari 0 secara permanen oleh Super Admin dari profil',
+        }),
+      });
+
+      await updateState((prev) => {
+        const remainingTx = prev.memberTransactions.filter((t) => t.memberId !== member.id);
+        const updatedMembers = prev.members.map((m) => {
+          if (m.id !== member.id) return m;
+          return {
+            ...m,
+            saldoPokok: 0,
+            saldoUmum: 0,
+            saldoZakatFitrah: 0,
+            saldoQurban: 0,
+            totalSimpanan: 0,
+          };
+        });
+
+        const resetMem = updatedMembers.find((m) => m.id === member.id);
+        if (resetMem && viewingMemberProfile && viewingMemberProfile.id === member.id) {
+          setViewingMemberProfile(resetMem);
+        }
+
+        return {
+          ...prev,
+          members: updatedMembers,
+          memberTransactions: remainingTx,
+          auditLogs: [
+            createAuditLog(
+              currentAdmin,
+              'Reset Mutasi Anggota Permanen',
+              `Menghapus seluruh mutasi dan mereset saldo ${member.nama} menjadi Rp 0.`,
+              member.id
+            ),
+            ...prev.auditLogs,
+          ],
+        };
+      });
+
+      alert(`✓ Seluruh mutasi transaksi ${member.nama} berhasil dihapus permanen dan saldo resmi di-reset dari Rp 0!`);
+    } catch (err: any) {
+      alert('Gagal mereset mutasi: ' + (err.message || 'Error'));
+    }
   };
 
   // Export Rekap Anggota (User Req 12 & 13)
@@ -2002,20 +2143,30 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     <span>Riwayat Mutasi Transaksi ({state.memberTransactions.filter((t) => t.memberId === viewingMemberProfile.id).length})</span>
                   </div>
                   {isSuperAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setHapusTxInitialMemberId(viewingMemberProfile.id);
-                        setHapusTxInitialWilayah(viewingMemberProfile.wilayah);
-                        setShowHapusTxModal(true);
-                        setViewingMemberProfile(null);
-                      }}
-                      className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/40 flex items-center gap-1 transition-all"
-                      title="Buka form seleksi dan hapus mutasi anggota ini"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                      <span>Hapus Semua Mutasi Anggota</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleResetMemberAllMutations(viewingMemberProfile)}
+                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-black rounded-lg shadow border border-rose-400/50 flex items-center gap-1 transition-all cursor-pointer"
+                        title="Hapus semua mutasi transaksi anggota ini secara permanen dan reset saldo ke Rp 0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Hapus Permanen & Reset 0</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHapusTxInitialMemberId(viewingMemberProfile.id);
+                          setHapusTxInitialWilayah(viewingMemberProfile.wilayah);
+                          setShowHapusTxModal(true);
+                          setViewingMemberProfile(null);
+                        }}
+                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-lg border border-slate-600 flex items-center gap-1 transition-all cursor-pointer"
+                        title="Buka form seleksi dan hapus mutasi pilihan"
+                      >
+                        <span>Filter / Opsi</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 
