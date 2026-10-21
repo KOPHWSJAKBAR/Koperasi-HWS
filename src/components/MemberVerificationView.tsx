@@ -622,9 +622,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         const existingDep = prev.setoranList.find((s) => s.id === dep.id);
         if (existingDep && existingDep.status === 'disetujui') return prev;
 
-        const targetMember = prev.members.find(
-          (m) => m.id === dep.memberId || m.nomorRekening === dep.memberRekening || m.nama === dep.memberNama
-        );
+        const targetMember = prev.members.find((m) => {
+          if (dep.memberId && m.id === dep.memberId) return true;
+          if (dep.memberRekening && m.nomorRekening && String(m.nomorRekening).trim().toLowerCase() === String(dep.memberRekening).trim().toLowerCase()) return true;
+          if (dep.memberNama && m.nama && String(m.nama).trim().toLowerCase() === String(dep.memberNama).trim().toLowerCase()) return true;
+          if (dep.memberNomorAnggota && m.nomorAnggota && String(m.nomorAnggota).trim().toLowerCase() === String(dep.memberNomorAnggota).trim().toLowerCase()) return true;
+          return false;
+        });
         if (!targetMember) return prev;
 
         const newTxs: MemberTransaction[] = [];
@@ -747,6 +751,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 saldoZakatFitrah: updatedSaldoZakat,
                 saldoQurban: updatedSaldoQurban,
                 saldoUmum: updatedSaldoUmum,
+                totalSimpanan: updatedSaldoPokok + updatedSaldoUmum + updatedSaldoZakat + updatedSaldoQurban,
               }
             : m
         );

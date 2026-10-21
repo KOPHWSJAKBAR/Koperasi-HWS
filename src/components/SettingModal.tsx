@@ -529,7 +529,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     try {
       await syncStateToServer(state);
 
-      const { db } = await import('../lib/firebase');
+      const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
       const payload = JSON.stringify(state);
       await setDoc(

@@ -36,6 +36,7 @@ import {
   CheckSquare,
   XCircle,
   Download,
+  History,
 } from 'lucide-react';
 
 interface MenuBerbagiModalProps {
@@ -114,27 +115,48 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     : 0;
   const memberSaldoSedekah = Math.max(0, memberApprovedSedekah - memberDisbursedAllocation);
 
-  // Active Tab - Khusus Admin hanya laporan, salurkan, konfirmasi (Hilangkan kirim berbagi pada admin)
-  const [activeTab, setActiveTab] = useState<'berbagi' | 'konfirmasi' | 'salurkan' | 'laporan'>(() => {
+  // Active Tab - Khusus Admin: Laporan, Salurkan, Konfirmasi (Kirim Berbagi DITIADAKAN pada Admin)
+  // Khusus Anggota: HANYA Donasi dan Riwayat Donasi Saya (Laporan & Penyaluran DITIADAKAN pada Anggota)
+  const [activeTab, setActiveTab] = useState<'berbagi' | 'riwayat_saya' | 'konfirmasi' | 'salurkan' | 'laporan'>(() => {
     if (isAdmin) {
-      if (initialTab && initialTab !== 'berbagi') return initialTab;
+      if (initialTab && initialTab !== 'berbagi' && (initialTab as any) !== 'riwayat_saya') return initialTab;
       return pendingSedekahList.length > 0 ? 'konfirmasi' : 'laporan';
     }
     return 'berbagi';
   });
 
-  // Guard ketat: Admin TIDAK BISA mengakses tab kirim berbagi, dan Anggota TIDAK BISA mengakses tab laporan & penyaluran
+  // Guard ketat: Admin TIDAK BISA mengakses donasi / riwayat donasi anggota, dan Anggota TIDAK BISA mengakses laporan & penyaluran
   useEffect(() => {
     if (isAdmin) {
-      if (activeTab === 'berbagi') {
+      if (activeTab === 'berbagi' || activeTab === 'riwayat_saya') {
         setActiveTab(pendingSedekahList.length > 0 ? 'konfirmasi' : 'laporan');
       }
     } else {
-      if (activeTab !== 'berbagi') {
+      if (activeTab !== 'berbagi' && activeTab !== 'riwayat_saya') {
         setActiveTab('berbagi');
       }
     }
   }, [isAdmin, activeTab, pendingSedekahList.length]);
+
+  // Riwayat Donasi Khusus Anggota yang Sedang Login
+  const memberDonasiList = currentMember
+    ? allSedekahList.filter(
+        (e) =>
+          e.donaturMemberId === currentMember.id ||
+          (e.donaturNama && currentMember.nama && e.donaturNama.trim().toLowerCase() === currentMember.nama.trim().toLowerCase()) ||
+          (currentMember.nomorAnggota && e.donaturNomorAnggota === currentMember.nomorAnggota)
+      )
+    : [];
+  const myPendingSedekahCount = memberDonasiList.filter((e) => e.status === 'pending').length;
+  const myApprovedSedekahTotal = memberDonasiList
+    .filter((e) => e.status === 'approved')
+    .reduce((s, e) => s + e.nominal, 0);
+
+  const [riwayatFilterStatus, setRiwayatFilterStatus] = useState<'semua' | 'pending' | 'approved' | 'rejected'>('semua');
+  const filteredMemberDonasi = memberDonasiList.filter((e) => {
+    if (riwayatFilterStatus === 'semua') return true;
+    return e.status === riwayatFilterStatus;
+  });
 
   // ================= STATE ANGGOTA / DONASI =================
   const [selectedJenis, setSelectedJenis] = useState<JenisSedekahBerbagi>('sedekah_subuh');
@@ -875,20 +897,41 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             </button>
           </div>
         ) : (
-          /* Header Banner Khusus Anggota */
-          <div className="p-3 bg-gradient-to-r from-rose-950/60 via-slate-900 to-amber-950/60 rounded-2xl border border-rose-500/40 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2.5">
-              <span className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
-                <Heart className="w-4 h-4 fill-rose-400" />
-              </span>
-              <div>
-                <div className="text-xs font-black text-white">Form Setor Sedekah Anggota</div>
-                <div className="text-[10px] text-rose-300">Metode QRIS & Transfer Bank Penampungan Koperasi</div>
-              </div>
-            </div>
-            <span className="text-[10px] font-extrabold bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2.5 py-1 rounded-xl">
-              Sosial Syariah
-            </span>
+          /* Tab Navigation Khusus Anggota: HANYA Donasi dan Riwayat Saya (Laporan & Penyaluran Ditiadakan) */
+          <div className="flex bg-[#162035] p-1 rounded-2xl border border-rose-500/30 text-xs font-bold shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('berbagi');
+                setDonasiSuccessEntry(null);
+              }}
+              className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                activeTab === 'berbagi'
+                  ? 'bg-gradient-to-r from-rose-500 to-rose-600 text-white font-black shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Heart className="w-3.5 h-3.5 fill-current" />
+              <span>Kirim Donasi / Berbagi</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('riwayat_saya')}
+              className={`flex-1 py-2 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer relative ${
+                activeTab === 'riwayat_saya'
+                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-black shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>Riwayat Donasi Saya</span>
+              {myPendingSedekahCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black animate-pulse">
+                  {myPendingSedekahCount}
+                </span>
+              )}
+            </button>
           </div>
         )}
 
@@ -1387,7 +1430,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </div>
               </div>
 
-              <div className="flex gap-2 justify-center pt-2">
+              <div className="flex flex-wrap gap-2 justify-center pt-2">
                 <button
                   type="button"
                   onClick={() => setDonasiSuccessEntry(null)}
@@ -1397,12 +1440,223 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </button>
                 <button
                   type="button"
+                  onClick={() => {
+                    setDonasiSuccessEntry(null);
+                    setActiveTab('riwayat_saya');
+                  }}
+                  className="py-2.5 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl cursor-pointer transition-all flex items-center gap-1.5 shadow"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  <span>Lihat Riwayat Donasi Saya</span>
+                </button>
+                <button
+                  type="button"
                   onClick={onClose}
                   className="py-2.5 px-5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-emerald-500/20 cursor-pointer transition-all"
                 >
                   Selesai & Tutup
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* ================= TAB KHUSUS ANGGOTA: RIWAYAT DONASI SAYA ================= */}
+          {!isAdmin && activeTab === 'riwayat_saya' && (
+            <div className="space-y-3.5 animate-in fade-in duration-150">
+              {/* Header Box Riwayat */}
+              <div className="p-3.5 bg-gradient-to-r from-amber-950/60 via-slate-900 to-slate-900 rounded-2xl border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
+                    <History className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black text-white">
+                      Riwayat Donasi Berbagi Saya
+                    </h4>
+                    <p className="text-[11px] text-amber-300/90">
+                      Total {memberDonasiList.length} transaksi donasi tercatat untuk akun Anda ({currentMember?.nama || 'Anggota'})
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('berbagi')}
+                    className="py-1.5 px-3 bg-rose-500 hover:bg-rose-400 text-white font-extrabold text-[11px] rounded-xl flex items-center gap-1.5 shadow transition-all cursor-pointer"
+                  >
+                    <Heart className="w-3.5 h-3.5 fill-current" />
+                    <span>+ Donasi Baru</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Ringkasan Akumulasi Donasi Anggota */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800">
+                  <span className="text-[10px] text-slate-400 font-semibold block">Total Donasi Terverifikasi</span>
+                  <div className="text-sm font-black text-emerald-400 mt-0.5 font-mono">
+                    {formatRupiah(myApprovedSedekahTotal)}
+                  </div>
+                  <span className="text-[9px] text-emerald-400/80">Resmi masuk ke Kas Koperasi</span>
+                </div>
+
+                <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800">
+                  <span className="text-[10px] text-slate-400 font-semibold block">Menunggu Konfirmasi</span>
+                  <div className="text-sm font-black text-amber-400 mt-0.5 font-mono">
+                    {myPendingSedekahCount} Transaksi
+                  </div>
+                  <span className="text-[9px] text-amber-300/80">Sedang ditinjau oleh Admin</span>
+                </div>
+
+                <div className="p-3 bg-slate-900/90 rounded-2xl border border-rose-500/30 col-span-2 sm:col-span-1">
+                  <span className="text-[10px] text-rose-300 font-semibold block">Saldo Siap Disalurkan</span>
+                  <div className="text-sm font-black text-white mt-0.5 font-mono">
+                    {formatRupiah(memberSaldoSedekah)}
+                  </div>
+                  <span className="text-[9px] text-rose-300/80">Alokasi berkah sosial Anda</span>
+                </div>
+              </div>
+
+              {/* Filter Status Donasi */}
+              <div className="flex items-center gap-1.5 bg-[#162035] p-1 rounded-xl border border-slate-800 text-xs overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setRiwayatFilterStatus('semua')}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-[11px] whitespace-nowrap transition-all cursor-pointer ${
+                    riwayatFilterStatus === 'semua'
+                      ? 'bg-slate-700 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Semua ({memberDonasiList.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRiwayatFilterStatus('pending')}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-[11px] whitespace-nowrap transition-all cursor-pointer ${
+                    riwayatFilterStatus === 'pending'
+                      ? 'bg-amber-500 text-slate-950 font-black shadow'
+                      : 'text-amber-400/80 hover:text-amber-300'
+                  }`}
+                >
+                  Pending ({myPendingSedekahCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRiwayatFilterStatus('approved')}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-[11px] whitespace-nowrap transition-all cursor-pointer ${
+                    riwayatFilterStatus === 'approved'
+                      ? 'bg-emerald-500 text-slate-950 font-black shadow'
+                      : 'text-emerald-400/80 hover:text-emerald-300'
+                  }`}
+                >
+                  Terverifikasi ({memberDonasiList.filter((e) => e.status === 'approved').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRiwayatFilterStatus('rejected')}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-[11px] whitespace-nowrap transition-all cursor-pointer ${
+                    riwayatFilterStatus === 'rejected'
+                      ? 'bg-red-500 text-white font-black shadow'
+                      : 'text-red-400/80 hover:text-red-300'
+                  }`}
+                >
+                  Ditolak ({memberDonasiList.filter((e) => e.status === 'rejected').length})
+                </button>
+              </div>
+
+              {/* Daftar Riwayat Donasi */}
+              {filteredMemberDonasi.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 bg-slate-900/60 rounded-2xl border border-slate-800 text-xs space-y-2">
+                  <div className="text-2xl">🤲</div>
+                  <div className="font-bold text-white">
+                    {riwayatFilterStatus === 'semua'
+                      ? 'Belum ada riwayat donasi berbagi yang diajukan.'
+                      : `Tidak ada riwayat donasi dengan status "${riwayatFilterStatus}".`}
+                  </div>
+                  <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                    Kirimkan donasi sedekah subuh, jumat berkah, atau sedekah umum secara mudah melalui transfer QRIS atau tabungan umum.
+                  </p>
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('berbagi')}
+                      className="py-2 px-4 bg-gradient-to-r from-rose-500 to-rose-600 hover:from-rose-400 hover:to-rose-500 text-white font-bold text-xs rounded-xl shadow cursor-pointer transition-all"
+                    >
+                      Mulai Donasi Sekarang
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredMemberDonasi.map((entry, idx) => (
+                    <div
+                      key={entry.id || idx}
+                      className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 hover:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-colors"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-extrabold text-[10px] border border-rose-500/30">
+                            {entry.namaBerbagiKustom || getJenisLabel(entry.jenis)}
+                          </span>
+                          {entry.status === 'approved' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Terverifikasi (Masuk Kas)
+                            </span>
+                          ) : entry.status === 'rejected' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 font-bold text-[10px] border border-red-500/30 flex items-center gap-1">
+                              <XCircle className="w-3 h-3" />
+                              Ditolak
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              Pending Konfirmasi Admin
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                          <span className="font-mono text-slate-300">{entry.tanggal} {entry.jam}</span>
+                          <span>•</span>
+                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Potong Tabungan Umum' : 'Transfer Bank / QRIS'}</b></span>
+                        </div>
+
+                        {entry.keterangan && (
+                          <div className="text-[11px] text-slate-300 italic bg-slate-800/60 p-1.5 rounded-lg border border-slate-700/50">
+                            "{entry.keterangan}"
+                          </div>
+                        )}
+
+                        {entry.catatanAdmin && (
+                          <div className="text-[11px] text-amber-300 bg-amber-950/40 p-1.5 rounded-lg border border-amber-500/30">
+                            Catatan Pengurus: {entry.catatanAdmin}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="sm:text-right flex sm:flex-col items-center sm:items-end justify-between gap-1.5 shrink-0 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-800">
+                        <div className="font-mono font-black text-emerald-400 text-sm sm:text-base">
+                          {formatRupiah(entry.nominal)}
+                        </div>
+                        {entry.buktiTransferUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewBukti(entry.buktiTransferUrl!)}
+                            className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-sky-400 hover:text-sky-300 rounded-lg text-[10px] font-bold border border-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>Lihat Bukti</span>
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 italic">Tanpa lampiran foto</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

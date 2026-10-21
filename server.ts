@@ -309,10 +309,13 @@ function mergeServerState(current: any, incoming: any): any {
     }
   });
 
-  // 5. Member Transactions (Mutasi Rekening)
-  const txMap = new Map<string, any>();
-  (current.memberTransactions || []).forEach((tx: any) => txMap.set(tx.id, tx));
-  (incoming.memberTransactions || []).forEach((tx: any) => txMap.set(tx.id, tx));
+  // 5. Member Transactions (Mutasi Rekening): if incoming.memberTransactions is provided as an array, use it directly so deletions and reset from 0 persist
+  let mergedTxList: any[];
+  if (Array.isArray(incoming.memberTransactions)) {
+    mergedTxList = incoming.memberTransactions;
+  } else {
+    mergedTxList = current.memberTransactions || [];
+  }
 
   // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
   let mergedKasList: any[];
@@ -384,7 +387,7 @@ function mergeServerState(current: any, incoming: any): any {
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
-    memberTransactions: Array.from(txMap.values()).sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
+    memberTransactions: mergedTxList.sort((a: any, b: any) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1)),
     kasList: mergedKasList.sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
@@ -650,15 +653,16 @@ async function startServer() {
 
       const dep = { ...currentState.setoranList[depIndex] };
 
-      // Match member by id, or rekening, or name
-      const targetMember = (currentState.members || []).find(
-        (m: any) =>
-          m.id === dep.memberId ||
-          m.nomorRekening === dep.memberRekening ||
-          m.nama.toLowerCase() === dep.memberNama.toLowerCase()
-      );
+      // Match member by id, or rekening, or name safely (case-insensitive & trimmed)
+      const targetMember = (currentState.members || []).find((m: any) => {
+        if (dep.memberId && m.id === dep.memberId) return true;
+        if (dep.memberRekening && m.nomorRekening && String(m.nomorRekening).trim().toLowerCase() === String(dep.memberRekening).trim().toLowerCase()) return true;
+        if (dep.memberNama && m.nama && String(m.nama).trim().toLowerCase() === String(dep.memberNama).trim().toLowerCase()) return true;
+        if (dep.memberNomorAnggota && m.nomorAnggota && String(m.nomorAnggota).trim().toLowerCase() === String(dep.memberNomorAnggota).trim().toLowerCase()) return true;
+        return false;
+      });
       if (!targetMember) {
-        return res.status(404).json({ error: 'Anggota pemilik setoran tidak ditemukan' });
+        return res.status(404).json({ error: 'Anggota pemilik setoran tidak ditemukan di database server' });
       }
 
       const now = new Date();
@@ -708,6 +712,10 @@ async function startServer() {
           targetMember.saldoPokok = (Number(targetMember.saldoPokok) || 0) + pokokNominal;
           targetMember.saldoZakatFitrah = (Number(targetMember.saldoZakatFitrah) || 0) + zakatNominal;
           targetMember.saldoQurban = (Number(targetMember.saldoQurban) || 0) + qurbanNominal;
+          targetMember.totalSimpanan = (Number(targetMember.saldoPokok) || 0) +
+            (Number(targetMember.saldoUmum) || 0) +
+            (Number(targetMember.saldoZakatFitrah) || 0) +
+            (Number(targetMember.saldoQurban) || 0);
 
           currentState.memberTransactions = currentState.memberTransactions || [];
           currentState.memberTransactions.unshift({
@@ -775,6 +783,10 @@ async function startServer() {
         } else {
           // Tabungan Umum Bebas
           targetMember.saldoUmum = (Number(targetMember.saldoUmum) || 0) + dep.nominal;
+          targetMember.totalSimpanan = (Number(targetMember.saldoPokok) || 0) +
+            (Number(targetMember.saldoUmum) || 0) +
+            (Number(targetMember.saldoZakatFitrah) || 0) +
+            (Number(targetMember.saldoQurban) || 0);
 
           currentState.memberTransactions = currentState.memberTransactions || [];
           currentState.memberTransactions.unshift({
@@ -836,6 +848,7 @@ async function startServer() {
                 saldoZakatFitrah: targetMember.saldoZakatFitrah,
                 saldoQurban: targetMember.saldoQurban,
                 saldoUmum: targetMember.saldoUmum,
+                totalSimpanan: targetMember.totalSimpanan,
               }
             : m
         );
@@ -1392,6 +1405,12 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus transaksi: ' + err.message });
     }
+  });
+
+  // Alias endpoint for member transactions delete
+  app.post('/api/member-transactions/delete', (req: Request, res: Response) => {
+    // Forward request payload directly
+    (req.app as any)._router.handle({ ...req, url: '/api/transactions/delete-selective', originalUrl: '/api/transactions/delete-selective' }, res);
   });
 
   // Endpoint: Hapus 1 Mutasi / Transaksi Anggota Secara Satuan (Khusus Super Admin)

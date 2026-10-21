@@ -371,10 +371,13 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  // 5. Member Transactions (Mutasi Rekening)
-  const txMap = new Map<string, MemberTransaction>();
-  (base.memberTransactions || []).forEach((tx) => txMap.set(tx.id, tx));
-  (incoming.memberTransactions || []).forEach((tx) => txMap.set(tx.id, tx));
+  // 5. Member Transactions (Mutasi Rekening): if incoming.memberTransactions is provided as an array, use it directly so deletions and reset from 0 persist
+  let mergedTxList: MemberTransaction[];
+  if (Array.isArray(incoming.memberTransactions)) {
+    mergedTxList = incoming.memberTransactions;
+  } else {
+    mergedTxList = base.memberTransactions || [];
+  }
 
   // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
   let mergedKasList: KasEntry[];
@@ -455,7 +458,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     setoranList: Array.from(setoranMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
-    memberTransactions: Array.from(txMap.values()).sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
+    memberTransactions: mergedTxList.sort((a, b) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1)),
     kasList: mergedKasList.sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),

@@ -9,7 +9,7 @@ import { MemberUser, AdminUser } from './types';
 import { LoginView } from './components/LoginView';
 import { MemberDashboard } from './components/MemberDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
-import { auth, db } from './lib/firebase';
+import { auth, db } from './lib/firebase-init';
 import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 

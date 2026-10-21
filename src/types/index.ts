@@ -174,6 +174,7 @@ export interface SetoranVerifikasi {
   memberId: string;
   memberNama: string;
   memberRekening: string;
+  memberNomorAnggota?: string;
   memberWilayah: WilayahKoperasi;
   jenis: JenisSetoran;
   jumlahHari?: number; // untuk setoran kewajiban
@@ -317,6 +318,7 @@ export interface SedekahBerbagiEntry {
   donaturWilayah?: string; // wilayah anggota / donatur
   donaturMemberId?: string;
   donaturRekening?: string;
+  donaturNomorAnggota?: string;
   buktiTransferUrl?: string; // foto / bukti transfer jpg
   penerimaManfaat?: string; // pihak penerima manfaat saat disalurkan oleh admin
   keterangan: string;
@@ -326,6 +328,7 @@ export interface SedekahBerbagiEntry {
   verifiedBy?: string;
   verifiedAt?: string;
   rejectionReason?: string;
+  catatanAdmin?: string;
   createdAt: string;
 }
 
