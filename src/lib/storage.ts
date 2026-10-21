@@ -610,19 +610,11 @@ export function useKoperasiState() {
                   localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
                 } catch {}
                 notifyListeners();
-
-                // Audio & Push Notification for new chat
-                playNotificationSound('chat');
-                const title = msg.senderType === 'member'
-                  ? `💬 Chat dari ${msg.senderNama}`
-                  : '💬 Balasan dari Pengurus Koperasi';
-                triggerBrowserNotification(title, msg.pesan || 'Anda memiliki pesan baru');
-                window.dispatchEvent(new CustomEvent('hws:new_chat', { detail: msg }));
               }
             } else if (data.type === 'MEMBER_NOTIFICATION') {
               const notif = data.payload;
               if (notif) {
-                if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru' || notif.type === 'deposit_submission') {
+                if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru') {
                   playNotificationSound('deposit');
                 } else {
                   playNotificationSound('chat');

@@ -72,30 +72,9 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Auto fallback if selectedMemberId is empty
-  useEffect(() => {
-    if (!isMember && !selectedMemberId && state.members.length > 0) {
-      setSelectedMemberId(state.members[0].id);
-    }
-  }, [isMember, selectedMemberId, state.members]);
-
-  // Group messages by member & track online status across all members & chats
-  const memberMap = new Map<string, any>();
-  state.members.forEach((m) => memberMap.set(m.id, m));
-  state.chatMessages.forEach((c) => {
-    if (c.memberId && !memberMap.has(c.memberId)) {
-      memberMap.set(c.memberId, {
-        id: c.memberId,
-        nama: c.senderType === 'member' ? c.senderNama : 'Anggota #' + c.memberId.slice(-4),
-        nomorRekening: '-',
-        nomorAnggota: '-',
-        wilayah: 'Online',
-      });
-    }
-  });
-
-  const memberListWithLastMsg = Array.from(memberMap.values()).map((mem) => {
-    const memMsgs = state.chatMessages.filter((m) => String(m.memberId) === String(mem.id));
+  // Group messages by member & track online status
+  const memberListWithLastMsg = state.members.map((mem) => {
+    const memMsgs = state.chatMessages.filter((m) => m.memberId === mem.id);
     const lastMsg = memMsgs[memMsgs.length - 1];
     const unreadCount = memMsgs.filter((m) => m.senderType === 'member' && !m.isReadByAdmin).length;
     const isOnline = onlineUserIds.has(mem.id);
@@ -116,12 +95,10 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   });
 
   // Active member object
-  const activeMember = memberMap.get(selectedMemberId) || state.members.find((m) => m.id === selectedMemberId);
+  const activeMember = state.members.find((m) => m.id === selectedMemberId);
 
   // Current active conversation messages
-  const activeMessages = state.chatMessages.filter(
-    (m) => String(m.memberId) === String(selectedMemberId)
-  );
+  const activeMessages = state.chatMessages.filter((m) => m.memberId === selectedMemberId);
 
   // Scroll to bottom on message change
   useEffect(() => {
@@ -140,7 +117,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       updateState((prev) => ({
         ...prev,
         chatMessages: prev.chatMessages.map((m) => {
-          if (String(m.memberId) === String(selectedMemberId)) {
+          if (m.memberId === selectedMemberId) {
             return {
               ...m,
               isReadByAdmin: isMember ? m.isReadByAdmin : true,
@@ -153,18 +130,17 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     }
   }, [selectedMemberId, activeMessages.length, isMember]);
 
-  // Send message with Real-time push notification & sync
-  const handleSendMessage = async (e?: React.FormEvent, customText?: string) => {
-    if (e) e.preventDefault();
-    const textToSend = (customText || inputPesan).trim();
-    if (!textToSend || !selectedMemberId) return;
+  // Send message
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputPesan.trim()) return;
 
     const newMsg: ChatMessage = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       memberId: selectedMemberId,
       senderType: isMember ? 'member' : 'admin',
-      senderNama: isMember ? (currentMember?.nama || 'Anggota') : (currentAdmin?.nama || 'Pengurus Koperasi HWS'),
-      pesan: textToSend,
+      senderNama: isMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus',
+      pesan: inputPesan.trim(),
       timestamp: new Date().toISOString(),
       isReadByAdmin: !isMember,
       isReadByMember: isMember,
@@ -172,7 +148,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
     setInputPesan('');
 
-    // 1. Post to Server Endpoint
+    // Also notify server endpoint
     try {
       fetch('/api/chat', {
         method: 'POST',
@@ -181,30 +157,6 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       });
     } catch {}
 
-    // 2. Realtime Push Notification via FCM / Server
-    try {
-      const { sendRealtimeNotification } = await import('../lib/fcm');
-      sendRealtimeNotification({
-        recipientId: isMember ? 'admin' : selectedMemberId,
-        recipientNama: isMember ? 'Pengurus Koperasi' : (activeMember?.nama || 'Anggota'),
-        title: isMember ? `💬 Pesan Baru dari ${currentMember?.nama}` : '💬 Balasan dari Pengurus Koperasi HWS',
-        body: textToSend,
-        type: 'info',
-        data: { memberId: selectedMemberId, messageId: newMsg.id },
-      }).catch(() => {});
-    } catch {}
-
-    // 3. Mirror directly to Firestore for realtime cross-device sync
-    try {
-      const { db } = await import('../lib/firebase-init');
-      const { collection, addDoc, serverTimestamp } = await import('firebase/firestore');
-      addDoc(collection(db, 'chat_messages'), {
-        ...newMsg,
-        createdAt: serverTimestamp(),
-      }).catch(() => {});
-    } catch {}
-
-    // 4. Update AppState locally
     await updateState((prev) => ({
       ...prev,
       chatMessages: [...prev.chatMessages, newMsg],
@@ -421,33 +373,6 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           <div ref={chatBottomRef} />
         </div>
 
-        {/* Quick Suggestion Chips */}
-        <div className="px-3 py-1.5 bg-[#121a2c] border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto shrink-0">
-          <span className="text-[10px] text-slate-400 shrink-0 font-medium">Cepat:</span>
-          {(isMember
-            ? [
-                'Konfirmasi setoran saya',
-                'Berapa saldo simpanan saya?',
-                'Informasi qurban & zakat',
-                'Halo pengurus, mohon bantuannya',
-              ]
-            : [
-                'Setoran Anda sudah kami verifikasi.',
-                'Terima kasih telah bertransaksi.',
-                'Mohon kirimkan bukti transfer yang jelas.',
-              ]
-          ).map((chip, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => handleSendMessage(undefined, chip)}
-              className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 text-[10px] font-medium border border-slate-700/80 shrink-0 transition-colors cursor-pointer"
-            >
-              {chip}
-            </button>
-          ))}
-        </div>
-
         {/* Message Input Box */}
         <form onSubmit={handleSendMessage} className="p-3 bg-[#162035] border-t border-slate-700 flex gap-2">
           <input
@@ -460,7 +385,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           />
           <button
             type="submit"
-            className="py-2 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 shrink-0 cursor-pointer"
+            className="py-2 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 shrink-0"
           >
             <Send className="w-3.5 h-3.5" />
             Kirim

@@ -2135,6 +2135,38 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 Kelola Pengurus & Sistem (Super Admin)
               </div>
 
+              {/* SINKRONISASI REALTIME KE AI STUDIO (HANYA SUPER ADMIN - REQ USER) */}
+              <div className="p-3 bg-gradient-to-r from-sky-950/80 via-blue-950/70 to-indigo-950/80 rounded-2xl border-2 border-sky-400/60 shadow-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-sky-500 text-slate-950">
+                      <Zap className="w-4 h-4 fill-slate-950" />
+                    </span>
+                    <div>
+                      <div className="font-black text-white text-xs">Sinkronisasi Database AI Studio</div>
+                      <div className="text-[10px] text-sky-300">Firestore Cloud: ai-studio-koperasihimpunan</div>
+                    </div>
+                  </div>
+                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-mono font-bold border border-sky-500/30">
+                    Realtime Sync
+                  </span>
+                </div>
+                {syncAiStudioMsg && (
+                  <div className="p-2 bg-emerald-950/80 border border-emerald-500/40 rounded-xl text-emerald-300 text-[11px] font-bold">
+                    {syncAiStudioMsg}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSyncToAiStudio}
+                  disabled={isSyncingAiStudio}
+                  className="w-full py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-slate-950 font-black text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAiStudio ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingAiStudio ? 'Menyelaraskan ke AI Studio...' : '🔄 Sinkronkan Database dengan AI Studio Sekarang'}</span>
+                </button>
+              </div>
+
               {/* HAPUS TRANSAKSI ANGGOTA (HANYA SUPER ADMIN - PILIH WILAYAH / ANGGOTA, PASSWORD ADMIN & PERSETUJUAN) */}
               <button
                 type="button"

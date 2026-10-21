@@ -190,17 +190,11 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
     const validPasswords = new Set([
       currentAdmin.password,
       ...superAdmins.map((a) => a.password),
-      ...state.admins.map((a) => a.password),
       'Abieza88',
       'admin123',
-      'superadmin',
-      'admin',
-    ].filter(Boolean).map((p) => String(p).trim()));
+    ].filter(Boolean));
 
-    const entered = (adminPassword || '').trim();
-    const isAuthorized = validPasswords.has(entered) || (currentAdmin.role === 'super_admin' && (entered === (currentAdmin.password || '').trim() || entered === 'Abieza88' || entered === 'admin123' || !entered));
-
-    if (!isAuthorized) {
+    if (!adminPassword || !validPasswords.has(adminPassword)) {
       setErrorMessage('Kata sandi Super Admin salah! Penghapusan transaksi anggota dibatalkan demi keamanan.');
       return;
     }

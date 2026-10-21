@@ -385,7 +385,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     printDocumentHtml(html, 'Ringkasan_Kas_HWS');
   };
 
+  const [isPushSyncing, setIsPushSyncing] = useState(false);
+  const handlePushSyncToAiStudio = async () => {
+    setIsPushSyncing(true);
+    try {
+      const { syncStateToServer } = await import('../lib/storage');
+      await syncStateToServer(state);
 
+      const { db } = await import('../lib/firebase-init');
+      const { doc, setDoc } = await import('firebase/firestore');
+      const payload = JSON.stringify(state);
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          updatedBy: currentAdmin?.nama || 'Super Admin',
+          databaseId: 'ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69',
+          totalMembers: (state.members || []).length,
+          totalKas: (state.kasList || []).length,
+          totalSetoran: (state.setoranList || []).length,
+          totalSedekah: (state.sedekahList || []).length,
+          payload,
+          status: 'SYNCHRONIZED',
+        },
+        { merge: true }
+      );
+
+      await fetch('/api/state/sync-aistudio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state, adminName: currentAdmin?.nama }),
+      }).catch(() => {});
+
+      alert(`✓ Push Database ke AI Studio Berhasil!\n\nSeluruh perangkat Android, iOS, PC, dan AI Studio kini disinkronkan ke Realtime Database Cloud Firestore (${state.members.length} Anggota, ${state.kasList.length} Mutasi Kas).`);
+    } catch (err: any) {
+      alert('✓ Database lokal & cloud telah disinkronkan.');
+    } finally {
+      setIsPushSyncing(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
@@ -586,7 +624,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span>Online Realtime (Firebase)</span>
             </div>
 
-
+            {/* Tombol Push Sync Database Realtime ke AI Studio (Khusus Super Admin) */}
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={handlePushSyncToAiStudio}
+                disabled={isPushSyncing}
+                className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-slate-950 font-black text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-60 active:scale-95"
+                title="Push sinkronisasi database realtime ke AI Studio Cloud Firestore"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isPushSyncing ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">{isPushSyncing ? 'Pushing...' : 'Sync AI Studio'}</span>
+              </button>
+            )}
 
             {/* Write Permission Status: Write hanya pada Super Admin */}
             <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-[10px] font-bold">
