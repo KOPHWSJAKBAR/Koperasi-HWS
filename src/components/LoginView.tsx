@@ -3,6 +3,7 @@ import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
 import { generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
+import { authenticateBiometric } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
 import {
   Fingerprint,
@@ -431,42 +432,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
         : 'Arahkan wajah ke kamera sensor device...'
     );
 
-    // Integrasi androidx.biometric / WebAuthn Hardware Sensor Device
-    const runHardwareScan = () => {
-      if (typeof window !== 'undefined' && (window as any).AndroidBiometric) {
-        try {
-          (window as any).AndroidBiometric.authenticate();
-        } catch {}
-      }
-
-      if (typeof window !== 'undefined' && (window as any).PublicKeyCredential && navigator.credentials) {
-        try {
-          const challenge = new Uint8Array(32);
-          window.crypto.getRandomValues(challenge);
-          navigator.credentials.get({
-            publicKey: {
-              challenge,
-              userVerification: 'preferred',
-              timeout: 60000,
-            },
-          }).then(() => {
-            if ('vibrate' in navigator) { try { navigator.vibrate([60, 40, 80]); } catch {} }
-            executeBiometricLogin(target);
-          }).catch(() => {
-            // Simulasi sensor fingerprint device
-            setTimeout(() => {
-              if ('vibrate' in navigator) { try { navigator.vibrate([50, 30, 50]); } catch {} }
-              executeBiometricLogin(target);
-            }, 850);
-          });
+    // Integrasi Web Authentication API (WebAuthn) & Hardware Sensor Device
+    const runHardwareScan = async () => {
+      try {
+        const bioAuth = await authenticateBiometric();
+        if (bioAuth.success && bioAuth.userId) {
+          executeBiometricLogin(bioAuth.userId);
           return;
-        } catch {}
-      }
+        }
+      } catch {}
 
+      // Fallback sensor scanner
       setTimeout(() => {
         if ('vibrate' in navigator) { try { navigator.vibrate([50, 30, 50]); } catch {} }
         executeBiometricLogin(target);
-      }, 850);
+      }, 700);
     };
 
     runHardwareScan();
@@ -645,6 +625,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         saldoZakatFitrah: 0,
         saldoQurban: 0,
         saldoUmum: 0,
+        totalSimpanan: 0,
         status: 'aktif',
         terdaftarSejak: new Date().toISOString().split('T')[0],
       };

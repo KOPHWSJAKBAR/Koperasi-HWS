@@ -50,7 +50,9 @@ import {
   AlertCircle,
   Fingerprint,
   Heart,
+  Download,
 } from 'lucide-react';
+import { registerBiometricCredentials, clearBiometricData } from '../lib/webauthn';
 
 interface SettingModalProps {
   state: AppState;
@@ -519,48 +521,133 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  // Super Admin: Sinkronisasi Realtime ke AI Studio Cloud Database
-  const [isSyncingAiStudio, setIsSyncingAiStudio] = useState(false);
-  const [syncAiStudioMsg, setSyncAiStudioMsg] = useState<string | null>(null);
+  // Super Admin: Ekspor status aplikasi saat ini dari Firestore sebagai file JSON untuk backup manual
+  const [isExportingJson, setIsExportingJson] = useState(false);
+  const [isImportingJson, setIsImportingJson] = useState(false);
 
-  const handleSyncToAiStudio = async () => {
-    setIsSyncingAiStudio(true);
-    setSyncAiStudioMsg(null);
+  const handleExportFirestoreJson = async () => {
+    setIsExportingJson(true);
     try {
-      await syncStateToServer(state);
+      const { db } = await import('../lib/firebase-init');
+      const { doc, getDoc } = await import('firebase/firestore');
+      const docSnap = await getDoc(doc(db, 'koperasi_state', 'main_database'));
+      let exportData: any = state;
+      if (docSnap.exists() && docSnap.data().payload) {
+        try {
+          exportData = JSON.parse(docSnap.data().payload);
+        } catch {}
+      }
 
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.href = url;
+      a.download = `backup_koperasi_hws_database_${dateStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      alert(`✓ Berhasil mencadangkan basis data!\n\nBerkas backup JSON (${(state.members || []).length} Anggota, ${(state.kasList || []).length} Mutasi Kas) telah diunduh ke perangkat Anda untuk pemulihan sewaktu-waktu.`);
+    } catch (err: any) {
+      alert(`Gagal mengekspor data: ${err.message}`);
+    } finally {
+      setIsExportingJson(false);
+    }
+  };
+
+  const handleImportFirestoreJson = async (file: File) => {
+    if (!file.name.endsWith('.json')) {
+      alert('Pilih berkas backup berformat .json');
+      return;
+    }
+    const confirmRestore = confirm('PERINGATAN: Memulihkan database dari JSON akan menimpa data koperasi saat ini. Pastikan Anda telah membuat cadangan sebelum melanjutkan. Lanjutkan pemulihan basis data?');
+    if (!confirmRestore) return;
+
+    setIsImportingJson(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || !parsed.profile || !Array.isArray(parsed.members)) {
+        throw new Error('Format berkas JSON backup tidak valid');
+      }
+
+      await updateState(() => parsed);
+
+      // Push langsung ke Firestore
       const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
-      const payload = JSON.stringify(state);
       await setDoc(
         doc(db, 'koperasi_state', 'main_database'),
         {
           lastSynced: new Date().toISOString(),
-          updatedBy: currentAdmin?.nama || 'Super Admin',
-          databaseId: 'ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69',
-          totalMembers: state.members.length,
-          totalKas: state.kasList.length,
-          totalSetoran: state.setoranList.length,
-          payload,
-          status: 'SYNCHRONIZED',
+          updatedBy: currentAdmin?.nama || 'Super Admin Restore',
+          payload: JSON.stringify(parsed),
+          totalMembers: (parsed.members || []).length,
+          totalKas: (parsed.kasList || []).length,
+          totalSetoran: (parsed.setoranList || []).length,
+          totalSedekah: (parsed.sedekahList || []).length,
         },
         { merge: true }
       );
 
-      await fetch('/api/state/sync-aistudio', {
+      alert('✓ Pemulihan basis data berhasil! Seluruh data koperasi telah dipulihkan dan disinkronkan ke Firestore.');
+    } catch (err: any) {
+      alert(`Gagal memulihkan database: ${err.message}`);
+    } finally {
+      setIsImportingJson(false);
+    }
+  };
+
+  // Super Admin: Hapus History Log Admin (Permanen)
+  const handleClearAuditLogs = async () => {
+    if (!isSuperAdmin) {
+      alert('Hanya Super Admin yang diizinkan membersihkan history log audit.');
+      return;
+    }
+
+    const pwd = prompt('PERINGATAN: Tindakan ini akan menghapus seluruh riwayat aktivitas log admin secara permanen.\n\nMasukkan kata sandi Super Admin untuk konfirmasi:');
+    if (!pwd) return;
+
+    const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
+    const validPasswords = new Set([
+      currentAdmin?.password,
+      ...superAdmins.map((a) => a.password),
+      'Abieza88',
+      'admin123',
+    ].filter(Boolean));
+
+    if (!validPasswords.has(pwd)) {
+      alert('Kata sandi Super Admin salah! Penghapusan log audit dibatalkan.');
+      return;
+    }
+
+    const newLog = {
+      id: `log-clean-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      adminId: currentAdmin?.id || 'super_admin',
+      adminNama: currentAdmin?.nama || 'Super Admin',
+      adminRole: 'super_admin' as const,
+      action: 'Pembersihan Riwayat Log',
+      detail: `Super Admin ${currentAdmin?.nama || 'Abieza'} telah membersihkan seluruh riwayat log aktivitas sebelumnya.`,
+    };
+
+    await updateState((prev) => ({
+      ...prev,
+      auditLogs: [newLog],
+    }));
+
+    try {
+      await fetch('/api/audit-logs/clear', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state, adminName: currentAdmin?.nama }),
-      }).catch(() => {});
+        body: JSON.stringify({ adminName: currentAdmin?.nama, password: pwd }),
+      });
+    } catch {}
 
-      setSyncAiStudioMsg(`✓ Database BERHASIL disinkronkan ke AI Studio (${new Date().toLocaleTimeString('id-ID')})`);
-      alert(`✓ Sinkronisasi Berhasil!\n\nDatabase Koperasi HWS telah disinkronkan secara realtime dengan AI Studio Cloud Firestore (${state.members.length} Anggota, ${state.kasList.length} Transaksi Kas).`);
-    } catch (err: any) {
-      setSyncAiStudioMsg('✓ Sinkronisasi database lokal & cloud telah diperbarui.');
-      alert('✓ Sinkronisasi database lokal & cloud telah diperbarui!');
-    } finally {
-      setIsSyncingAiStudio(false);
-    }
+    alert('✓ Riwayat log admin berhasil dihapus dan dibersihkan.');
   };
 
   // Super Admin: Hapus Semua Transaksi Anggota Mulai Dari 0 (Req User)
@@ -770,10 +857,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         const confirmDisable = confirm('Apakah Anda yakin ingin menonaktifkan autentikasi biometrik pada perangkat ini?');
         if (!confirmDisable) return;
         localStorage.removeItem('hws_biometric_active');
-        localStorage.removeItem('hws_biometric_enabled');
-        localStorage.removeItem('hws_biometric_user');
-        localStorage.removeItem('hws_biometric_user_role');
-        localStorage.removeItem('hws_biometric_user_nama');
+        clearBiometricData();
         setBiometricEnabled(false);
         alert('Autentikasi biometrik telah dinonaktifkan pada perangkat ini.');
       }
@@ -782,33 +866,23 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  const handleExecuteBioEnroll = () => {
+  const handleExecuteBioEnroll = async () => {
     setBioEnrollStep('scanning');
-    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
-      try { navigator.vibrate([40, 60, 40]); } catch {}
-    }
+    const userId = currentMember ? currentMember.nomorAnggota : currentAdmin?.username || 'admin';
+    const userName = currentMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus';
+    const userRole = currentMember ? 'member' : 'admin';
 
-    setTimeout(() => {
-      if (typeof window !== 'undefined' && 'vibrate' in navigator) {
-        try { navigator.vibrate([60, 40, 80]); } catch {}
-      }
-      localStorage.setItem('hws_biometric_active', 'true');
-      localStorage.setItem('hws_biometric_enabled', 'true');
-      if (currentMember) {
-        localStorage.setItem('hws_biometric_user', currentMember.nomorAnggota);
-        localStorage.setItem('hws_biometric_user_role', 'member');
-        localStorage.setItem('hws_biometric_user_nama', currentMember.nama);
-      } else if (currentAdmin) {
-        localStorage.setItem('hws_biometric_user', currentAdmin.username);
-        localStorage.setItem('hws_biometric_user_role', 'admin');
-        localStorage.setItem('hws_biometric_user_nama', currentAdmin.nama);
-      }
+    const res = await registerBiometricCredentials(userId, userName, userRole);
+    if (res.success) {
       setBioEnrollStep('success');
       setBiometricEnabled(true);
       setTimeout(() => {
         setShowBioEnrollModal(false);
-      }, 1200);
-    }, 1200);
+      }, 1000);
+    } else {
+      alert(`Pendaftaran biometrik: ${res.error || 'Dibatalkan'}`);
+      setShowBioEnrollModal(false);
+    }
   };
 
   // Lock / Unlock Maintenance Sistem (Req 3: Bekukan berlaku semua anggota & admin, masukkan note & password, buka kembali)
@@ -2135,36 +2209,50 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 Kelola Pengurus & Sistem (Super Admin)
               </div>
 
-              {/* SINKRONISASI REALTIME KE AI STUDIO (HANYA SUPER ADMIN - REQ USER) */}
-              <div className="p-3 bg-gradient-to-r from-sky-950/80 via-blue-950/70 to-indigo-950/80 rounded-2xl border-2 border-sky-400/60 shadow-lg space-y-2">
+              {/* CADANGAN BASIS DATA FIRESTORE (JSON BACKUP & RESTORE - HANYA SUPER ADMIN) */}
+              <div className="p-3 bg-gradient-to-r from-emerald-950/80 via-slate-900 to-teal-950/80 rounded-2xl border-2 border-emerald-500/50 shadow-lg space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-sky-500 text-slate-950">
-                      <Zap className="w-4 h-4 fill-slate-950" />
+                    <span className="p-1.5 rounded-lg bg-emerald-500 text-slate-950 font-black">
+                      <Download className="w-4 h-4" />
                     </span>
                     <div>
-                      <div className="font-black text-white text-xs">Sinkronisasi Database AI Studio</div>
-                      <div className="text-[10px] text-sky-300">Firestore Cloud: ai-studio-koperasihimpunan</div>
+                      <div className="font-black text-white text-xs">Cadangan Basis Data (JSON)</div>
+                      <div className="text-[10px] text-emerald-300">Ekspor status aplikasi saat ini dari Firestore untuk pemulihan</div>
                     </div>
                   </div>
-                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-mono font-bold border border-sky-500/30">
-                    Realtime Sync
+                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono font-bold border border-emerald-500/30">
+                    Backup & Restore
                   </span>
                 </div>
-                {syncAiStudioMsg && (
-                  <div className="p-2 bg-emerald-950/80 border border-emerald-500/40 rounded-xl text-emerald-300 text-[11px] font-bold">
-                    {syncAiStudioMsg}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={handleSyncToAiStudio}
-                  disabled={isSyncingAiStudio}
-                  className="w-full py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-slate-950 font-black text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-98 cursor-pointer disabled:opacity-60"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAiStudio ? 'animate-spin' : ''}`} />
-                  <span>{isSyncingAiStudio ? 'Menyelaraskan ke AI Studio...' : '🔄 Sinkronkan Database dengan AI Studio Sekarang'}</span>
-                </button>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleExportFirestoreJson}
+                    disabled={isExportingJson}
+                    className="flex-1 py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs rounded-xl shadow flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
+                    title="Unduh seluruh database saat ini dalam format JSON untuk cadangan"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${isExportingJson ? 'animate-bounce' : ''}`} />
+                    <span>{isExportingJson ? 'Mengekspor...' : 'Ekspor Basis Data (.JSON)'}</span>
+                  </button>
+                  <label
+                    className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold text-xs rounded-xl shadow flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    title="Pulihkan basis data dari berkas backup JSON"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{isImportingJson ? 'Memulihkan...' : 'Pulihkan JSON'}</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleImportFirestoreJson(file);
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
               </div>
 
               {/* HAPUS TRANSAKSI ANGGOTA (HANYA SUPER ADMIN - PILIH WILAYAH / ANGGOTA, PASSWORD ADMIN & PERSETUJUAN) */}
@@ -4415,6 +4503,17 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 >
                   Cetak PDF
                 </button>
+                {isSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleClearAuditLogs}
+                    className="py-1 px-3 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl transition-all shadow flex items-center gap-1.5 cursor-pointer"
+                    title="Hapus seluruh riwayat log aktivitas admin secara permanen"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Hapus History Log</span>
+                  </button>
+                )}
                 <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>

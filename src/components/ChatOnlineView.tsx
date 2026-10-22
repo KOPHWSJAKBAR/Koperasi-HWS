@@ -21,6 +21,7 @@ import {
   Paperclip,
   Wifi,
   ArrowLeft,
+  X,
 } from 'lucide-react';
 
 interface ChatOnlineViewProps {
@@ -43,7 +44,32 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   const [mobileChatOpen, setMobileChatOpen] = useState(isMember ? true : false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [inputPesan, setInputPesan] = useState('');
+  const [lampiranUrl, setLampiranUrl] = useState<string>('');
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Auto select first member for admin if none selected
+  useEffect(() => {
+    if (!isMember) {
+      if (!selectedMemberId || !state.members.some((m) => m.id === selectedMemberId)) {
+        if (state.members.length > 0) {
+          setSelectedMemberId(state.members[0].id);
+        }
+      }
+    }
+  }, [isMember, selectedMemberId, state.members]);
+
+  const handleUploadLampiran = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('Hanya berkas gambar (JPG, PNG, WEBP) yang didukung untuk lampiran chat.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setLampiranUrl(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Online Presence Polling (Req 19: chat admin tampilkan anggota online yang sedang membuka aplikasi)
   useEffect(() => {
@@ -133,20 +159,22 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   // Send message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputPesan.trim()) return;
+    if (!inputPesan.trim() && !lampiranUrl) return;
 
     const newMsg: ChatMessage = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       memberId: selectedMemberId,
       senderType: isMember ? 'member' : 'admin',
       senderNama: isMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus',
-      pesan: inputPesan.trim(),
+      pesan: inputPesan.trim() || (lampiranUrl ? '📷 [Lampiran Gambar]' : ''),
+      lampiranUrl: lampiranUrl || undefined,
       timestamp: new Date().toISOString(),
       isReadByAdmin: !isMember,
       isReadByMember: isMember,
     };
 
     setInputPesan('');
+    setLampiranUrl('');
 
     // Also notify server endpoint
     try {
@@ -350,6 +378,14 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                     {msg.senderNama}
                   </div>
                   <p className="whitespace-pre-line leading-relaxed">{msg.pesan}</p>
+                  {msg.lampiranUrl && (
+                    <div
+                      className="mt-1.5 mb-1 max-w-[200px] rounded-xl overflow-hidden cursor-pointer border border-slate-700/60 shadow hover:opacity-90 transition-opacity"
+                      onClick={() => setPreviewImage(msg.lampiranUrl!)}
+                    >
+                      <img src={msg.lampiranUrl} alt="Lampiran Foto" className="w-full max-h-40 object-cover" />
+                    </div>
+                  )}
                   <div
                     className={`text-[9px] mt-1 text-right flex items-center justify-end gap-1 ${
                       isMe ? 'text-slate-800' : 'text-slate-400'
@@ -373,11 +409,42 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           <div ref={chatBottomRef} />
         </div>
 
+        {/* Attachment preview banner */}
+        {lampiranUrl && (
+          <div className="px-3 py-1.5 bg-[#141d30] border-t border-slate-700 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <img src={lampiranUrl} alt="Pratinjau" className="w-9 h-9 object-cover rounded-lg border border-amber-500/40" />
+              <span className="text-[11px] text-amber-300 font-bold">1 Lampiran Foto Terpilih</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLampiranUrl('')}
+              className="text-slate-400 hover:text-white text-xs cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Message Input Box */}
-        <form onSubmit={handleSendMessage} className="p-3 bg-[#162035] border-t border-slate-700 flex gap-2">
+        <form onSubmit={handleSendMessage} className="p-3 bg-[#162035] border-t border-slate-700 flex items-center gap-2">
+          <label
+            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer transition-colors flex items-center justify-center shrink-0 border border-slate-700"
+            title="Kirim Foto / Lampiran"
+          >
+            <Paperclip className="w-4 h-4 text-amber-400" />
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleUploadLampiran(f);
+              }}
+              className="hidden"
+            />
+          </label>
           <input
             type="text"
-            required
             value={inputPesan}
             onChange={(e) => setInputPesan(e.target.value)}
             placeholder="Ketik pesan Anda..."
@@ -385,12 +452,31 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           />
           <button
             type="submit"
-            className="py-2 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 shrink-0"
+            className="py-2 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 shrink-0 cursor-pointer"
           >
             <Send className="w-3.5 h-3.5" />
             Kirim
           </button>
         </form>
+
+        {/* Image Preview Modal */}
+        {previewImage && (
+          <div
+            className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setPreviewImage(null)}
+          >
+            <div className="relative max-w-2xl max-h-[85vh] bg-[#0f172a] rounded-2xl overflow-hidden border border-slate-700 p-2 shadow-2xl">
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="absolute top-3 right-3 p-1.5 bg-black/70 hover:bg-black rounded-full text-white cursor-pointer z-10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <img src={previewImage} alt="Lampiran Penuh" className="max-w-full max-h-[80vh] object-contain rounded-xl mx-auto" />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

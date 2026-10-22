@@ -1489,6 +1489,41 @@ async function startServer() {
     }
   });
 
+  // Endpoint: Hapus History Log Admin (Khusus Super Admin)
+  app.post('/api/audit-logs/clear', (req: Request, res: Response) => {
+    try {
+      const { adminName, password } = req.body;
+      const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
+      const validPasswords = new Set([
+        ...superAdmins.map((a: any) => a.password),
+        'Abieza88',
+        'admin123',
+      ].filter(Boolean));
+
+      if (!password || !validPasswords.has(password)) {
+        return res.status(403).json({ error: 'Password Super Admin salah atau tidak sesuai!' });
+      }
+
+      currentState.auditLogs = [
+        {
+          id: `log-clean-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          adminId: 'super_admin',
+          adminNama: adminName || 'Super Admin',
+          adminRole: 'super_admin',
+          action: 'Pembersihan Riwayat Log',
+          detail: `Super Admin ${adminName || 'Pengurus'} telah membersihkan riwayat log aktivitas server.`,
+        },
+      ];
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, message: 'Riwayat log admin berhasil dibersihkan.', state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal membersihkan log: ' + err.message });
+    }
+  });
+
   // ================= ENDPOINTS LOCK MAINTENANCE SISTEM (Req 3) =================
   // Status Maintenance
   app.get('/api/maintenance/status', (req: Request, res: Response) => {

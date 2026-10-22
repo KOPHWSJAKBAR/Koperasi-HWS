@@ -1033,22 +1033,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               </button>
             )}
 
-            {isSuperAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  setHapusTxInitialMemberId('semua');
-                  setHapusTxInitialWilayah((selectedWilayah as any) || 'semua');
-                  setShowHapusTxModal(true);
-                }}
-                className="py-2 px-3.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-black rounded-xl shadow-lg shadow-rose-600/30 flex items-center gap-1.5 transition-all cursor-pointer"
-                title="Khusus Super Admin: Hapus transaksi anggota per wilayah / nama anggota dengan persetujuan password"
-              >
-                <Trash2 className="w-4 h-4" />
-                Hapus Transaksi Anggota
-              </button>
-            )}
-
             <button
               onClick={() => handleExportMembers('pdf')}
               className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-xs text-amber-400 border border-amber-500/30 rounded-xl font-bold flex items-center gap-1.5"
@@ -2420,6 +2404,25 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
             setHapusTxInitialTxId(undefined);
           }}
         />
+      )}
+
+      {/* Tombol Hapus Mutasi Admin di Bawah Kanan (Req: hapus mutasi admin ke bawah kanan) */}
+      {isSuperAdmin && (
+        <div className="fixed bottom-6 right-6 z-40">
+          <button
+            type="button"
+            onClick={() => {
+              setHapusTxInitialMemberId('semua');
+              setHapusTxInitialWilayah((selectedWilayah as any) || 'semua');
+              setShowHapusTxModal(true);
+            }}
+            className="py-3 px-4.5 bg-gradient-to-r from-rose-600 via-rose-700 to-red-800 hover:from-rose-500 hover:to-red-700 text-white text-xs font-black rounded-2xl shadow-2xl shadow-rose-950/90 border border-rose-400/50 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 cursor-pointer backdrop-blur"
+            title="Khusus Super Admin: Hapus Mutasi / Reset Rekening Anggota"
+          >
+            <Trash2 className="w-4 h-4 text-white animate-pulse" />
+            <span>Hapus Mutasi Anggota</span>
+          </button>
+        </div>
       )}
     </div>
   );

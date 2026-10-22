@@ -533,18 +533,24 @@ export async function fetchStateFromServer(): Promise<AppState> {
   try {
     const res = await fetch('/api/state');
     if (res.ok) {
-      const data = await res.json();
-      if (data && typeof data === 'object') {
-        globalState = mergeStates(globalState, data);
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-        } catch {}
-        notifyListeners();
-        return globalState;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const text = await res.text();
+        if (text && text.trim().startsWith('{')) {
+          const data = JSON.parse(text);
+          if (data && typeof data === 'object' && (data.profile || data.members)) {
+            globalState = mergeStates(globalState, data);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+            } catch {}
+            notifyListeners();
+            return globalState;
+          }
+        }
       }
     }
-  } catch (err) {
-    console.warn('Could not fetch from server, using local cache', err);
+  } catch {
+    // Graceful offline fallback to local cached state without console noise
   }
   return globalState;
 }

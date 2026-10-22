@@ -20,6 +20,7 @@ import { ChatOnlineView } from './ChatOnlineView';
 import { SettingModal } from './SettingModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
+import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import {
   BookOpen,
@@ -53,6 +54,7 @@ import {
   Lock,
   Fingerprint,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -89,6 +91,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [showBerbagiModal, setShowBerbagiModal] = useState(false);
   const [berbagiInitialTab, setBerbagiInitialTab] = useState<'laporan' | 'salurkan' | 'konfirmasi'>('laporan');
+  const [showHapusTxModal, setShowHapusTxModal] = useState(false);
 
   // Orcas Policy Engine confirmation modal state for Mobile & PC
   const [orcasConfirmation, setOrcasConfirmation] = useState<{
@@ -623,20 +626,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
               <span>Online Realtime (Firebase)</span>
             </div>
-
-            {/* Tombol Push Sync Database Realtime ke AI Studio (Khusus Super Admin) */}
-            {isSuperAdmin && (
-              <button
-                type="button"
-                onClick={handlePushSyncToAiStudio}
-                disabled={isPushSyncing}
-                className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-slate-950 font-black text-xs transition-all shadow-md flex items-center gap-1.5 cursor-pointer disabled:opacity-60 active:scale-95"
-                title="Push sinkronisasi database realtime ke AI Studio Cloud Firestore"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isPushSyncing ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">{isPushSyncing ? 'Pushing...' : 'Sync AI Studio'}</span>
-              </button>
-            )}
 
             {/* Write Permission Status: Write hanya pada Super Admin */}
             <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-[10px] font-bold">
@@ -1399,6 +1388,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span className="text-purple-400 font-bold">›</span>
                   </button>
                 )}
+
+                {isSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setShowHapusTxModal(true)}
+                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-rose-500/10 to-[#111c33] border border-rose-500/40 text-white flex items-center justify-between text-left hover:border-rose-400 transition-all shadow-md cursor-pointer"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center font-black">
+                        <Trash2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-extrabold flex items-center gap-2">
+                          <span>10. Hapus & Reset Mutasi Anggota ke Nol</span>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-rose-500 text-white font-black">
+                            Super Admin
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Reset mutasi rekening anggota tertentu menjadi nol secara permanen dengan otoritas kata sandi
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-rose-400 font-bold">›</span>
+                  </button>
+                )}
               </div>
             </div>
           </>
@@ -1611,6 +1626,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         currentAdmin={currentAdmin}
         initialTab={berbagiInitialTab}
       />
+
+      {/* ================= MODAL HAPUS TRANSAKSI & RESET MUTASI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}
+      {showHapusTxModal && isSuperAdmin && (
+        <HapusTransaksiAnggotaModal
+          state={state}
+          updateState={updateState}
+          currentAdmin={currentAdmin}
+          initialWilayah="semua"
+          initialMemberId="semua"
+          onClose={() => setShowHapusTxModal(false)}
+        />
+      )}
     </div>
   );
 };
