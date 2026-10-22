@@ -359,6 +359,8 @@ export interface AppState {
     permanentStorage?: boolean;
   };
   maintenanceLock?: MaintenanceLock;
+  deletedMemberIds?: string[];
+  deletedTransactionIds?: string[];
 }
 
 
