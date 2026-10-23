@@ -630,9 +630,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
         terdaftarSejak: new Date().toISOString().split('T')[0],
       };
 
+      // Persist authoritatively to backend server
+      try {
+        await fetch('/api/members/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ member: newMember, nextRunningNumber }),
+        });
+      } catch (e) {
+        console.warn('Backend register call notice:', e);
+      }
+
       await updateState((prev) => ({
         ...prev,
-        members: [...prev.members, newMember],
+        members: [...prev.members.filter((m) => m.id !== newMember.id), newMember],
         lastRunningNumber: nextRunningNumber,
         auditLogs: [
           {

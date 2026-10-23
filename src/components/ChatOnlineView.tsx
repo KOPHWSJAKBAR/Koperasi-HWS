@@ -140,6 +140,19 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       : activeMessages.some((m) => m.senderType === 'member' && !m.isReadByAdmin);
 
     if (hasUnread) {
+      // 1. Authoritative Server Disk Persistence
+      try {
+        fetch('/api/chat/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            memberId: selectedMemberId,
+            readBy: isMember ? 'member' : 'admin',
+          }),
+        }).catch(() => {});
+      } catch {}
+
+      // 2. Local State Update
       updateState((prev) => ({
         ...prev,
         chatMessages: prev.chatMessages.map((m) => {
@@ -155,6 +168,29 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       }));
     }
   }, [selectedMemberId, activeMessages.length, isMember]);
+
+  // Mark all chats as read (Bersihkan seluruh notifikasi chat)
+  const handleMarkAllChatRead = async () => {
+    try {
+      await fetch('/api/chat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          markAll: true,
+          readBy: isMember ? 'member' : 'admin',
+        }),
+      });
+    } catch {}
+
+    await updateState((prev) => ({
+      ...prev,
+      chatMessages: prev.chatMessages.map((m) => ({
+        ...m,
+        isReadByAdmin: isMember ? m.isReadByAdmin : true,
+        isReadByMember: isMember ? true : m.isReadByMember,
+      })),
+    }));
+  };
 
   // Send message
   const handleSendMessage = async (e: React.FormEvent) => {

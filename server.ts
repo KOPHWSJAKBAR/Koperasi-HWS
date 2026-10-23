@@ -236,29 +236,39 @@ function mergeServerState(current: any, incoming: any): any {
   if (!current) return incoming;
   if (!incoming) return current;
 
-  // 1. Members: if incoming.members is provided as an array, use it as the current member list (preserving photos & bank info from current if missing in incoming).
-  // This allows Super Admin to delete members permanently (Req 8).
-  let mergedMembers: any[];
-  if (Array.isArray(incoming.members)) {
-    const currentMemberMap = new Map<string, any>();
-    (current.members || []).forEach((m: any) => currentMemberMap.set(m.id, m));
-    mergedMembers = incoming.members.map((m: any) => {
-      const existing = currentMemberMap.get(m.id);
-      if (!existing) return m;
-      return {
-        ...existing,
-        ...m,
-        ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
-        avatarUrl: m.avatarUrl || existing.avatarUrl,
-        bankPribadi: {
-          ...existing.bankPribadi,
-          ...(m.bankPribadi || {}),
-        },
-      };
-    });
-  } else {
-    mergedMembers = current.members || [];
-  }
+  // 1. Members: Union of current and incoming members by ID so registered members NEVER disappear!
+  // Members are only removed if explicitly present in deletedMemberIds.
+  const memberMap = new Map<string, any>();
+  (current.members || []).forEach((m: any) => {
+    if (m && m.id) memberMap.set(m.id, { ...m });
+  });
+  (incoming.members || []).forEach((m: any) => {
+    if (m && m.id) {
+      const existing = memberMap.get(m.id);
+      if (!existing) {
+        memberMap.set(m.id, { ...m });
+      } else {
+        memberMap.set(m.id, {
+          ...existing,
+          ...m,
+          ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
+          avatarUrl: m.avatarUrl || existing.avatarUrl,
+          bankPribadi: {
+            ...existing.bankPribadi,
+            ...(m.bankPribadi || {}),
+          },
+        });
+      }
+    }
+  });
+
+  const allDeletedMemIds = new Set<string>([
+    ...(current.deletedMemberIds || []),
+    ...(incoming.deletedMemberIds || []),
+  ]);
+  allDeletedMemIds.forEach((id) => memberMap.delete(id));
+  const mergedMembers = Array.from(memberMap.values());
+  const mergedDeletedMemIds = Array.from(allDeletedMemIds);
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
   const setoranMap = new Map<string, any>();
@@ -288,6 +298,8 @@ function mergeServerState(current: any, incoming: any): any {
         ...existing,
         ...c,
         lampiranUrl: c.lampiranUrl || existing.lampiranUrl,
+        isReadByAdmin: Boolean(existing.isReadByAdmin || c.isReadByAdmin),
+        isReadByMember: Boolean(existing.isReadByMember || c.isReadByMember),
       });
     }
   });
@@ -309,13 +321,24 @@ function mergeServerState(current: any, incoming: any): any {
     }
   });
 
-  // 5. Member Transactions (Mutasi Rekening): if incoming.memberTransactions is provided as an array, use it directly so deletions and reset from 0 persist
-  let mergedTxList: any[];
-  if (Array.isArray(incoming.memberTransactions)) {
-    mergedTxList = incoming.memberTransactions;
-  } else {
-    mergedTxList = current.memberTransactions || [];
-  }
+  // 5. Member Transactions (Mutasi Rekening): Filter out any deletedTransactionIds so deleted mutations never resurrect
+  const allDeletedTxIds = new Set<string>([
+    ...(current.deletedTransactionIds || []),
+    ...(incoming.deletedTransactionIds || []),
+  ]);
+
+  const txSource = Array.isArray(incoming.memberTransactions)
+    ? incoming.memberTransactions
+    : (current.memberTransactions || []);
+
+  const txMap = new Map<string, any>();
+  txSource.forEach((tx: any) => {
+    if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
+      txMap.set(tx.id, tx);
+    }
+  });
+  const mergedTxList = Array.from(txMap.values());
+  const mergedDeletedTxIds = Array.from(allDeletedTxIds);
 
   // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
   let mergedKasList: any[];
@@ -346,10 +369,17 @@ function mergeServerState(current: any, incoming: any): any {
     mergedAdmins = current.admins || [];
   }
 
-  // 10. Profile: preserve QRIS and official details
+  // 10. Profile: preserve rekeningPenampungan, QRIS and official details
+  const incomingRek = incoming.profile?.rekeningPenampungan;
+  const currentRek = current.profile?.rekeningPenampungan;
+  const rekeningPenampungan = Array.isArray(incomingRek)
+    ? incomingRek
+    : (Array.isArray(currentRek) ? currentRek : []);
+
   const profile = {
     ...current.profile,
     ...(incoming.profile || {}),
+    rekeningPenampungan,
     qrisImageUrl: incoming.profile?.qrisImageUrl || current.profile?.qrisImageUrl,
   };
 
@@ -384,6 +414,8 @@ function mergeServerState(current: any, incoming: any): any {
     profile,
     admins: mergedAdmins,
     members: mergedMembers,
+    deletedMemberIds: mergedDeletedMemIds,
+    deletedTransactionIds: mergedDeletedTxIds,
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
@@ -538,6 +570,45 @@ async function startServer() {
     saveDatabase(currentState);
     broadcastEvent('NEW_CHAT_MESSAGE', message);
     res.json({ success: true, message });
+  });
+
+  // Mark Chat messages as read (Req: Notifikasi chat hilang permanen saat dibuka)
+  app.post('/api/chat/read', (req: Request, res: Response) => {
+    try {
+      const { memberId, readBy, messageIds, markAll } = req.body;
+      const readType = readBy || 'admin';
+      currentState.chatMessages = currentState.chatMessages || [];
+      let updatedCount = 0;
+
+      currentState.chatMessages = currentState.chatMessages.map((m: any) => {
+        let shouldMark = false;
+        if (markAll) {
+          shouldMark = readType === 'admin' ? m.senderType === 'member' : true;
+        } else if (Array.isArray(messageIds) && messageIds.length > 0) {
+          shouldMark = messageIds.includes(m.id);
+        } else if (memberId) {
+          shouldMark = m.memberId === memberId;
+        }
+
+        if (shouldMark) {
+          updatedCount++;
+          return {
+            ...m,
+            isReadByAdmin: readType === 'admin' ? true : m.isReadByAdmin,
+            isReadByMember: readType === 'member' ? true : m.isReadByMember,
+          };
+        }
+        return m;
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('CHAT_READ', { memberId, readBy: readType, updatedCount });
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, updatedCount });
+    } catch (err: any) {
+      console.error('Error in /api/chat/read:', err);
+      res.status(500).json({ error: 'Gagal memperbarui status baca chat: ' + (err.message || 'Server error') });
+    }
   });
 
   // Heartbeat / Online Presence Endpoint (Req 1 & 19)
@@ -1142,6 +1213,12 @@ async function startServer() {
       const targetMem = (currentState.members || []).find((m: any) => m.id === id);
       currentState.members = (currentState.members || []).filter((m: any) => m.id !== id);
 
+      // Record in deletedMemberIds so deleted members are never accidentally resurrected by incoming sync
+      currentState.deletedMemberIds = currentState.deletedMemberIds || [];
+      if (!currentState.deletedMemberIds.includes(id)) {
+        currentState.deletedMemberIds.push(id);
+      }
+
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-mem-del-${Date.now()}`,
@@ -1159,6 +1236,62 @@ async function startServer() {
       res.json({ success: true, message: 'Anggota berhasil dihapus secara permanen dari server' });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus anggota: ' + err.message });
+    }
+  });
+
+  // Dedicated Member Registration Endpoint for instant authoritative persistence (Login & Admin)
+  app.post('/api/members/register', (req: Request, res: Response) => {
+    try {
+      const { member, nextRunningNumber, adminName } = req.body;
+      if (!member || !member.id || !member.nama) {
+        return res.status(400).json({ error: 'Data anggota tidak lengkap' });
+      }
+
+      // Ensure totalSimpanan is correctly calculated
+      const p = Number(member.saldoPokok) || 0;
+      const u = Number(member.saldoUmum) || 0;
+      const z = Number(member.saldoZakatFitrah) || 0;
+      const q = Number(member.saldoQurban) || 0;
+      member.totalSimpanan = p + u + z + q;
+
+      currentState.members = currentState.members || [];
+      // Replace existing member with same id, or append
+      const existingIdx = currentState.members.findIndex((m: any) => m.id === member.id);
+      if (existingIdx !== -1) {
+        currentState.members[existingIdx] = { ...currentState.members[existingIdx], ...member };
+      } else {
+        currentState.members.push(member);
+      }
+
+      if (nextRunningNumber) {
+        currentState.lastRunningNumber = Math.max(currentState.lastRunningNumber || 66666, Number(nextRunningNumber));
+      }
+
+      // Remove from deletedMemberIds if previously deleted
+      if (Array.isArray(currentState.deletedMemberIds)) {
+        currentState.deletedMemberIds = currentState.deletedMemberIds.filter((id: string) => id !== member.id);
+      }
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-reg-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: adminName ? 'admin' : member.id,
+        adminNama: adminName || member.nama,
+        adminRole: adminName ? 'admin_write' : 'member',
+        action: adminName ? 'Tambah Anggota (Admin)' : 'Pendaftaran Anggota (Mandiri)',
+        detail: `Anggota ${member.nama} (${member.nomorAnggota}) tersimpan permanen di server. Rekening: ${member.nomorRekening}`,
+        targetId: member.id,
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastEvent('MEMBER_REGISTERED', { member });
+
+      res.json({ success: true, member, state: currentState });
+    } catch (err: any) {
+      console.error('Error in /api/members/register:', err);
+      res.status(500).json({ error: 'Gagal mendaftarkan anggota ke database: ' + (err.message || 'Server error') });
     }
   });
 
@@ -1290,12 +1423,15 @@ async function startServer() {
 
       let removedCount = 0;
       const affectedMemberIdSet = new Set<string>();
+      currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
+      const newlyDeletedIds: string[] = [];
 
       if (Array.isArray(transactionIds) && transactionIds.length > 0) {
         const idSet = new Set(transactionIds);
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (idSet.has(tx.id)) {
             removedCount++;
+            newlyDeletedIds.push(tx.id);
             if (tx.memberId) affectedMemberIdSet.add(tx.memberId);
             return false;
           }
@@ -1306,6 +1442,7 @@ async function startServer() {
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (tx.memberId === memberId) {
             removedCount++;
+            newlyDeletedIds.push(tx.id);
             return false;
           }
           return true;
@@ -1318,15 +1455,23 @@ async function startServer() {
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (memberIdsInWilayah.has(tx.memberId)) {
             removedCount++;
+            newlyDeletedIds.push(tx.id);
             return false;
           }
           return true;
         });
       } else {
         removedCount = (currentState.memberTransactions || []).length;
+        (currentState.memberTransactions || []).forEach((tx: any) => newlyDeletedIds.push(tx.id));
         (currentState.members || []).forEach((m: any) => affectedMemberIdSet.add(m.id));
         currentState.memberTransactions = [];
       }
+
+      newlyDeletedIds.forEach((id) => {
+        if (!currentState.deletedTransactionIds.includes(id)) {
+          currentState.deletedTransactionIds.push(id);
+        }
+      });
 
       // Helper untuk rekalkulasi saldo dan running balance mutasi anggota
       const syncMemberBalancesAndRunningHistory = (affectedMemberIds: string[], forceZero: boolean) => {
@@ -1437,6 +1582,12 @@ async function startServer() {
       const targetMemberId = deletedTx.memberId;
       currentState.memberTransactions.splice(txIndex, 1);
 
+      // Record in deletedTransactionIds so deleted mutation never resurrects on sync
+      currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
+      if (!currentState.deletedTransactionIds.includes(deletedTx.id)) {
+        currentState.deletedTransactionIds.push(deletedTx.id);
+      }
+
       // Hitung dan sesuaikan kembali saldo simpanan & running history anggota terkait
       const member = (currentState.members || []).find((m: any) => m.id === targetMemberId);
       if (member) {
@@ -1489,10 +1640,79 @@ async function startServer() {
     }
   });
 
+  // Dedicated Escrow Account Management (Edit, Tambah, Hapus Rekening Penampungan Koperasi)
+  app.post('/api/profile/rekening-penampungan', (req: Request, res: Response) => {
+    try {
+      const { rekeningPenampungan, adminName } = req.body;
+      if (!Array.isArray(rekeningPenampungan)) {
+        return res.status(400).json({ error: 'Data rekening penampungan harus berupa array' });
+      }
+
+      currentState.profile = currentState.profile || {};
+      currentState.profile.rekeningPenampungan = rekeningPenampungan;
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-rek-penampungan-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Update Rekening Penampungan',
+        detail: `Super Admin memperbarui data rekening penampungan koperasi (${rekeningPenampungan.length} akun)`,
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, rekeningPenampungan: currentState.profile.rekeningPenampungan, state: currentState });
+    } catch (err: any) {
+      console.error('Error in /api/profile/rekening-penampungan:', err);
+      res.status(500).json({ error: 'Gagal menyimpan rekening penampungan: ' + (err.message || 'Server error') });
+    }
+  });
+
+  // Dedicated Koperasi Biodata Persistence (Profil, Legalitas, Pengurus, Alamat, Kontak)
+  app.post('/api/profile/biodata', (req: Request, res: Response) => {
+    try {
+      const { profile, adminName } = req.body;
+      if (!profile || typeof profile !== 'object') {
+        return res.status(400).json({ error: 'Data profil biodata tidak valid' });
+      }
+
+      currentState.profile = {
+        ...(currentState.profile || {}),
+        ...profile,
+        // Preserve existing rekeningPenampungan unless explicitly passed
+        rekeningPenampungan: Array.isArray(profile.rekeningPenampungan)
+          ? profile.rekeningPenampungan
+          : (currentState.profile?.rekeningPenampungan || []),
+      };
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-biodata-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'admin',
+        adminNama: adminName || 'Admin Koperasi',
+        adminRole: 'admin_write',
+        action: 'Update Biodata Koperasi',
+        detail: `Biodata, legalitas & susunan kepengurusan koperasi berhasil diperbarui permanen oleh ${adminName || 'Pengurus'}.`,
+        targetId: 'profile',
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, profile: currentState.profile, state: currentState });
+    } catch (err: any) {
+      console.error('Error in /api/profile/biodata:', err);
+      res.status(500).json({ error: 'Gagal menyimpan biodata koperasi: ' + (err.message || 'Server error') });
+    }
+  });
+
   // Endpoint: Hapus History Log Admin (Khusus Super Admin)
   app.post('/api/audit-logs/clear', (req: Request, res: Response) => {
     try {
-      const { adminName, password } = req.body;
+      const { adminName, password, fullWipe } = req.body;
       const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
       const validPasswords = new Set([
         ...superAdmins.map((a: any) => a.password),
@@ -1504,17 +1724,21 @@ async function startServer() {
         return res.status(403).json({ error: 'Password Super Admin salah atau tidak sesuai!' });
       }
 
-      currentState.auditLogs = [
-        {
-          id: `log-clean-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          adminId: 'super_admin',
-          adminNama: adminName || 'Super Admin',
-          adminRole: 'super_admin',
-          action: 'Pembersihan Riwayat Log',
-          detail: `Super Admin ${adminName || 'Pengurus'} telah membersihkan riwayat log aktivitas server.`,
-        },
-      ];
+      if (fullWipe) {
+        currentState.auditLogs = [];
+      } else {
+        currentState.auditLogs = [
+          {
+            id: `log-clean-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            adminId: 'super_admin',
+            adminNama: adminName || 'Super Admin',
+            adminRole: 'super_admin',
+            action: 'Pembersihan Riwayat Log',
+            detail: `Super Admin ${adminName || 'Pengurus'} telah membersihkan riwayat log aktivitas server.`,
+          },
+        ];
+      }
 
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
@@ -1725,20 +1949,49 @@ async function startServer() {
 
   app.post('/api/surat/read', (req: Request, res: Response) => {
     try {
-      const { suratId, readerId, readerType } = req.body;
-      const idx = (currentState.suratList || []).findIndex((s: any) => s.id === suratId);
-      if (idx !== -1) {
-        const s = { ...currentState.suratList[idx] };
-        if (readerType === 'member') {
-          s.readByMemberIds = Array.from(new Set([...(s.readByMemberIds || []), readerId]));
-        } else {
-          s.readByAdminIds = Array.from(new Set([...(s.readByAdminIds || []), readerId]));
-        }
-        currentState.suratList[idx] = s;
-        saveDatabase(currentState);
-        broadcastEvent('STATE_UPDATED', currentState);
+      const { suratId, suratIds, readerId, readerType, markAll } = req.body;
+      if (!readerId) {
+        return res.status(400).json({ error: 'readerId diperlukan' });
       }
-      res.json({ success: true });
+
+      currentState.suratList = currentState.suratList || [];
+      let updatedCount = 0;
+
+      currentState.suratList = currentState.suratList.map((s: any) => {
+        let shouldMark = false;
+        if (markAll) {
+          if (readerType === 'member') {
+            shouldMark = s.tujuanTipe === 'semua' || s.targetMemberId === readerId;
+          } else {
+            shouldMark = true;
+          }
+        } else if (Array.isArray(suratIds) && suratIds.length > 0) {
+          shouldMark = suratIds.includes(s.id);
+        } else if (suratId) {
+          shouldMark = s.id === suratId;
+        }
+
+        if (shouldMark) {
+          updatedCount++;
+          const memberSet = new Set(s.readByMemberIds || []);
+          const adminSet = new Set(s.readByAdminIds || []);
+          if (readerType === 'member') {
+            memberSet.add(readerId);
+          } else {
+            adminSet.add(readerId);
+          }
+          return {
+            ...s,
+            readByMemberIds: Array.from(memberSet),
+            readByAdminIds: Array.from(adminSet),
+          };
+        }
+        return s;
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({ success: true, updatedCount });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal memperbarui status baca surat: ' + err.message });
     }

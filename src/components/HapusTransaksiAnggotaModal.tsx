@@ -170,13 +170,13 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
       return;
     }
 
-    if (matchingTransactions.length === 0) {
-      setErrorMessage('Tidak ada transaksi anggota yang cocok dengan filter untuk dihapus.');
+    if (matchingTransactions.length === 0 && !resetBalance) {
+      setErrorMessage('Tidak ada transaksi anggota yang cocok dengan filter untuk dihapus. Jika ingin mereset saldo simpanan ke Rp 0, centang "Reset Saldo Simpanan".');
       return;
     }
 
-    if (activeSelectedIds.length === 0) {
-      setErrorMessage('Pilih minimal 1 transaksi anggota untuk dihapus.');
+    if (matchingTransactions.length > 0 && activeSelectedIds.length === 0 && !resetBalance) {
+      setErrorMessage('Pilih minimal 1 transaksi anggota untuk dihapus atau centang opsi Reset Saldo Simpanan.');
       return;
     }
 
@@ -315,6 +315,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           ...prev,
           members: updatedMembers,
           memberTransactions: remainingTx,
+          deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...activeSelectedIds])),
           auditLogs: [audit, ...prev.auditLogs],
         };
       });

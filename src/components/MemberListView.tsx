@@ -606,6 +606,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       return {
         ...prev,
         members: prev.members.filter((m) => m.id !== member.id),
+        deletedMemberIds: Array.from(new Set([...(prev.deletedMemberIds || []), member.id])),
         kasList: updatedKasList,
         auditLogs: [audit, ...prev.auditLogs],
       };
@@ -690,13 +691,29 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       saldoZakatFitrah: 0,
       saldoQurban: 0,
       saldoUmum: 0,
+      totalSimpanan: 0,
       status: 'aktif',
       terdaftarSejak: new Date().toISOString().split('T')[0],
     };
 
+    // Persist authoritatively to backend server
+    try {
+      await fetch('/api/members/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          member: newMember,
+          nextRunningNumber,
+          adminName: currentAdmin.nama,
+        }),
+      });
+    } catch (e) {
+      console.warn('Backend register call notice:', e);
+    }
+
     await updateState((prev) => ({
       ...prev,
-      members: [...prev.members, newMember],
+      members: [...prev.members.filter((m) => m.id !== newMember.id), newMember],
       lastRunningNumber: nextRunningNumber,
       auditLogs: [
         createAuditLog(

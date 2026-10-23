@@ -298,29 +298,38 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   if (!base) return incoming;
   if (!incoming) return base;
 
-  // 1. Members: if incoming.members is provided as an array, use it as current list (preserving base file URLs if missing in incoming)
-  // This allows Super Admin to delete members permanently (Req 8).
-  let mergedMembers: MemberUser[];
-  if (Array.isArray(incoming.members)) {
-    const baseMemberMap = new Map<string, MemberUser>();
-    (base.members || []).forEach((m) => baseMemberMap.set(m.id, m));
-    mergedMembers = incoming.members.map((m) => {
-      const existing = baseMemberMap.get(m.id);
-      if (!existing) return m;
-      return {
-        ...existing,
-        ...m,
-        ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
-        avatarUrl: m.avatarUrl || existing.avatarUrl,
-        bankPribadi: {
-          ...existing.bankPribadi,
-          ...(m.bankPribadi || {}),
-        },
-      };
-    });
-  } else {
-    mergedMembers = base.members || [];
-  }
+  // 1. Members: UNION of all members by id so registered members NEVER disappear!
+  // Preserves any member present in base OR incoming, unless explicitly in deletedMemberIds.
+  const memberMap = new Map<string, MemberUser>();
+  (base.members || []).forEach((m) => {
+    if (m && m.id) memberMap.set(m.id, { ...m });
+  });
+  (incoming.members || []).forEach((m) => {
+    if (m && m.id) {
+      const existing = memberMap.get(m.id);
+      if (!existing) {
+        memberMap.set(m.id, { ...m });
+      } else {
+        memberMap.set(m.id, {
+          ...existing,
+          ...m,
+          ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
+          avatarUrl: m.avatarUrl || existing.avatarUrl,
+          bankPribadi: {
+            ...existing.bankPribadi,
+            ...(m.bankPribadi || {}),
+          },
+        });
+      }
+    }
+  });
+
+  const allDeletedMemIds = new Set<string>([
+    ...(base.deletedMemberIds || []),
+    ...(incoming.deletedMemberIds || []),
+  ]);
+  allDeletedMemIds.forEach((id) => memberMap.delete(id));
+  const mergedMembers = Array.from(memberMap.values());
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
   const setoranMap = new Map<string, SetoranVerifikasi>();
@@ -371,13 +380,23 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  // 5. Member Transactions (Mutasi Rekening): if incoming.memberTransactions is provided as an array, use it directly so deletions and reset from 0 persist
-  let mergedTxList: MemberTransaction[];
-  if (Array.isArray(incoming.memberTransactions)) {
-    mergedTxList = incoming.memberTransactions;
-  } else {
-    mergedTxList = base.memberTransactions || [];
-  }
+  // 5. Member Transactions (Mutasi Rekening): Filter out any deletedTransactionIds so deleted mutations never resurrect
+  const allDeletedTxIds = new Set<string>([
+    ...(base.deletedTransactionIds || []),
+    ...(incoming.deletedTransactionIds || []),
+  ]);
+
+  const txSource = Array.isArray(incoming.memberTransactions)
+    ? incoming.memberTransactions
+    : (base.memberTransactions || []);
+
+  const txMap = new Map<string, MemberTransaction>();
+  txSource.forEach((tx) => {
+    if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
+      txMap.set(tx.id, tx);
+    }
+  });
+  const mergedTxList = Array.from(txMap.values());
 
   // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
   let mergedKasList: KasEntry[];
@@ -408,10 +427,17 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     mergedAdmins = base.admins || [];
   }
 
-  // 10. Profile: preserve QRIS and official details
+  // 10. Profile: preserve rekeningPenampungan, QRIS and official details
+  const incomingRek = incoming.profile?.rekeningPenampungan;
+  const baseRek = base.profile?.rekeningPenampungan;
+  const rekeningPenampungan = Array.isArray(incomingRek)
+    ? incomingRek
+    : (Array.isArray(baseRek) ? baseRek : []);
+
   const profile = {
     ...base.profile,
     ...(incoming.profile || {}),
+    rekeningPenampungan,
     qrisImageUrl: incoming.profile?.qrisImageUrl || base.profile?.qrisImageUrl,
   };
 
@@ -465,6 +491,8 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     pengaturanBerbagi,
     auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     lastRunningNumber: Math.max(base.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
+    deletedMemberIds: Array.from(allDeletedMemIds),
+    deletedTransactionIds: Array.from(allDeletedTxIds),
     serverSyncStatus: {
       online: true,
       lastSynced: new Date().toISOString(),
@@ -499,17 +527,19 @@ export async function syncStateToServer(state: AppState) {
     notifyListeners();
 
     // 1. Post to Express realtime backend
-    fetch('/api/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(globalState),
-    }).catch(() => {});
+    try {
+      await fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(globalState),
+      });
+    } catch {}
 
     // 2. Mirror to Firebase Firestore directly with merge: true (Req 10 & Req 13)
     try {
       const { db } = await import('./firebase');
       const { doc, setDoc } = await import('firebase/firestore');
-      setDoc(
+      await setDoc(
         doc(db, 'koperasi_state', 'main_database'),
         {
           lastSynced: now,
@@ -521,7 +551,7 @@ export async function syncStateToServer(state: AppState) {
           filesProtected: true,
         },
         { merge: true }
-      ).catch(() => {});
+      );
     } catch {}
   } catch (err) {
     // State is safely cached in localStorage

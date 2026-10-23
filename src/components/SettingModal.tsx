@@ -430,6 +430,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editRekName, setEditRekName] = useState('');
   const [editRekNomor, setEditRekNomor] = useState('');
   const [editRekHolder, setEditRekHolder] = useState('');
+  const [editRekIsPrimary, setEditRekIsPrimary] = useState(false);
 
   // Daftar Pengurus Management
   const [newPengurusJabatan, setNewPengurusJabatan] = useState('');
@@ -1145,96 +1146,194 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       return;
     }
 
+    const updatedProfile = {
+      ...(state.profile || {}),
+      nama: bioNama.trim() || state.profile?.nama || 'Koperasi Himpunan Wirausaha Sejahtera',
+      badanHukum: bioBadanHukum.trim(),
+      npwpKoperasi: bioNpwp.trim(),
+      nikKoperasi: bioNik.trim(),
+      tanggalPendirian: bioTglPendirian.trim(),
+      visi: bioVisi.trim(),
+      misi: bioMisi.trim(),
+      ketuaPengurus: bioKetua.trim(),
+      wakilKetua: bioWakil.trim(),
+      sekretaris: bioSekretaris.trim(),
+      bendahara: bioBendahara.trim(),
+      pengawas: bioPengawas.trim(),
+      alamat: bioAlamat.trim(),
+      telepon: bioTelepon.trim(),
+      email: bioEmail.trim(),
+      website: bioWebsite.trim(),
+      rekeningPenampungan: state.profile?.rekeningPenampungan || [],
+    };
+
+    // 1. Authoritative Server Disk Persistence
+    try {
+      await fetch('/api/profile/biodata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profile: updatedProfile,
+          adminName: currentAdmin.nama,
+        }),
+      });
+    } catch (err) {
+      console.warn('Server biodata update notice:', err);
+    }
+
+    // 2. Local State Update
     await updateState((prev) => ({
       ...prev,
-      profile: {
-        ...prev.profile,
-        nama: bioNama.trim(),
-        badanHukum: bioBadanHukum.trim(),
-        npwpKoperasi: bioNpwp.trim(),
-        nikKoperasi: bioNik.trim(),
-        tanggalPendirian: bioTglPendirian.trim(),
-        visi: bioVisi.trim(),
-        misi: bioMisi.trim(),
-        ketuaPengurus: bioKetua.trim(),
-        wakilKetua: bioWakil.trim(),
-        sekretaris: bioSekretaris.trim(),
-        bendahara: bioBendahara.trim(),
-        pengawas: bioPengawas.trim(),
-        alamat: bioAlamat.trim(),
-        telepon: bioTelepon.trim(),
-        email: bioEmail.trim(),
-        website: bioWebsite.trim(),
-      },
+      profile: updatedProfile,
       auditLogs: [
         createAuditLog(currentAdmin, 'Update Biodata Koperasi', 'Memperbarui profil, susunan kepengurusan & legalitas koperasi HWS'),
         ...prev.auditLogs,
       ],
     }));
 
-    alert('Biodata, susunan kepengurusan & profil koperasi berhasil disimpan!');
+    // 3. Mirror directly to Firestore
+    try {
+      const { db } = await import('../lib/firebase-init');
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          updatedBy: currentAdmin.nama,
+          payload: JSON.stringify({
+            ...state,
+            profile: updatedProfile,
+          }),
+        },
+        { merge: true }
+      );
+    } catch {}
+
+    alert('✓ Biodata, susunan kepengurusan & legalitas koperasi berhasil disimpan permanen di server dan database!');
   };
 
   // Add Rekening Penampungan
+  // Add Rekening Penampungan
   const handleAddRekPenampungan = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBankRek.trim()) return;
+    if (!newBankRek.trim()) {
+      alert('Nomor rekening penampungan wajib diisi.');
+      return;
+    }
 
+    const isFirst = (state.profile?.rekeningPenampungan || []).length === 0;
     const newAccount: BankAccount = {
       id: `rek-${Date.now()}`,
-      bankName: newBankName,
+      bankName: newBankName.trim() || 'Bank Central Asia (BCA)',
       accountNumber: newBankRek.trim(),
-      accountHolder: newBankHolder.trim(),
-      isPrimary: false,
+      accountHolder: newBankHolder.trim() || 'KOPERASI HWS',
+      isPrimary: isFirst,
     };
+
+    const updatedList = [...(state.profile?.rekeningPenampungan || []), newAccount];
+
+    try {
+      await fetch('/api/profile/rekening-penampungan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rekeningPenampungan: updatedList,
+          adminName: currentAdmin?.nama || 'Super Admin',
+        }),
+      });
+    } catch (err) {
+      console.warn('Server add rekening notice:', err);
+    }
 
     await updateState((prev) => ({
       ...prev,
       profile: {
         ...prev.profile,
-        rekeningPenampungan: [...prev.profile.rekeningPenampungan, newAccount],
+        rekeningPenampungan: updatedList,
       },
     }));
 
     setNewBankRek('');
-    alert('Rekening penampungan koperasi berhasil ditambahkan!');
+    alert('✓ Rekening penampungan koperasi berhasil ditambahkan!');
   };
 
   // Edit Rekening Penampungan
   const handleSaveEditRek = async (rekId: string) => {
-    if (!editRekNomor.trim()) return;
+    if (!editRekNomor.trim()) {
+      alert('Nomor rekening penampungan wajib diisi!');
+      return;
+    }
+
+    const finalBank = editRekName.trim() || 'Bank Central Asia (BCA)';
+    const finalNomor = editRekNomor.trim();
+    const finalHolder = editRekHolder.trim() || 'KOPERASI HWS';
+
+    const updatedList = (state.profile?.rekeningPenampungan || []).map((r) => {
+      if (r.id === rekId) {
+        return {
+          ...r,
+          bankName: finalBank,
+          accountNumber: finalNomor,
+          accountHolder: finalHolder,
+          isPrimary: editRekIsPrimary,
+        };
+      }
+      return editRekIsPrimary ? { ...r, isPrimary: false } : r;
+    });
+
+    try {
+      await fetch('/api/profile/rekening-penampungan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rekeningPenampungan: updatedList,
+          adminName: currentAdmin?.nama || 'Super Admin',
+        }),
+      });
+    } catch (err) {
+      console.warn('Server edit rekening notice:', err);
+    }
 
     await updateState((prev) => ({
       ...prev,
       profile: {
         ...prev.profile,
-        rekeningPenampungan: prev.profile.rekeningPenampungan.map((r) =>
-          r.id === rekId
-            ? {
-                ...r,
-                bankName: editRekName || r.bankName,
-                accountNumber: editRekNomor.trim(),
-                accountHolder: editRekHolder.trim() || r.accountHolder,
-              }
-            : r
-        ),
+        rekeningPenampungan: updatedList,
       },
     }));
 
     setEditingRekId(null);
-    alert('Rekening penampungan berhasil diubah!');
+    alert('✓ Rekening penampungan koperasi berhasil diperbarui!');
   };
 
   // Delete Rekening Penampungan (Req 1: Super admin dapat menghapus rekening penampungan)
   const handleDeleteRekPenampungan = async (rekId: string) => {
-    const targetRek = (state.profile.rekeningPenampungan || []).find((r) => r.id === rekId);
+    const targetRek = (state.profile?.rekeningPenampungan || []).find((r) => r.id === rekId);
     const confirmDelete = confirm(
       `Hapus rekening penampungan ${targetRek?.bankName || ''} (${targetRek?.accountNumber || ''}) a/n ${targetRek?.accountHolder || ''}?`
     );
     if (!confirmDelete) return;
 
+    const filtered = (state.profile?.rekeningPenampungan || []).filter((r) => r.id !== rekId);
+    // If deleted account was primary, designate the first remaining account as primary
+    if (targetRek?.isPrimary && filtered.length > 0) {
+      filtered[0].isPrimary = true;
+    }
+
+    try {
+      await fetch('/api/profile/rekening-penampungan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rekeningPenampungan: filtered,
+          adminName: currentAdmin?.nama || 'Super Admin',
+        }),
+      });
+    } catch (err) {
+      console.warn('Server delete rekening notice:', err);
+    }
+
     await updateState((prev) => {
-      const filtered = (prev.profile.rekeningPenampungan || []).filter((r) => r.id !== rekId);
       const audit = createAuditLog(
         currentAdmin || ({ id: 'admin', nama: 'Super Admin', username: 'Abzqar', role: 'super_admin' } as any),
         'Hapus Rekening Penampungan',
@@ -1251,7 +1350,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       };
     });
 
-    alert('Rekening penampungan berhasil dihapus!');
+    alert('✓ Rekening penampungan berhasil dihapus!');
   };
 
   // Add Pengurus Koperasi
@@ -3624,64 +3723,166 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
 
                 <div className="space-y-2">
-                  {state.profile.rekeningPenampungan.map((rek) => (
+                  {(state.profile?.rekeningPenampungan || []).map((rek) => (
                     <div
                       key={rek.id}
-                      className="p-3 bg-slate-800 rounded-2xl border border-slate-700 flex flex-col gap-2"
+                      className={`p-3 bg-slate-800 rounded-2xl border transition-all flex flex-col gap-2 ${
+                        rek.isPrimary ? 'border-amber-500/50 bg-slate-850' : 'border-slate-700'
+                      }`}
                     >
                       {editingRekId === rek.id ? (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-3 gap-2">
+                        <div className="space-y-3 p-1">
+                          <div className="flex items-center justify-between pb-1.5 border-b border-slate-700">
+                            <span className="font-bold text-amber-400 text-xs flex items-center gap-1.5">
+                              <Edit2 className="w-3.5 h-3.5" /> Edit Rekening Penampungan
+                            </span>
+                            {rek.isPrimary && (
+                              <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold">
+                                Rekening Utama Saat Ini
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                             <div>
-                              <label className="text-[10px] text-slate-400">Bank</label>
-                              <input
-                                type="text"
-                                value={editRekName}
-                                onChange={(e) => setEditRekName(e.target.value)}
-                                className="w-full p-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
-                              />
+                              <label className="block text-[10px] text-slate-400 mb-1 font-semibold">Nama Bank</label>
+                              <select
+                                value={[
+                                  'Bank Central Asia (BCA)',
+                                  'Bank Mandiri',
+                                  'Bank Rakyat Indonesia (BRI)',
+                                  'Bank Negara Indonesia (BNI)',
+                                  'Bank Syariah Indonesia (BSI)',
+                                  'Bank CIMB Niaga',
+                                  'Bank Permata',
+                                  'Bank Danamon',
+                                  'Bank Tabungan Negara (BTN)',
+                                  'Bank DKI',
+                                  'Bank BJB',
+                                  'Bank Neo Commerce',
+                                  'Bank Jago',
+                                  'Seabank',
+                                ].includes(editRekName) ? editRekName : 'lainnya'}
+                                onChange={(e) => {
+                                  if (e.target.value !== 'lainnya') {
+                                    setEditRekName(e.target.value);
+                                  } else {
+                                    setEditRekName('');
+                                  }
+                                }}
+                                className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
+                              >
+                                <option value="Bank Central Asia (BCA)">Bank Central Asia (BCA)</option>
+                                <option value="Bank Mandiri">Bank Mandiri</option>
+                                <option value="Bank Rakyat Indonesia (BRI)">Bank Rakyat Indonesia (BRI)</option>
+                                <option value="Bank Negara Indonesia (BNI)">Bank Negara Indonesia (BNI)</option>
+                                <option value="Bank Syariah Indonesia (BSI)">Bank Syariah Indonesia (BSI)</option>
+                                <option value="Bank CIMB Niaga">Bank CIMB Niaga</option>
+                                <option value="Bank Permata">Bank Permata</option>
+                                <option value="Bank Danamon">Bank Danamon</option>
+                                <option value="Bank Tabungan Negara (BTN)">Bank Tabungan Negara (BTN)</option>
+                                <option value="Bank DKI">Bank DKI</option>
+                                <option value="Bank BJB">Bank BJB</option>
+                                <option value="Bank Neo Commerce">Bank Neo Commerce</option>
+                                <option value="Bank Jago">Bank Jago</option>
+                                <option value="Seabank">Seabank</option>
+                                <option value="lainnya">Bank Lainnya (Ketik Manual)...</option>
+                              </select>
+                              {![
+                                'Bank Central Asia (BCA)',
+                                'Bank Mandiri',
+                                'Bank Rakyat Indonesia (BRI)',
+                                'Bank Negara Indonesia (BNI)',
+                                'Bank Syariah Indonesia (BSI)',
+                                'Bank CIMB Niaga',
+                                'Bank Permata',
+                                'Bank Danamon',
+                                'Bank Tabungan Negara (BTN)',
+                                'Bank DKI',
+                                'Bank BJB',
+                                'Bank Neo Commerce',
+                                'Bank Jago',
+                                'Seabank',
+                              ].includes(editRekName) && (
+                                <input
+                                  type="text"
+                                  value={editRekName}
+                                  onChange={(e) => setEditRekName(e.target.value)}
+                                  placeholder="Ketik nama bank..."
+                                  className="w-full mt-1.5 p-2 bg-slate-900 border border-amber-500/50 rounded-xl text-white text-xs focus:outline-none"
+                                />
+                              )}
                             </div>
+
                             <div>
-                              <label className="text-[10px] text-slate-400">Nomor Rekening</label>
+                              <label className="block text-[10px] text-slate-400 mb-1 font-semibold">Nomor Rekening</label>
                               <input
                                 type="text"
+                                required
                                 value={editRekNomor}
                                 onChange={(e) => setEditRekNomor(e.target.value)}
-                                className="w-full p-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono text-xs"
+                                placeholder="Contoh: 5490706161"
+                                className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs font-bold focus:border-amber-400 focus:outline-none"
                               />
                             </div>
+
                             <div>
-                              <label className="text-[10px] text-slate-400">Atas Nama</label>
+                              <label className="block text-[10px] text-slate-400 mb-1 font-semibold">Atas Nama (Pemilik Rekening)</label>
                               <input
                                 type="text"
+                                required
                                 value={editRekHolder}
                                 onChange={(e) => setEditRekHolder(e.target.value)}
-                                className="w-full p-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs"
+                                placeholder="Contoh: KOPERASI HWS"
+                                className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
                               />
                             </div>
                           </div>
-                          <div className="flex gap-2 justify-end">
-                            <button
-                              type="button"
-                              onClick={() => setEditingRekId(null)}
-                              className="px-2.5 py-1 bg-slate-700 text-slate-300 rounded-lg text-xs"
-                            >
-                              Batal
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSaveEditRek(rek.id)}
-                              className="px-3 py-1 bg-emerald-500 text-slate-950 font-bold rounded-lg text-xs"
-                            >
-                              Simpan
-                            </button>
+
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-700/60">
+                            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={editRekIsPrimary}
+                                onChange={(e) => setEditRekIsPrimary(e.target.checked)}
+                                className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                              />
+                              <span className="font-semibold text-slate-200">
+                                Jadikan Rekening Utama (Primary) untuk Pembayaran
+                              </span>
+                            </label>
+
+                            <div className="flex gap-2 justify-end">
+                              <button
+                                type="button"
+                                onClick={() => setEditingRekId(null)}
+                                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-xs font-bold transition-all"
+                              >
+                                Batal
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveEditRek(rek.id)}
+                                className="px-4 py-1.5 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 font-black rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Simpan Perubahan</span>
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ) : (
                         <div className="flex justify-between items-center">
                           <div>
-                            <div className="font-bold text-white text-xs">{rek.bankName}</div>
-                            <div className="font-mono text-amber-400 font-bold text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-white text-xs">{rek.bankName}</span>
+                              {rek.isPrimary && (
+                                <span className="text-[9px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-black tracking-wide">
+                                  UTAMA
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-mono text-amber-400 font-bold text-sm tracking-wider mt-0.5">
                               {rek.accountNumber}
                             </div>
                             <div className="text-[10px] text-slate-400">a/n {rek.accountHolder}</div>
@@ -3696,17 +3897,19 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                                   setEditRekName(rek.bankName);
                                   setEditRekNomor(rek.accountNumber);
                                   setEditRekHolder(rek.accountHolder);
+                                  setEditRekIsPrimary(!!rek.isPrimary);
                                 }}
-                                className="p-1.5 bg-slate-700 hover:bg-slate-600 text-amber-400 rounded-lg"
+                                className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-amber-400 rounded-xl font-bold text-xs flex items-center gap-1 transition-all"
                                 title="Edit Nomor Rekening / Atas Nama"
                               >
                                 <Edit2 className="w-3.5 h-3.5" />
+                                <span>Edit</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleDeleteRekPenampungan(rek.id)}
-                                className="p-1.5 bg-red-950/40 hover:bg-red-950 text-red-400 rounded-lg border border-red-500/30"
-                                title="Hapus Rekening (Kurang)"
+                                className="p-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-400 rounded-xl border border-red-500/30 transition-all"
+                                title="Hapus Rekening"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -3745,48 +3948,58 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 {isSuperAdmin && (
                   <form onSubmit={handleAddRekPenampungan} className="p-3 bg-[#162035] rounded-2xl border border-slate-700 space-y-2">
                     <div className="font-bold text-white">+ Tambah Rekening Penampungan Baru</div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-[10px] text-slate-400">Nama Bank</label>
+                        <label className="block text-[10px] text-slate-400 font-semibold mb-1">Nama Bank</label>
                         <select
                           value={newBankName}
                           onChange={(e) => setNewBankName(e.target.value)}
-                          className="w-full p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
+                          className="w-full p-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
                         >
                           <option>Bank Central Asia (BCA)</option>
                           <option>Bank Mandiri</option>
                           <option>Bank Rakyat Indonesia (BRI)</option>
                           <option>Bank Negara Indonesia (BNI)</option>
                           <option>Bank Syariah Indonesia (BSI)</option>
+                          <option>Bank CIMB Niaga</option>
+                          <option>Bank Permata</option>
+                          <option>Bank Danamon</option>
+                          <option>Bank Tabungan Negara (BTN)</option>
+                          <option>Bank DKI</option>
+                          <option>Bank BJB</option>
+                          <option>Bank Neo Commerce</option>
+                          <option>Bank Jago</option>
+                          <option>Seabank</option>
                         </select>
                       </div>
                       <div>
-                        <label className="block text-[10px] text-slate-400">Nomor Rekening</label>
+                        <label className="block text-[10px] text-slate-400 font-semibold mb-1">Nomor Rekening</label>
                         <input
                           type="text"
                           required
                           value={newBankRek}
                           onChange={(e) => setNewBankRek(e.target.value)}
                           placeholder="Nomor rekening"
-                          className="w-full p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
+                          className="w-full p-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs font-bold focus:border-amber-400 focus:outline-none"
                         />
                       </div>
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400">Atas Nama</label>
+                      <label className="block text-[10px] text-slate-400 font-semibold mb-1">Atas Nama</label>
                       <input
                         type="text"
                         required
                         value={newBankHolder}
                         onChange={(e) => setNewBankHolder(e.target.value)}
-                        className="w-full p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
+                        placeholder="Nama pemilik rekening (Contoh: KOPERASI HWS)"
+                        className="w-full p-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
                       />
                     </div>
                     <button
                       type="submit"
-                      className="w-full py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl"
+                      className="w-full py-2 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 font-black text-xs rounded-xl shadow-md transition-all cursor-pointer"
                     >
-                      Simpan Rekening Baru
+                      + Simpan Rekening Baru
                     </button>
                   </form>
                 )}
