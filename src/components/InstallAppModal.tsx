@@ -33,6 +33,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   const [installed, setInstalled] = useState(false);
   const [canPrompt, setCanPrompt] = useState(false);
   const [iosGuideOpen, setIosGuideOpen] = useState(false);
+  const [androidGuideOpen, setAndroidGuideOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedDeviceTab, setSelectedDeviceTab] = useState<'all' | 'android' | 'ios' | 'pc'>('all');
   const [notificationMsg, setNotificationMsg] = useState<{
@@ -110,7 +111,8 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   const handleDownload = (type: DownloadPackageType) => {
     directDownload(type);
     let label = '';
-    if (type === 'apk') label = 'Android (.APK)';
+    if (type === 'apk') label = 'Paket Android (.APK)';
+    else if (type === 'app') label = 'File Mentah Android (.APP / .APK)';
     else if (type === 'exe') label = 'PC Windows (.EXE)';
     else if (type === 'ios') label = 'iOS WebClip Profile';
     else if (type === 'database') label = 'Database Koperasi (koperasi_db.json)';
@@ -275,44 +277,90 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
 
           {/* 1. Android Card */}
           {(selectedDeviceTab === 'all' || selectedDeviceTab === 'android') && (
-            <div className="p-3.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl shrink-0 font-bold border border-emerald-500/30">
-                  🤖
+            <div className="p-3.5 bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-2xl space-y-2.5 transition-colors">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl shrink-0 font-bold border border-emerald-500/30">
+                    🤖
+                  </div>
+                  <div>
+                    <div className="text-xs font-extrabold text-white flex items-center gap-1.5 flex-wrap">
+                      <span>Android (Smartphone & Tablet)</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">
+                        File Mentah .APP / .APK v2.4
+                      </span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">
+                        Demo Off (Produksi)
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Tersinkronisasi otomatis dengan aplikasi versi web & cloud Firestore
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                    <span>Android (Smartphone & Tablet)</span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">
-                      APK v2.4 / PWA
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">
-                    Tombol pasang langsung terdownload dari database & otomatis install
-                  </div>
+                <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => handleInstallDevice('apk')}
+                    disabled={isProcessing}
+                    className="px-3 py-2 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                    title="Tombol Pasang: langsung download database dan otomatis install ke Android"
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                    <span>Pasang Cepat</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload('app')}
+                    className="px-2.5 py-2 bg-slate-750 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
+                    title="Unduh File Mentah .APP / .APK untuk diinstall manual"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>File Mentah (.APP)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAndroidGuideOpen(!androidGuideOpen)}
+                    className="px-2.5 py-2 bg-slate-750 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
+                    title="Setting file mentah agar terbaca baik untuk Android"
+                  >
+                    <Smartphone className="w-3.5 h-3.5" />
+                    <span>Setting Android</span>
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
-                <button
-                  type="button"
-                  onClick={() => handleInstallDevice('apk')}
-                  disabled={isProcessing}
-                  className="px-3.5 py-2 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                  title="Tombol Pasang: langsung download database dan otomatis install ke Android"
-                >
-                  <Zap className="w-3.5 h-3.5 fill-slate-950" />
-                  <span>Pasang ke Android</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDownload('apk')}
-                  className="px-2.5 py-2 bg-slate-750 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
-                  title="Unduh Berkas .APK Manual dari database"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>.APK</span>
-                </button>
-              </div>
+
+              {androidGuideOpen && (
+                <div className="p-3 bg-slate-900 rounded-xl border border-emerald-500/30 text-[11px] text-slate-300 space-y-2">
+                  <div className="font-bold text-emerald-300 flex items-center gap-1.5">
+                    <span>📱</span>
+                    <span>Petunjuk Setting Agar File Mentah Terbaca & Terpasang Baik di Android:</span>
+                  </div>
+                  <div className="space-y-1.5 pl-1 text-slate-300">
+                    <div className="flex items-start gap-1.5">
+                      <span className="font-bold text-amber-400 shrink-0">1.</span>
+                      <span>Ketuk tombol <b>"File Mentah (.APP)"</b> di atas untuk mengunduh berkas installer resmi.</span>
+                    </div>
+                    <div className="flex items-start gap-1.5">
+                      <span className="font-bold text-amber-400 shrink-0">2.</span>
+                      <span>Buka bilah notifikasi HP Anda atau buka aplikasi <b>File Manager &gt; Download</b>, lalu ketuk berkas <b>koperasi-hws-v2.4.apk</b>.</span>
+                    </div>
+                    <div className="flex items-start gap-1.5">
+                      <span className="font-bold text-amber-400 shrink-0">3.</span>
+                      <span>Jika muncul pop-up keamanan <i>"Untuk keamanan, ponsel Anda tidak diizinkan memasang aplikasi tidak dikenal"</i>:</span>
+                    </div>
+                    <div className="ml-4 p-2 bg-slate-950/70 rounded-lg border border-slate-700 text-[10px] space-y-1 text-slate-300">
+                      <div>• Ketuk <b>"Setelan" (Settings)</b> pada dialog yang muncul.</div>
+                      <div>• Geser tombol <b>"Izinkan dari sumber ini" (Allow from this source)</b> ke posisi AKTIF (ON).</div>
+                      <div>• Tekan tombol Kembali (Back) lalu ketuk <b>"Instal" (Install)</b>.</div>
+                    </div>
+                    <div className="flex items-start gap-1.5">
+                      <span className="font-bold text-emerald-400 shrink-0">4.</span>
+                      <span>Selesai! Ikon <b>KHWS</b> akan terpasang di layar utama HP Anda dan langsung terhubung secara otomatis ke database online server & Firestore web.</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

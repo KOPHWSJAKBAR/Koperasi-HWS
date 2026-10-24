@@ -2554,11 +2554,12 @@ async function startServer() {
     }
   });
 
-  // Download Official Android APK Package (Real signed APK package)
-  app.get('/api/download/apk', (req: Request, res: Response) => {
+  // Download Official Android Package (.APK / .APP raw installer package)
+  app.get(['/api/download/apk', '/api/download/app', '/api/download/raw-app', '/api/download/koperasi-hws.app', '/api/download/koperasi-hws.apk'], (req: Request, res: Response) => {
     const apkPath = path.join(DATA_DIR, 'koperasi-hws-v2.4.apk');
     if (fs.existsSync(apkPath)) {
       const stat = fs.statSync(apkPath);
+      // Ensure Android device browsers and package managers recognize it directly as installable app package
       res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws-v2.4.apk"');
       res.setHeader('Content-Type', 'application/vnd.android.package-archive');
       res.setHeader('Content-Length', stat.size);
@@ -2566,7 +2567,7 @@ async function startServer() {
       res.setHeader('Cache-Control', 'public, max-age=3600');
       return res.sendFile(apkPath);
     }
-    res.status(404).send('File APK sedang disiapkan');
+    res.status(404).send('File mentah aplikasi Android sedang disiapkan');
   });
 
   // Download Official Android Firebase Config (google-services.json for com.koperasi.hws)

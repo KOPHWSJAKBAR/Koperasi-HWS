@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface LogoProps {
   className?: string;
@@ -6,6 +6,20 @@ interface LogoProps {
 }
 
 export const LogoHws: React.FC<LogoProps> = ({ className = 'w-10 h-10', size }) => {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  if (!imageFailed) {
+    return (
+      <img
+        src="/logo-khws.jpg"
+        alt="Logo KHWS"
+        className={`${className} object-contain rounded-2xl shadow-sm select-none pointer-events-none`}
+        style={size ? { width: size, height: size } : undefined}
+        onError={() => setImageFailed(true)}
+      />
+    );
+  }
+
   return (
     <svg
       viewBox="0 0 200 200"
