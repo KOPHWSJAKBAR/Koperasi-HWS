@@ -55,6 +55,7 @@ import {
   Fingerprint,
   RefreshCw,
   Trash2,
+  CheckCheck,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -361,7 +362,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const totalNotifCount =
     pendingDepositsCount +
     unreadChatCount +
+    unreadSuratAdminCount +
     ((isSuperAdmin || isApproval) ? pendingLockPokokCount + pendingKasCount + pendingSalurCount : 0);
+
+  // Bersihkan notifikasi & tandai pesan/surat sudah terbaca permanen
+  const handleClearAllNotifications = async () => {
+    try {
+      fetch('/api/chat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markAll: true, readBy: 'admin' }),
+      }).catch(() => {});
+      fetch('/api/surat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          markAll: true,
+          readerId: currentAdmin.id,
+          readerType: 'admin',
+        }),
+      }).catch(() => {});
+    } catch {}
+
+    await updateState((prev) => ({
+      ...prev,
+      chatMessages: prev.chatMessages.map((m) => ({ ...m, isReadByAdmin: true })),
+      suratList: prev.suratList.map((s) => ({
+        ...s,
+        readByAdminIds: Array.from(new Set([...(s.readByAdminIds || []), currentAdmin.id])),
+      })),
+    }));
+
+    setToasts([]);
+  };
 
   // Print summary report
   const handlePrintSummary = () => {
@@ -509,21 +542,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   {/* Actions & Test bar */}
-                  <div className="p-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2">
+                  <div className="p-2.5 bg-slate-900/90 border-b border-slate-800 flex flex-wrap items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleTestNotification}
+                        className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-[10px] flex items-center gap-1 transition-all"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Tes Suara
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => requestNotificationPermission()}
+                        className="px-2 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-bold text-[10px] flex items-center gap-1 transition-all"
+                      >
+                        Izin Push
+                      </button>
+                    </div>
+
                     <button
                       type="button"
-                      onClick={handleTestNotification}
-                      className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-[10px] flex items-center gap-1 transition-all"
+                      onClick={handleClearAllNotifications}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-extrabold text-[10px] flex items-center gap-1 transition-all ml-auto"
+                      title="Tandai semua pesan dan surat resmi sebagai sudah dibaca"
                     >
-                      <Sparkles className="w-3 h-3" />
-                      Tes Suara & Notif
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => requestNotificationPermission()}
-                      className="px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-bold text-[10px] flex items-center gap-1 transition-all"
-                    >
-                      Izin Push HP/Browser
+                      <CheckCheck className="w-3 h-3 text-emerald-400" />
+                      Tandai Semua Terbaca
                     </button>
                   </div>
 
@@ -611,9 +656,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     )}
 
+                    {/* Unread Surat Resmi Section */}
+                    {unreadSuratAdminCount > 0 && (
+                      <div className="p-2 bg-purple-500/10 rounded-xl border border-purple-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-purple-300">
+                          <span>📬 {unreadSuratAdminCount} Surat Edaran Baru</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('surat');
+                              setShowNotifCenter(false);
+                            }}
+                            className="text-[10px] text-purple-400 underline font-extrabold"
+                          >
+                            Buka Surat
+                          </button>
+                        </div>
+                        {state.suratList
+                          .filter((s) => !(s.readByAdminIds || []).includes(currentAdmin.id))
+                          .slice(0, 3)
+                          .map((surat) => (
+                            <div
+                              key={surat.id}
+                              onClick={() => {
+                                setActiveTab('surat');
+                                setShowNotifCenter(false);
+                              }}
+                              className="p-1.5 bg-slate-900/80 hover:bg-slate-800 rounded-lg cursor-pointer transition-colors text-[10px]"
+                            >
+                              <div className="font-bold text-white flex justify-between">
+                                <span className="truncate max-w-[200px]">{surat.perihal}</span>
+                                <span className="text-purple-400 font-mono text-[9px]">
+                                  {surat.nomorSurat}
+                                </span>
+                              </div>
+                              <div className="text-slate-400 text-[9px]">
+                                Tujuan: {surat.targetMemberNama || 'Seluruh Anggota'}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
                     {totalNotifCount === 0 && (
                       <div className="py-6 text-center text-slate-400 text-[11px]">
-                        ✓ Semua notifikasi telah ditinjau! Tidak ada setoran atau chat baru saat ini.
+                        ✓ Semua notifikasi telah ditinjau! Tidak ada setoran, chat, atau surat baru saat ini.
                       </div>
                     )}
                   </div>

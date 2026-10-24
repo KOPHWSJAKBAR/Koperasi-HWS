@@ -128,17 +128,18 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
       }),
     }));
 
-    displaySuratList.forEach((s) => {
+    try {
       fetch('/api/surat/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          suratId: s.id,
+          markAll: true,
+          suratIds: displaySuratList.map((s) => s.id),
           readerId: currentReaderId,
           readerType: isMember ? 'member' : 'admin',
         }),
       }).catch(() => {});
-    });
+    } catch {}
   };
 
   const handleCreateSurat = async (e: React.FormEvent) => {

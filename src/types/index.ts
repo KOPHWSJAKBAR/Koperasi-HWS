@@ -361,6 +361,7 @@ export interface AppState {
   maintenanceLock?: MaintenanceLock;
   deletedMemberIds?: string[];
   deletedTransactionIds?: string[];
+  deletedAdminIds?: string[];
 }
 
 

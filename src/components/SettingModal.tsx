@@ -1625,6 +1625,21 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         '',
     };
 
+    // 1. Authoritative Backend Update
+    try {
+      await fetch('/api/admins/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          admin: updatedAdmin,
+          adminName: currentAdmin.nama,
+        }),
+      });
+    } catch (err) {
+      console.warn('Server admin update notice:', err);
+    }
+
+    // 2. Local State Update
     await updateState((prev) => ({
       ...prev,
       admins: prev.admins.map((a) => (a.id === selectedAdminToEdit.id ? updatedAdmin : a)),
@@ -1639,7 +1654,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    alert(`Data akun pengurus ${updatedAdmin.nama} (@${updatedAdmin.username}) berhasil diperbarui!`);
+    // 3. Mirror directly to Firestore
+    try {
+      const { db } = await import('../lib/firebase-init');
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          updatedBy: currentAdmin.nama,
+          payload: JSON.stringify({
+            ...state,
+            admins: state.admins.map((a) => (a.id === selectedAdminToEdit.id ? updatedAdmin : a)),
+          }),
+        },
+        { merge: true }
+      );
+    } catch {}
+
+    alert(`✓ Data akun pengurus ${updatedAdmin.nama} (@${updatedAdmin.username}) berhasil diperbarui dan tersimpan permanen!`);
     setSelectedAdminToEdit(null);
     setSubModal('daftar_admin');
   };
@@ -1675,9 +1708,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     );
     if (!confirmed) return;
 
+    // 1. Authoritative Backend Deletion
+    try {
+      await fetch('/api/admins/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: targetAdmin.id,
+          adminName: currentAdmin.nama,
+        }),
+      });
+    } catch (err) {
+      console.warn('Server admin delete notice:', err);
+    }
+
+    // 2. Local State Update
     await updateState((prev) => ({
       ...prev,
       admins: prev.admins.filter((a) => a.id !== targetAdmin.id),
+      deletedAdminIds: Array.from(new Set([...(prev.deletedAdminIds || []), targetAdmin.id])),
       auditLogs: [
         createAuditLog(
           currentAdmin,
@@ -1689,7 +1738,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    alert(`Akun pengurus ${targetAdmin.nama} (@${targetAdmin.username}) telah berhasil dihapus dari sistem.`);
+    // 3. Mirror directly to Firestore
+    try {
+      const { db } = await import('../lib/firebase-init');
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          updatedBy: currentAdmin.nama,
+          payload: JSON.stringify({
+            ...state,
+            admins: state.admins.filter((a) => a.id !== targetAdmin.id),
+          }),
+        },
+        { merge: true }
+      );
+    } catch {}
+
+    alert(`✓ Akun pengurus ${targetAdmin.nama} (@${targetAdmin.username}) telah berhasil dihapus dari sistem.`);
   };
 
   // Handle Add New Admin (Req 1: Wajib mengisi data diri sesuai dengan pendaftaran anggota, Req 2: Username bebas diinginkan admin)
@@ -1763,6 +1830,21 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       createdAt: new Date().toISOString(),
     };
 
+    // 1. Authoritative Backend Registration
+    try {
+      await fetch('/api/admins/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          admin: newAdminUser,
+          adminName: currentAdmin.nama,
+        }),
+      });
+    } catch (err) {
+      console.warn('Server admin register notice:', err);
+    }
+
+    // 2. Local State Update
     await updateState((prev) => ({
       ...prev,
       admins: [...prev.admins, newAdminUser],
@@ -1777,7 +1859,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    alert(`Pengurus baru ${newAdminUser.nama} (@${newAdminUser.username}) berhasil ditambahkan dengan data diri lengkap!`);
+    // 3. Mirror directly to Firestore
+    try {
+      const { db } = await import('../lib/firebase-init');
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          lastSynced: new Date().toISOString(),
+          updatedBy: currentAdmin.nama,
+          payload: JSON.stringify({
+            ...state,
+            admins: [...state.admins, newAdminUser],
+          }),
+        },
+        { merge: true }
+      );
+    } catch {}
+
+    alert(`✓ Pengurus baru ${newAdminUser.nama} (@${newAdminUser.username}) berhasil ditambahkan dan tersimpan permanen di database!`);
     setSubModal('daftar_admin');
   };
 

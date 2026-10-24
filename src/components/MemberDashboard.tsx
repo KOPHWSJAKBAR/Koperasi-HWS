@@ -621,6 +621,20 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
               <button
                 type="button"
+                onClick={() => setActiveMenu('surat')}
+                className="relative p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-all"
+                title="Surat Menyurat & Edaran Resmi"
+              >
+                <Mail className="w-4 h-4 text-sky-400" />
+                {unreadSuratCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white font-black text-[9px] flex items-center justify-center animate-pulse">
+                    {unreadSuratCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowSettings(true)}
                 className="py-1.5 px-3 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all"
               >
@@ -636,10 +650,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             <button
               type="button"
               onClick={() => setActiveMenu('chat')}
-              className="py-1.5 px-3 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+              className="py-1.5 px-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
             >
               <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
-              <span>Chat Pengurus</span>
+              <span>Chat</span>
               {unreadChatCount > 0 && (
                 <span className="w-4 h-4 rounded-full bg-emerald-500 text-slate-950 font-black text-[9px] flex items-center justify-center ml-0.5">
                   {unreadChatCount}
@@ -649,8 +663,22 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
             <button
               type="button"
+              onClick={() => setActiveMenu('surat')}
+              className="py-1.5 px-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
+            >
+              <Mail className="w-3.5 h-3.5 text-sky-400" />
+              <span>Surat</span>
+              {unreadSuratCount > 0 && (
+                <span className="w-4 h-4 rounded-full bg-red-500 text-white font-black text-[9px] flex items-center justify-center ml-0.5 animate-pulse">
+                  {unreadSuratCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowSettings(true)}
-              className="w-8 h-8 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/40 flex items-center justify-center transition-all shadow-sm shrink-0"
+              className="w-8 h-8 rounded-xl bg-[#162035] hover:bg-slate-800 text-amber-400 border border-amber-500/40 flex items-center justify-center transition-all shadow-sm shrink-0 ml-auto"
               title="Pengaturan Koperasi"
             >
               <Settings className="w-4 h-4 text-amber-500" />
