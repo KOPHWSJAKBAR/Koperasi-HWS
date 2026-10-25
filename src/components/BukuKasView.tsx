@@ -131,36 +131,57 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // Pending approval list for Buku Kas (Input, Edit, Hapus)
   const pendingKasApprovals = state.kasList.filter((k) => k.status === 'pending_approval');
 
-  // Calculate Running Saldo Buku Kas Anggota
+  // Calculate Running Saldo Buku Kas Anggota & build running balance map per transaction
+  const runningSaldoMap = new Map<string, number>();
+
   let saldoKasAnggota = 0;
   const kasAnggotaList = state.kasList
     .filter((k) => k.bukuKas === 'anggota' && k.status === 'approved')
-    .sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    .sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
+      const timeB = new Date(b.createdAt || b.tanggal).getTime() || 0;
+      if (timeA !== timeB) return timeA - timeB;
+      return a.id.localeCompare(b.id);
+    });
 
   kasAnggotaList.forEach((k) => {
     if (k.tipe === 'masuk') saldoKasAnggota += k.nominal;
     else saldoKasAnggota -= k.nominal;
+    runningSaldoMap.set(k.id, saldoKasAnggota);
   });
 
-  // Calculate Running Saldo Buku Kas Koperasi
+  // Calculate Running Saldo Buku Kas Koperasi & build running balance map
   let saldoKasKoperasi = 0;
   const kasKoperasiList = state.kasList
     .filter((k) => k.bukuKas === 'koperasi' && k.status === 'approved')
-    .sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    .sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
+      const timeB = new Date(b.createdAt || b.tanggal).getTime() || 0;
+      if (timeA !== timeB) return timeA - timeB;
+      return a.id.localeCompare(b.id);
+    });
 
   kasKoperasiList.forEach((k) => {
     if (k.tipe === 'masuk') saldoKasKoperasi += k.nominal;
     else saldoKasKoperasi -= k.nominal;
+    runningSaldoMap.set(k.id, saldoKasKoperasi);
   });
 
-  // Filter current displayed list
-  const currentList = state.kasList.filter((k) => {
-    if (activeKasTab !== 'neraca' && k.bukuKas !== activeKasTab) return false;
-    if (filterStartDate && k.tanggal < filterStartDate) return false;
-    if (filterEndDate && k.tanggal > filterEndDate) return false;
-    if (filterKategori !== 'semua' && k.kategori !== filterKategori) return false;
-    return true;
-  });
+  // Filter current displayed list with urutan kas yang terakhir masuk ada di atas sesuai penginputan
+  const currentList = state.kasList
+    .filter((k) => {
+      if (activeKasTab !== 'neraca' && k.bukuKas !== activeKasTab) return false;
+      if (filterStartDate && k.tanggal < filterStartDate) return false;
+      if (filterEndDate && k.tanggal > filterEndDate) return false;
+      if (filterKategori !== 'semua' && k.kategori !== filterKategori) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
+      const timeB = new Date(b.createdAt || b.tanggal).getTime() || 0;
+      if (timeA !== timeB) return timeB - timeA; // Terakhir masuk ada di atas
+      return b.id.localeCompare(a.id);
+    });
 
   // Handle Input Transaksi Kas Koperasi (Req 1: Admin write dapat menulis, admin approval yang menyetujui)
   const handleInputKasSubmit = async (e: React.FormEvent) => {
@@ -415,10 +436,44 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     );
   };
 
-  // Handle Delete Kas Entry (Req: Transaksi dapat dihapus oleh admin write dan disetujui oleh admin approval atau super admin)
+  // Handle Delete Kas Entry (Req: Super Admin dapat menghapus buku kas anggota & kas koperasi)
   const handleDeleteKas = async (entry: KasEntry) => {
     if (entry.bukuKas === 'anggota') {
-      alert('Buku Kas Anggota bersifat otomatis dari mutasi setoran dan dilindungi. Tidak dapat dihapus oleh admin.');
+      if (!isSuperAdmin) {
+        alert('Buku Kas Anggota bersifat otomatis dan dilindungi. Hanya Super Admin yang berhak menghapus catatan Buku Kas Anggota.');
+        return;
+      }
+
+      const confirmDelAnggota = confirm(
+        `PERINGATAN SUPER ADMIN:\nApakah Anda yakin ingin menghapus catatan Buku Kas Anggota ini?\n\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nPenghapusan akan langsung disinkronkan ke server dan database secara permanen. Lanjutkan?`
+      );
+      if (!confirmDelAnggota) return;
+
+      try {
+        await fetch('/api/kas/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: true }),
+        });
+      } catch {}
+
+      await updateState((prev) => {
+        const filteredKas = prev.kasList.filter((k) => k.id !== entry.id);
+        const audit = createAuditLog(
+          currentAdmin,
+          'Hapus Buku Kas Anggota (Super Admin)',
+          `Super Admin ${currentAdmin.nama} menghapus catatan Buku Kas Anggota [${entry.kategori}] "${entry.keterangan}" senilai ${formatRupiah(entry.nominal)}`,
+          entry.id
+        );
+        return {
+          ...prev,
+          kasList: filteredKas,
+          deletedKasIds: [...(prev.deletedKasIds || []), entry.id],
+          auditLogs: [audit, ...prev.auditLogs],
+        };
+      });
+
+      alert(`✓ Catatan transaksi "${entry.keterangan}" berhasil dihapus dari Buku Kas Anggota oleh Super Admin.`);
       return;
     }
 
@@ -1259,6 +1314,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                   <th className="py-2.5 px-3">Penerima / Penyetor</th>
                   <th className="py-2.5 px-3 text-right">Mutasi Masuk (CR)</th>
                   <th className="py-2.5 px-3 text-right">Mutasi Keluar (DB)</th>
+                  <th className="py-2.5 px-3 text-right text-amber-400">Saldo Berjalan</th>
                   <th className="py-2.5 px-3">Petugas</th>
                   <th className="py-2.5 px-3 text-right">Aksi</th>
                 </tr>
@@ -1301,6 +1357,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                       <td className="py-3 px-3 text-right font-mono font-bold text-red-400">
                         {!isMasuk ? formatRupiah(entry.nominal) : '-'}
                       </td>
+                      <td className="py-3 px-3 text-right font-mono font-black text-amber-300">
+                        {formatRupiah(runningSaldoMap.get(entry.id) ?? (entry.saldoKasSetelah || 0))}
+                      </td>
                       <td className="py-3 px-3 text-slate-400">{entry.inputBy}</td>
                       <td className="py-3 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
@@ -1315,12 +1374,24 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                           </button>
 
                           {entry.bukuKas === 'anggota' ? (
-                            <span
-                              className="px-2 py-1 bg-slate-900 border border-slate-750 text-slate-400 rounded-lg text-[10px] font-bold"
-                              title="Buku Kas Anggota tercatat otomatis dan dilindungi (tidak dapat diinput atau diedit admin)"
-                            >
-                              🔒 Kas Anggota
-                            </span>
+                            isSuperAdmin ? (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteKas(entry)}
+                                className="px-2 py-1 bg-red-950/50 hover:bg-red-900/80 text-rose-300 border border-red-500/50 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
+                                title="Super Admin: Hapus Catatan Buku Kas Anggota"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                                Hapus (Super Admin)
+                              </button>
+                            ) : (
+                              <span
+                                className="px-2 py-1 bg-slate-900 border border-slate-750 text-slate-400 rounded-lg text-[10px] font-bold"
+                                title="Buku Kas Anggota tercatat otomatis dan dilindungi (hanya Super Admin yang dapat menghapus)"
+                              >
+                                🔒 Kas Anggota
+                              </span>
+                            )
                           ) : (
                             <>
                               {entry.status === 'pending_approval' ? (

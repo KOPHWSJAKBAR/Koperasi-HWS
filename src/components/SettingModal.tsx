@@ -129,7 +129,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     | 'analisis_error'
     | 'pengaturan_berbagi'
     | 'upload_backup'
+    | 'kelola_setoran'
   >(initialSubModal || null);
+
+  // Sub-modal Kelola & Hapus Verifikasi Setoran (Khusus Super Admin)
+  const [setoranSearchQuery, setSetoranSearchQuery] = useState('');
+  const [setoranStatusFilter, setSetoranStatusFilter] = useState<'semua' | 'pending' | 'disetujui' | 'ditolak'>('semua');
+  const [isDeletingSetoran, setIsDeletingSetoran] = useState(false);
 
   // Req 1: Modal Dialog Konfirmasi Reset Total Aplikasi (Mulai Dari 0)
   const [showResetAppModal, setShowResetAppModal] = useState<boolean>(false);
@@ -2467,6 +2473,25 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <div className="font-extrabold text-white text-xs">Hapus Transaksi Anggota (Otoritas Super Admin)</div>
                     <div className="text-[10px] text-rose-300 font-normal">
                       Pilih wilayah / nama anggota, masukkan password Super Admin, lalu klik persetujuan
+                    </div>
+                  </div>
+                </div>
+                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+              </button>
+
+              {/* KELOLA & HAPUS RIWAYAT VERIFIKASI SETORAN (HANYA SUPER ADMIN) */}
+              <button
+                type="button"
+                onClick={() => setSubModal('kelola_setoran')}
+                className="w-full p-3 bg-red-950/40 hover:bg-red-900/60 rounded-2xl border border-red-500/50 flex items-center justify-between text-xs font-bold text-red-200 transition-all shadow-md group cursor-pointer"
+                title="Kelola dan hapus berkas riwayat verifikasi setoran anggota (otoritas Super Admin)"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
+                  <div className="text-left">
+                    <div className="font-extrabold text-white text-xs">Hapus & Kelola Verifikasi Setoran (Super Admin)</div>
+                    <div className="text-[10px] text-rose-300 font-normal">
+                      Hapus pengajuan setoran yang salah / tolak secara permanen
                     </div>
                   </div>
                 </div>
@@ -6272,6 +6297,223 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ================= SUB-MODAL: KELOLA & HAPUS VERIFIKASI SETORAN (HANYA SUPER ADMIN) ================= */}
+      {subModal === 'kelola_setoran' && isSuperAdmin && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700/80 w-full max-w-3xl rounded-3xl shadow-2xl p-5 my-4 max-h-[90vh] flex flex-col space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/40">
+                  <Trash2 className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">
+                    Kelola & Hapus Riwayat Verifikasi Setoran (Super Admin)
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Hapus pengajuan setoran yang tidak valid, duplikat, atau tolak massal dengan otoritas Super Admin
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSubModal(null)}
+                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filter and Bulk Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs shrink-0 bg-slate-900/80 p-3 rounded-2xl border border-slate-800">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(['semua', 'pending', 'disetujui', 'ditolak'] as const).map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setSetoranStatusFilter(st)}
+                    className={`px-3 py-1.5 rounded-xl font-bold uppercase text-[10px] transition-all cursor-pointer ${
+                      setoranStatusFilter === st
+                        ? 'bg-amber-500 text-slate-950 font-black shadow'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {st === 'semua' ? 'Semua Status' : st}
+                    {' '}(
+                    {st === 'semua'
+                      ? state.setoranList.length
+                      : state.setoranList.filter((s) => s.status === st).length}
+                    )
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const rejectedCount = state.setoranList.filter((s) => s.status === 'ditolak').length;
+                  if (rejectedCount === 0) {
+                    alert('Tidak ada setoran dengan status ditolak.');
+                    return;
+                  }
+                  if (!confirm(`Hapus SELURUH ${rejectedCount} riwayat setoran berstatus DITOLAK? Tindakan ini permanen.`)) return;
+                  setIsDeletingSetoran(true);
+                  try {
+                    await fetch('/api/setoran/delete', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ deleteAllRejected: true, adminName: currentAdmin?.nama || 'Super Admin' }),
+                    });
+                    const rejectedIds = state.setoranList.filter((s) => s.status === 'ditolak').map((s) => s.id);
+                    await updateState((prev) => ({
+                      ...prev,
+                      setoranList: prev.setoranList.filter((s) => s.status !== 'ditolak'),
+                      deletedSetoranIds: [...(prev.deletedSetoranIds || []), ...rejectedIds],
+                      auditLogs: [
+                        createAuditLog(
+                          currentAdmin || ({ id: 'admin', nama: 'Super Admin', role: 'super_admin' } as any),
+                          'Hapus Semua Setoran Ditolak',
+                          `Super Admin membersihkan ${rejectedIds.length} berkas setoran berstatus ditolak.`
+                        ),
+                        ...prev.auditLogs,
+                      ],
+                    }));
+                    alert(`✓ Sebanyak ${rejectedCount} setoran ditolak berhasil dihapus!`);
+                  } catch (e: any) {
+                    alert('Gagal: ' + e.message);
+                  } finally {
+                    setIsDeletingSetoran(false);
+                  }
+                }}
+                disabled={isDeletingSetoran || state.setoranList.filter((s) => s.status === 'ditolak').length === 0}
+                className="py-1.5 px-3 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white font-extrabold text-[11px] rounded-xl flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus Semua Ditolak ({state.setoranList.filter((s) => s.status === 'ditolak').length})</span>
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div className="shrink-0">
+              <input
+                type="text"
+                placeholder="Cari berdasarkan nama anggota, nomor referensi, atau rekening..."
+                value={setoranSearchQuery}
+                onChange={(e) => setSetoranSearchQuery(e.target.value)}
+                className="w-full px-3.5 py-2 bg-slate-900 border border-slate-750 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+
+            {/* List of Setoran */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              {state.setoranList
+                .filter((s) => {
+                  if (setoranStatusFilter !== 'semua' && s.status !== setoranStatusFilter) return false;
+                  if (setoranSearchQuery.trim()) {
+                    const q = setoranSearchQuery.toLowerCase();
+                    return (
+                      s.memberNama?.toLowerCase().includes(q) ||
+                      s.nomorReferensi?.toLowerCase().includes(q) ||
+                      s.memberRekening?.toLowerCase().includes(q) ||
+                      s.nominal?.toString().includes(q)
+                    );
+                  }
+                  return true;
+                })
+                .map((dep) => (
+                  <div
+                    key={dep.id}
+                    className="p-3 bg-slate-900/90 rounded-2xl border border-slate-750 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:border-slate-650 transition-colors"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${
+                          dep.status === 'disetujui'
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : dep.status === 'ditolak'
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                            : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        }`}>
+                          {dep.status}
+                        </span>
+                        <span className="font-extrabold text-white text-xs">{dep.memberNama}</span>
+                        <span className="font-mono text-slate-400 text-[10px]">({dep.nomorReferensi})</span>
+                        <span className="text-[10px] text-amber-400 font-bold font-mono">
+                          {formatRupiah(dep.nominal)}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        {dep.jenis === 'kewajiban' ? `Tabungan Kewajiban (${dep.jumlahHari} hari)` : 'Tabungan Umum'} • Rek: {dep.memberRekening} • {new Date(dep.createdAt).toLocaleString('id-ID')}
+                      </div>
+                      {dep.alasanTolak && (
+                        <div className="text-[10px] text-rose-300 italic">
+                          Alasan Ditolak: {dep.alasanTolak}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!confirm(`Hapus pengajuan setoran ${dep.nomorReferensi} (${dep.memberNama} - ${formatRupiah(dep.nominal)}) secara permanen?`)) return;
+                          setIsDeletingSetoran(true);
+                          try {
+                            await fetch('/api/setoran/delete', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ depositId: dep.id, adminName: currentAdmin?.nama || 'Super Admin' }),
+                            });
+                            await updateState((prev) => ({
+                              ...prev,
+                              setoranList: prev.setoranList.filter((s) => s.id !== dep.id),
+                              deletedSetoranIds: [...(prev.deletedSetoranIds || []), dep.id],
+                              auditLogs: [
+                                createAuditLog(
+                                  currentAdmin || ({ id: 'admin', nama: 'Super Admin', role: 'super_admin' } as any),
+                                  'Hapus Riwayat Setoran',
+                                  `Super Admin menghapus data verifikasi setoran ${dep.nomorReferensi} (${dep.memberNama})`,
+                                  dep.id
+                                ),
+                                ...prev.auditLogs,
+                              ],
+                            }));
+                            alert(`✓ Pengajuan setoran ${dep.nomorReferensi} berhasil dihapus.`);
+                          } catch (e: any) {
+                            alert('Gagal: ' + e.message);
+                          } finally {
+                            setIsDeletingSetoran(false);
+                          }
+                        }}
+                        disabled={isDeletingSetoran}
+                        className="px-3 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 text-rose-200 border border-rose-500/50 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Hapus</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+              {state.setoranList.length === 0 && (
+                <div className="text-center py-10 text-slate-500 text-xs">
+                  Tidak ada riwayat pengajuan setoran di dalam database.
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-slate-700 flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => setSubModal(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}

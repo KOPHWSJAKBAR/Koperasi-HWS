@@ -30,6 +30,7 @@ import {
   Radio,
   Download,
   ArrowRight,
+  Trash2,
 } from 'lucide-react';
 
 interface MemberVerificationViewProps {
@@ -829,6 +830,45 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       type: 'info',
       data: { depositId: dep.id, nominal: dep.nominal },
     }).catch(() => {});
+  };
+
+  // ADMIN: Delete Deposit Submission (Khusus Super Admin)
+  const handleDeleteDeposit = async (dep: SetoranVerifikasi) => {
+    if (!currentAdmin || currentAdmin.role !== 'super_admin') {
+      alert('Hanya Super Admin yang berhak menghapus riwayat verifikasi setoran.');
+      return;
+    }
+
+    const confirmDel = confirm(
+      `PERINGATAN SUPER ADMIN:\nApakah Anda yakin ingin menghapus pengajuan setoran ini?\n\nAnggota: ${dep.memberNama}\nNominal: ${formatRupiah(dep.nominal)}\nNo. Referensi: ${dep.nomorReferensi}\n\nPenghapusan akan disinkronkan ke server dan database secara permanen. Lanjutkan?`
+    );
+    if (!confirmDel) return;
+
+    try {
+      await fetch('/api/setoran/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ depositId: dep.id, adminName: currentAdmin.nama }),
+      });
+    } catch {}
+
+    await updateState((prev) => {
+      const filtered = prev.setoranList.filter((s) => s.id !== dep.id);
+      const audit = createAuditLog(
+        currentAdmin,
+        'Hapus Riwayat Setoran (Super Admin)',
+        `Super Admin ${currentAdmin.nama} menghapus pengajuan setoran ${dep.nomorReferensi} (${dep.memberNama} - ${formatRupiah(dep.nominal)})`,
+        dep.id
+      );
+      return {
+        ...prev,
+        setoranList: filtered,
+        deletedSetoranIds: [...(prev.deletedSetoranIds || []), dep.id],
+        auditLogs: [audit, ...prev.auditLogs],
+      };
+    });
+
+    alert(`✓ Riwayat setoran ${dep.nomorReferensi} berhasil dihapus oleh Super Admin.`);
   };
 
   // Export deposits table to CSV or printable PDF
@@ -1675,25 +1715,38 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                     </td>
                     {!isMember && (
                       <td className="py-3 px-3 text-right">
-                        {dep.status === 'pending' && (
-                          <div className="flex justify-end gap-1.5">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {dep.status === 'pending' && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={approvingId === dep.id}
+                                onClick={() => handleApproveDeposit(dep)}
+                                className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRejectDeposit(dep)}
+                                className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
+                              >
+                                ✕ Tolak
+                              </button>
+                            </>
+                          )}
+                          {currentAdmin?.role === 'super_admin' && (
                             <button
                               type="button"
-                              disabled={approvingId === dep.id}
-                              onClick={() => handleApproveDeposit(dep)}
-                              className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
+                              onClick={() => handleDeleteDeposit(dep)}
+                              className="py-1 px-2 bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 border border-rose-500/50 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 transition-all"
+                              title="Super Admin: Hapus Pengajuan Setoran"
                             >
-                              {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
+                              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                              <span className="hidden sm:inline">Hapus</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRejectDeposit(dep)}
-                              className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
-                            >
-                              ✕ Tolak
-                            </button>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </td>
                     )}
                   </tr>

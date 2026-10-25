@@ -281,21 +281,32 @@ function mergeServerState(current: any, incoming: any): any {
   const mergedMembers = Array.from(memberMap.values());
   const mergedDeletedMemIds = Array.from(allDeletedMemIds);
 
-  // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
+  // 2. Setoran List (Preserve all deposits & filter deletedSetoranIds)
+  const allDeletedSetoranIds = new Set<string>([
+    ...(current.deletedSetoranIds || []),
+    ...(incoming.deletedSetoranIds || []),
+  ]);
   const setoranMap = new Map<string, any>();
-  (current.setoranList || []).forEach((s: any) => setoranMap.set(s.id, { ...s }));
-  (incoming.setoranList || []).forEach((s: any) => {
-    const existing = setoranMap.get(s.id);
-    if (!existing) {
-      setoranMap.set(s.id, s);
-    } else {
-      setoranMap.set(s.id, {
-        ...existing,
-        ...s,
-        buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
-      });
+  (current.setoranList || []).forEach((s: any) => {
+    if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
+      setoranMap.set(s.id, { ...s });
     }
   });
+  (incoming.setoranList || []).forEach((s: any) => {
+    if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
+      const existing = setoranMap.get(s.id);
+      if (!existing) {
+        setoranMap.set(s.id, s);
+      } else {
+        setoranMap.set(s.id, {
+          ...existing,
+          ...s,
+          buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
+        });
+      }
+    }
+  });
+  const mergedDeletedSetoranIds = Array.from(allDeletedSetoranIds);
 
   // 3. Chat Messages (Preserve all messages & attachments - PERMANENT)
   const chatMap = new Map<string, any>();
@@ -351,13 +362,22 @@ function mergeServerState(current: any, incoming: any): any {
   const mergedTxList = Array.from(txMap.values());
   const mergedDeletedTxIds = Array.from(allDeletedTxIds);
 
-  // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
-  let mergedKasList: any[];
-  if (Array.isArray(incoming.kasList)) {
-    mergedKasList = incoming.kasList;
-  } else {
-    mergedKasList = current.kasList || [];
-  }
+  // 6. Kas List: filter out deletedKasIds so deletions by Super Admin persist permanently
+  const allDeletedKasIds = new Set<string>([
+    ...(current.deletedKasIds || []),
+    ...(incoming.deletedKasIds || []),
+  ]);
+  const kasSource = Array.isArray(incoming.kasList)
+    ? incoming.kasList
+    : (current.kasList || []);
+  const kasMap = new Map<string, any>();
+  kasSource.forEach((k: any) => {
+    if (k && k.id && !allDeletedKasIds.has(k.id)) {
+      kasMap.set(k.id, k);
+    }
+  });
+  const mergedKasList = Array.from(kasMap.values());
+  const mergedDeletedKasIds = Array.from(allDeletedKasIds);
 
   // 7. Penyaluran List (Zakat & Qurban)
   const penyaluranMap = new Map<string, any>();
@@ -447,6 +467,8 @@ function mergeServerState(current: any, incoming: any): any {
     members: mergedMembers,
     deletedMemberIds: mergedDeletedMemIds,
     deletedTransactionIds: mergedDeletedTxIds,
+    deletedKasIds: mergedDeletedKasIds,
+    deletedSetoranIds: mergedDeletedSetoranIds,
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
@@ -989,6 +1011,56 @@ async function startServer() {
     }
   });
 
+  // Dedicated Setoran Deletion Endpoint for Super Admin (Req: Buatkan verifikasi setoran bisa di hapus pada superadmin yang terdapat pada menu setinggan superadmin)
+  app.post('/api/setoran/delete', (req: Request, res: Response) => {
+    try {
+      const { depositId, depositIds, adminName, deleteAllRejected } = req.body;
+      const idsToDelete = new Set<string>();
+      if (depositId) idsToDelete.add(depositId);
+      if (Array.isArray(depositIds)) depositIds.forEach((id: string) => idsToDelete.add(id));
+      if (deleteAllRejected) {
+        (currentState.setoranList || []).filter((s: any) => s.status === 'ditolak').forEach((s: any) => idsToDelete.add(s.id));
+      }
+
+      if (idsToDelete.size === 0) {
+        return res.status(400).json({ error: 'ID setoran yang akan dihapus tidak ditentukan' });
+      }
+
+      const initialCount = (currentState.setoranList || []).length;
+      currentState.setoranList = (currentState.setoranList || []).filter((s: any) => !idsToDelete.has(s.id));
+      const deletedCount = initialCount - currentState.setoranList.length;
+
+      // Track deleted setoran IDs so sync never resurrects them
+      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
+      idsToDelete.forEach((id) => {
+        if (!currentState.deletedSetoranIds.includes(id)) {
+          currentState.deletedSetoranIds.push(id);
+        }
+      });
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-setoran-del-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Hapus Riwayat Setoran',
+        detail: `Super Admin ${adminName || ''} menghapus ${deletedCount} riwayat verifikasi setoran (${Array.from(idsToDelete).slice(0, 3).join(', ')}${idsToDelete.size > 3 ? '...' : ''})`,
+        targetId: Array.from(idsToDelete)[0] || '',
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastEvent('SETORAN_DELETED', { deletedCount, deletedIds: Array.from(idsToDelete) });
+
+      res.json({ success: true, message: `${deletedCount} setoran berhasil dihapus secara permanen oleh Super Admin!`, state: currentState });
+    } catch (err: any) {
+      console.error('Error in /api/setoran/delete:', err);
+      res.status(500).json({ error: 'Gagal menghapus data setoran: ' + (err.message || 'Server error') });
+    }
+  });
+
   // Online Realtime Member-to-Member Transfer Endpoint (Req 2: Transfer sesama anggota terkirim akurat)
   app.post('/api/transfer', (req: Request, res: Response) => {
     try {
@@ -1139,6 +1211,10 @@ async function startServer() {
 
       if (isDirectDelete) {
         currentState.kasList.splice(targetIdx, 1);
+        currentState.deletedKasIds = currentState.deletedKasIds || [];
+        if (!currentState.deletedKasIds.includes(id)) {
+          currentState.deletedKasIds.push(id);
+        }
       } else {
         // Admin Write propose deletion
         currentState.kasList[targetIdx] = {

@@ -349,9 +349,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Pending Buku Kas Koperasi Approval (Input, Edit, Hapus)
   const pendingKasCount = state.kasList.filter((k) => k.status === 'pending_approval').length;
 
-  // Unread chat messages from members
+  // Unread chat messages from members (only count active existing members)
   const unreadChatCount = state.chatMessages.filter(
-    (m) => m.senderType === 'member' && !m.isReadByAdmin
+    (m) => m.senderType === 'member' && !m.isReadByAdmin && state.members.some((mem) => mem.id === m.memberId)
   ).length;
 
   // Pending Penyaluran Sedekah Approval (Input Admin Write butuh persetujuan Approval / Super Admin per Req E)

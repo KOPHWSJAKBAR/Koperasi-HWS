@@ -362,6 +362,8 @@ export interface AppState {
   deletedMemberIds?: string[];
   deletedTransactionIds?: string[];
   deletedAdminIds?: string[];
+  deletedKasIds?: string[];
+  deletedSetoranIds?: string[];
 }
 
 

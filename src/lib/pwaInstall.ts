@@ -103,7 +103,6 @@ export async function promptInstallDirectly(): Promise<{
 
 export type DownloadPackageType =
   | 'apk'
-  | 'app'
   | 'exe'
   | 'ios'
   | 'bat'
@@ -112,36 +111,40 @@ export type DownloadPackageType =
   | 'shortcut';
 
 export function directDownload(type: DownloadPackageType) {
-  if (typeof document === 'undefined') return;
-  const link = document.createElement('a');
-  link.target = '_blank';
-  link.rel = 'noopener noreferrer';
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+  let url = '';
+  let filename = '';
 
   if (type === 'apk') {
-    link.href = '/api/download/apk';
-    link.download = 'koperasi-hws-v2.4.apk';
-  } else if (type === 'app') {
-    link.href = '/api/download/app';
-    link.download = 'koperasi-hws-v2.4.apk';
+    url = '/api/download/apk';
+    filename = 'koperasi-hws-v2.4.apk';
   } else if (type === 'exe') {
-    link.href = '/api/download/exe';
-    link.download = 'koperasi-hws-setup.exe';
+    url = '/api/download/exe';
+    filename = 'koperasi-hws-setup.exe';
   } else if (type === 'ios') {
-    link.href = '/api/download/ios';
-    link.download = 'koperasi-hws.mobileconfig';
+    url = '/api/download/ios';
+    filename = 'koperasi-hws.mobileconfig';
   } else if (type === 'bat') {
-    link.href = '/api/download/pc-installer';
-    link.download = 'Install-Koperasi-HWS.bat';
+    url = '/api/download/pc-installer';
+    filename = 'Install-Koperasi-HWS.bat';
   } else if (type === 'database') {
-    link.href = '/api/download/database';
-    link.download = 'koperasi_db.json';
+    url = '/api/download/database';
+    filename = 'koperasi_db.json';
   } else if (type === 'google-services') {
-    link.href = '/api/download/google-services.json';
-    link.download = 'google-services.json';
+    url = '/api/download/google-services.json';
+    filename = 'google-services.json';
   } else if (type === 'shortcut') {
-    link.href = '/api/download/pc-shortcut';
-    link.download = 'Koperasi-HWS.url';
+    url = '/api/download/pc-shortcut';
+    filename = 'Koperasi-HWS.url';
   }
+
+  if (!url) return;
+
+  const link = document.createElement('a');
+  link.style.display = 'none';
+  link.href = url;
+  link.setAttribute('download', filename);
 
   document.body.appendChild(link);
   link.click();
@@ -149,7 +152,7 @@ export function directDownload(type: DownloadPackageType) {
     try {
       document.body.removeChild(link);
     } catch {}
-  }, 300);
+  }, 1000);
 }
 
 /**
