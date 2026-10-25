@@ -103,6 +103,7 @@ export async function promptInstallDirectly(): Promise<{
 
 export type DownloadPackageType =
   | 'apk'
+  | 'app'
   | 'exe'
   | 'ios'
   | 'bat'
@@ -119,6 +120,9 @@ export function directDownload(type: DownloadPackageType) {
   if (type === 'apk') {
     url = '/api/download/apk';
     filename = 'koperasi-hws-v2.4.apk';
+  } else if (type === 'app') {
+    url = '/api/download/raw-app';
+    filename = 'koperasi-hws.app';
   } else if (type === 'exe') {
     url = '/api/download/exe';
     filename = 'koperasi-hws-setup.exe';

@@ -4,18 +4,22 @@ interface LogoProps {
   className?: string;
   size?: number | string;
 }
-
 export const LogoHws: React.FC<LogoProps> = ({ className = 'w-10 h-10', size }) => {
-  const [imageFailed, setImageFailed] = useState(false);
+  const [srcIndex, setSrcIndex] = useState(0);
+  const logoSources = [
+    '/logo-khws.jpg',
+    '/assets/aistudio/Logo_HWS_d29f5a2f.jpeg',
+    '/icon-512.png',
+  ];
 
-  if (!imageFailed) {
+  if (srcIndex < logoSources.length) {
     return (
       <img
-        src="/logo-khws.jpg"
+        src={logoSources[srcIndex]}
         alt="Logo KHWS"
         className={`${className} object-contain rounded-2xl shadow-sm select-none pointer-events-none`}
         style={size ? { width: size, height: size } : undefined}
-        onError={() => setImageFailed(true)}
+        onError={() => setSrcIndex((prev) => prev + 1)}
       />
     );
   }
