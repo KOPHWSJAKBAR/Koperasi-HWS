@@ -39,12 +39,15 @@ export async function recordAdminActivity(
   // 1. Write to Firestore 'logs' collection
   try {
     const logsCol = collection(db, 'logs');
-    await addDoc(logsCol, {
+    const { sanitizeForFirestore } = await import('./storage');
+    const cleanLog = sanitizeForFirestore({
       ...logEntry,
+      targetId: targetId || null,
       platform,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
       createdAtServer: serverTimestamp(),
     });
+    await addDoc(logsCol, cleanLog);
   } catch {
     // Handled gracefully - log is persisted reliably via /api/logs
   }

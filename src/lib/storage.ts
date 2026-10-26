@@ -522,11 +522,32 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.warn('Firestore Notice:', JSON.stringify(errInfo));
 }
 
+// Deep sanitization helper to strip all undefined values before writing to Firestore
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as any;
+  }
+  try {
+    return JSON.parse(JSON.stringify(data));
+  } catch {
+    if (typeof data === 'object') {
+      const clean: any = Array.isArray(data) ? [] : {};
+      for (const [k, v] of Object.entries(data as any)) {
+        if (v !== undefined) {
+          clean[k] = v;
+        }
+      }
+      return clean;
+    }
+    return data;
+  }
+}
+
 // Track last synced hashes to prevent redundant network writes
 const lastWrittenMap = new Map<string, string>();
 let shardedTimer: any = null;
 
-// Sharded Cloud Firestore synchronizer (resolves 1MB document limit completely)
+// Sharded Cloud Firestore synchronizer (resolves 1MB document limit and undefined fields completely)
 export async function syncShardedToFirestore(state: AppState) {
   try {
     const { db } = await import('./firebase');
@@ -534,7 +555,7 @@ export async function syncShardedToFirestore(state: AppState) {
     const now = new Date().toISOString();
 
     // 1. Sharded settings/general
-    const generalData = {
+    const generalData = sanitizeForFirestore({
       id: 'general',
       profile: state.profile || {},
       categoriesKasKoperasi: state.categoriesKasKoperasi || {},
@@ -545,7 +566,7 @@ export async function syncShardedToFirestore(state: AppState) {
       deletedTransactionIds: state.deletedTransactionIds || [],
       updatedAt: now,
       updatedBy: CLIENT_ID,
-    };
+    });
     const generalStr = JSON.stringify(generalData);
     if (lastWrittenMap.get('settings/general') !== generalStr) {
       await setDoc(doc(db, 'settings', 'general'), generalData, { merge: true }).catch((e) =>
@@ -555,12 +576,12 @@ export async function syncShardedToFirestore(state: AppState) {
     }
 
     // 2. Sharded settings/admins
-    const adminsData = {
+    const adminsData = sanitizeForFirestore({
       id: 'admins',
       admins: state.admins || [],
       updatedAt: now,
       updatedBy: CLIENT_ID,
-    };
+    });
     const adminsStr = JSON.stringify(adminsData);
     if (lastWrittenMap.get('settings/admins') !== adminsStr) {
       await setDoc(doc(db, 'settings', 'admins'), adminsData, { merge: true }).catch((e) =>
@@ -569,13 +590,14 @@ export async function syncShardedToFirestore(state: AppState) {
       lastWrittenMap.set('settings/admins', adminsStr);
     }
 
-    // 3. Sharded Members collection (each member is an isolated ~1KB doc)
+    // 3. Sharded Members collection (each member is an isolated ~1KB doc, stripped of any undefined fields)
     for (const m of state.members || []) {
       if (m && m.id) {
         const key = `members/${m.id}`;
-        const mStr = JSON.stringify(m);
+        const cleanMember = sanitizeForFirestore({ ...m, updatedAt: now });
+        const mStr = JSON.stringify(cleanMember);
         if (lastWrittenMap.get(key) !== mStr) {
-          await setDoc(doc(db, 'members', m.id), { ...m, updatedAt: now }, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'members', m.id), cleanMember, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, mStr);
@@ -590,9 +612,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const s of state.setoranList || []) {
       if (s && s.id) {
         const key = `setoran/${s.id}`;
-        const sStr = JSON.stringify(s);
+        const cleanSetoran = sanitizeForFirestore({ ...s, updatedAt: now });
+        const sStr = JSON.stringify(cleanSetoran);
         if (lastWrittenMap.get(key) !== sStr) {
-          await setDoc(doc(db, 'setoran', s.id), { ...s, updatedAt: now }, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'setoran', s.id), cleanSetoran, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, sStr);
@@ -604,9 +627,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const k of state.kasList || []) {
       if (k && k.id) {
         const key = `kas/${k.id}`;
-        const kStr = JSON.stringify(k);
+        const cleanKas = sanitizeForFirestore({ ...k, updatedAt: now });
+        const kStr = JSON.stringify(cleanKas);
         if (lastWrittenMap.get(key) !== kStr) {
-          await setDoc(doc(db, 'kas', k.id), { ...k, updatedAt: now }, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'kas', k.id), cleanKas, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, kStr);
@@ -618,9 +642,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const tx of state.memberTransactions || []) {
       if (tx && tx.id) {
         const key = `transactions/${tx.id}`;
-        const txStr = JSON.stringify(tx);
+        const cleanTx = sanitizeForFirestore({ ...tx, updatedAt: now });
+        const txStr = JSON.stringify(cleanTx);
         if (lastWrittenMap.get(key) !== txStr) {
-          await setDoc(doc(db, 'transactions', tx.id), { ...tx, updatedAt: now }, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'transactions', tx.id), cleanTx, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, txStr);
@@ -636,9 +661,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const c of recentChats) {
       if (c && c.id) {
         const key = `chats/${c.id}`;
-        const cStr = JSON.stringify(c);
+        const cleanChat = sanitizeForFirestore({ ...c });
+        const cStr = JSON.stringify(cleanChat);
         if (lastWrittenMap.get(key) !== cStr) {
-          await setDoc(doc(db, 'chats', c.id), { ...c }, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'chats', c.id), cleanChat, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, cStr);
@@ -650,9 +676,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const sr of state.suratList || []) {
       if (sr && sr.id) {
         const key = `surat/${sr.id}`;
-        const srStr = JSON.stringify(sr);
+        const cleanSurat = sanitizeForFirestore({ ...sr });
+        const srStr = JSON.stringify(cleanSurat);
         if (lastWrittenMap.get(key) !== srStr) {
-          await setDoc(doc(db, 'surat', sr.id), { ...sr }, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'surat', sr.id), cleanSurat, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, srStr);
@@ -661,21 +688,22 @@ export async function syncShardedToFirestore(state: AppState) {
     }
 
     // 9. Lightweight Metadata Pulse to koperasi_state/main_database (ONLY ~200 bytes, NO oversized payload string!)
+    const metadataDoc = sanitizeForFirestore({
+      id: 'main_database',
+      lastSynced: now,
+      updatedBy: CLIENT_ID,
+      isSharded: true,
+      totalMembers: (state.members || []).length,
+      totalKas: (state.kasList || []).length,
+      totalSetoran: (state.setoranList || []).length,
+      totalTransactions: (state.memberTransactions || []).length,
+      totalChats: (state.chatMessages || []).length,
+      totalSurat: (state.suratList || []).length,
+      filesProtected: true,
+    });
     await setDoc(
       doc(db, 'koperasi_state', 'main_database'),
-      {
-        id: 'main_database',
-        lastSynced: now,
-        updatedBy: CLIENT_ID,
-        isSharded: true,
-        totalMembers: (state.members || []).length,
-        totalKas: (state.kasList || []).length,
-        totalSetoran: (state.setoranList || []).length,
-        totalTransactions: (state.memberTransactions || []).length,
-        totalChats: (state.chatMessages || []).length,
-        totalSurat: (state.suratList || []).length,
-        filesProtected: true,
-      },
+      metadataDoc,
       { merge: true }
     ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'koperasi_state/main_database'));
   } catch (err) {

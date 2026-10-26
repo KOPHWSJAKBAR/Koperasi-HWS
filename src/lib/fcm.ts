@@ -2,7 +2,7 @@
 import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging';
 import { collection, addDoc, onSnapshot, query, where, orderBy, limit, serverTimestamp } from 'firebase/firestore';
 import { app, db, firebaseConfig } from './firebase';
-import { triggerBrowserNotification, playNotificationSound } from './storage';
+import { triggerBrowserNotification, playNotificationSound, sanitizeForFirestore } from './storage';
 
 export interface HwsNotification {
   id?: string;
@@ -184,10 +184,13 @@ export async function sendRealtimeNotification(notification: {
   // 2. Simpan ke Firestore Realtime Collection (Trigger Realtime onSnapshot di perangkat anggota)
   try {
     const notifCol = collection(db, 'notifications');
-    await addDoc(notifCol, {
+    const cleanNotif = sanitizeForFirestore({
       ...notification,
-      createdAt: serverTimestamp(),
       read: false,
+    });
+    await addDoc(notifCol, {
+      ...cleanNotif,
+      createdAt: serverTimestamp(),
     });
     success = true;
   } catch (firestoreErr) {
