@@ -4,14 +4,13 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useKoperasiState, CLIENT_ID } from './lib/storage';
+import { useKoperasiState } from './lib/storage';
 import { MemberUser, AdminUser } from './types';
 import { LoginView } from './components/LoginView';
 import { MemberDashboard } from './components/MemberDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
-import { auth, db } from './lib/firebase-init';
+import { auth } from './lib/firebase-init';
 import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 import { detectPlatform } from './lib/activityLogger';
 
@@ -42,98 +41,8 @@ export default function App() {
     }
   }, []);
 
-  // Hook useEffect untuk sinkronisasi data state dari lib/storage.ts ke Google Cloud Firestore secara realtime menggunakan onSnapshot
-  const isUpdatingFromFirestoreRef = useRef(false);
-  const lastUploadedJsonRef = useRef('');
-
-  useEffect(() => {
-    const docRef = doc(db, 'koperasi_state', 'main_database');
-    const unsubscribe = onSnapshot(
-      docRef,
-      (docSnap) => {
-        if (!docSnap.exists()) {
-          if (state && state.profile) {
-            setDoc(
-              docRef,
-              {
-                lastSynced: new Date().toISOString(),
-                updatedBy: CLIENT_ID,
-                payload: JSON.stringify(state),
-                totalMembers: (state.members || []).length,
-                totalKas: (state.kasList || []).length,
-                totalSetoran: (state.setoranList || []).length,
-                totalSedekah: (state.sedekahList || []).length,
-              },
-              { merge: true }
-            ).catch(() => {});
-          }
-          return;
-        }
-
-        const data = docSnap.data();
-        if (data && data.payload) {
-          if (data.updatedBy === CLIENT_ID || data.payload === lastUploadedJsonRef.current) {
-            return;
-          }
-          try {
-            const parsed = JSON.parse(data.payload);
-            isUpdatingFromFirestoreRef.current = true;
-            updateState((prev) => ({
-              ...prev,
-              ...parsed,
-              serverSyncStatus: {
-                ...(prev.serverSyncStatus || {}),
-                online: true,
-                firestoreActive: true,
-                googleCloudBackup: true,
-                lastSynced: new Date().toISOString(),
-              },
-            })).finally(() => {
-              isUpdatingFromFirestoreRef.current = false;
-            });
-          } catch (err) {
-            console.warn('Error sinkronisasi payload Firestore:', err);
-          }
-        }
-      },
-      (error) => {
-        console.warn('Firestore onSnapshot listener notice:', error);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [updateState]);
-
-  // Mirror pembaruan state lokal ke Google Cloud Firestore saat data berubah
-  useEffect(() => {
-    if (isUpdatingFromFirestoreRef.current) return;
-    if (!state || !state.profile) return;
-
-    const currentJson = JSON.stringify(state);
-    if (currentJson === lastUploadedJsonRef.current) return;
-
-    lastUploadedJsonRef.current = currentJson;
-    const docRef = doc(db, 'koperasi_state', 'main_database');
-    const timer = setTimeout(() => {
-      setDoc(
-        docRef,
-        {
-          lastSynced: new Date().toISOString(),
-          updatedBy: CLIENT_ID,
-          payload: currentJson,
-          totalMembers: (state.members || []).length,
-          totalKas: (state.kasList || []).length,
-          totalSetoran: (state.setoranList || []).length,
-          totalSedekah: (state.sedekahList || []).length,
-        },
-        { merge: true }
-      ).catch((err) => {
-        console.warn('Pemberitahuan sinkronisasi Cloud Firestore:', err);
-      });
-    }, 400);
-
-    return () => clearTimeout(timer);
-  }, [state]);
+  // Sinkronisasi realtime sharded telah terhubung langsung dan otomatis melalui useKoperasiState di lib/storage.ts
+  // Menjamin pemisahan dokumen per koleksi (members, setoran, kas, transactions, settings) bebas dari batasan 1MB Firestore.
 
   // Synchronize and persist user session with Firebase Authentication across all platforms (Web, Mobile, PC)
   useEffect(() => {

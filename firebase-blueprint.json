@@ -1,79 +1,153 @@
 {
   "entities": {
     "koperasi_state": {
-      "title": "Koperasi State",
-      "description": "Full cooperative data state synchronized with Firebase Firestore",
+      "title": "Koperasi State Shard Index",
+      "description": "Metadata sinkronisasi realtime dan informasi indeks pecahan data Firestore",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "payload": { "type": "string" },
-        "lastSynced": { "type": "string" }
+        "lastSynced": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "totalMembers": { "type": "number" },
+        "totalKas": { "type": "number" },
+        "totalSetoran": { "type": "number" },
+        "totalTransactions": { "type": "number" },
+        "isSharded": { "type": "boolean" }
       },
-      "required": ["id", "payload", "lastSynced"]
+      "required": ["id", "lastSynced", "updatedBy"]
     },
     "members": {
       "title": "Anggota Koperasi",
-      "description": "Data anggota koperasi dan saldo rekening simpanan",
+      "description": "Data profil lengkap anggota koperasi dan saldo rekening simpanan",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "nomorAnggota": { "type": "string" },
         "nomorRekening": { "type": "string" },
         "nama": { "type": "string" },
+        "nik": { "type": "string" },
+        "telepon": { "type": "string" },
         "saldoPokok": { "type": "number" },
-        "saldoUmum": { "type": "number" }
+        "saldoUmum": { "type": "number" },
+        "saldoZakat": { "type": "number" },
+        "saldoQurban": { "type": "number" },
+        "status": { "type": "string" },
+        "updatedAt": { "type": "string" }
       },
       "required": ["id", "nomorAnggota", "nama"]
     },
+    "transactions": {
+      "title": "Mutasi Transaksi Rekening",
+      "description": "Catatan mutasi keluar-masuk buku kas anggota digital",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "memberId": { "type": "string" },
+        "jenis": { "type": "string" },
+        "kategori": { "type": "string" },
+        "nominal": { "type": "number" },
+        "saldoAkhir": { "type": "number" },
+        "keterangan": { "type": "string" },
+        "tanggal": { "type": "string" }
+      },
+      "required": ["id", "memberId", "nominal", "tanggal"]
+    },
     "setoran": {
       "title": "Setoran Verifikasi",
-      "description": "Antrean pengajuan dan verifikasi setoran online",
+      "description": "Antrean pengajuan dan verifikasi setoran anggota koperasi",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "memberId": { "type": "string" },
         "nominal": { "type": "number" },
-        "status": { "type": "string" }
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
       },
       "required": ["id", "memberId", "nominal", "status"]
     },
+    "kas": {
+      "title": "Buku Kas Koperasi",
+      "description": "Catatan arus kas pemasukan dan pengeluaran koperasi pusat",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "jenis": { "type": "string" },
+        "kategori": { "type": "string" },
+        "nominal": { "type": "number" },
+        "keterangan": { "type": "string" },
+        "tanggal": { "type": "string" }
+      },
+      "required": ["id", "jenis", "nominal", "tanggal"]
+    },
     "chats": {
       "title": "Pesan Chat Realtime",
-      "description": "Pesan komunikasi anggota dan admin koperasi",
+      "description": "Pesan percakapan layanan anggota dan pengurus koperasi",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "memberId": { "type": "string" },
         "text": { "type": "string" },
+        "sender": { "type": "string" },
         "timestamp": { "type": "string" }
       },
       "required": ["id", "memberId", "text", "timestamp"]
+    },
+    "surat": {
+      "title": "Surat Resmi Koperasi",
+      "description": "Arsip surat menyurat digital dan pengumuman resmi",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nomorSurat": { "type": "string" },
+        "perihal": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "nomorSurat", "perihal"]
+    },
+    "settings": {
+      "title": "Pengaturan Sistem Koperasi",
+      "description": "Profil legalitas koperasi, rekening penampungan, pengurus, dan konfigurasi",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "updatedAt"]
     }
   },
   "firestore": {
-    "koperasi_state": {
-      "rules": {
-        "read": "true",
-        "write": "true"
-      }
+    "/koperasi_state/{stateId}": {
+      "schema": "koperasi_state",
+      "description": "Metadata status dan denyut sinkronisasi data antar device"
     },
-    "members": {
-      "rules": {
-        "read": "true",
-        "write": "true"
-      }
+    "/members/{memberId}": {
+      "schema": "members",
+      "description": "Penyimpanan pecahan dokumen per anggota koperasi"
     },
-    "setoran": {
-      "rules": {
-        "read": "true",
-        "write": "true"
-      }
+    "/transactions/{transactionId}": {
+      "schema": "transactions",
+      "description": "Penyimpanan mutasi transaksi anggota per dokumen"
     },
-    "chats": {
-      "rules": {
-        "read": "true",
-        "write": "true"
-      }
+    "/setoran/{setoranId}": {
+      "schema": "setoran",
+      "description": "Penyimpanan pengajuan setoran per dokumen"
+    },
+    "/kas/{kasId}": {
+      "schema": "kas",
+      "description": "Penyimpanan entri buku kas koperasi per dokumen"
+    },
+    "/chats/{chatId}": {
+      "schema": "chats",
+      "description": "Penyimpanan pesan obrolan per dokumen"
+    },
+    "/surat/{suratId}": {
+      "schema": "surat",
+      "description": "Penyimpanan arsip surat resmi per dokumen"
+    },
+    "/settings/{settingId}": {
+      "schema": "settings",
+      "description": "Penyimpanan pengaturan lembaga dan konfigurasi sistem"
     }
   }
 }

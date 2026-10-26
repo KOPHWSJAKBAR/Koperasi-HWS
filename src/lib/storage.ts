@@ -504,7 +504,193 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   };
 }
 
-// Sync to backend & Firebase Firestore (with permanent file protection)
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    operationType,
+    path,
+  };
+  console.warn('Firestore Notice:', JSON.stringify(errInfo));
+}
+
+// Track last synced hashes to prevent redundant network writes
+const lastWrittenMap = new Map<string, string>();
+let shardedTimer: any = null;
+
+// Sharded Cloud Firestore synchronizer (resolves 1MB document limit completely)
+export async function syncShardedToFirestore(state: AppState) {
+  try {
+    const { db } = await import('./firebase');
+    const { doc, setDoc, deleteDoc } = await import('firebase/firestore');
+    const now = new Date().toISOString();
+
+    // 1. Sharded settings/general
+    const generalData = {
+      id: 'general',
+      profile: state.profile || {},
+      categoriesKasKoperasi: state.categoriesKasKoperasi || {},
+      pengaturanBerbagi: state.pengaturanBerbagi || {},
+      maintenanceLock: state.maintenanceLock || { isLocked: false },
+      lastRunningNumber: state.lastRunningNumber || 66666,
+      deletedMemberIds: state.deletedMemberIds || [],
+      deletedTransactionIds: state.deletedTransactionIds || [],
+      updatedAt: now,
+      updatedBy: CLIENT_ID,
+    };
+    const generalStr = JSON.stringify(generalData);
+    if (lastWrittenMap.get('settings/general') !== generalStr) {
+      await setDoc(doc(db, 'settings', 'general'), generalData, { merge: true }).catch((e) =>
+        handleFirestoreError(e, OperationType.WRITE, 'settings/general')
+      );
+      lastWrittenMap.set('settings/general', generalStr);
+    }
+
+    // 2. Sharded settings/admins
+    const adminsData = {
+      id: 'admins',
+      admins: state.admins || [],
+      updatedAt: now,
+      updatedBy: CLIENT_ID,
+    };
+    const adminsStr = JSON.stringify(adminsData);
+    if (lastWrittenMap.get('settings/admins') !== adminsStr) {
+      await setDoc(doc(db, 'settings', 'admins'), adminsData, { merge: true }).catch((e) =>
+        handleFirestoreError(e, OperationType.WRITE, 'settings/admins')
+      );
+      lastWrittenMap.set('settings/admins', adminsStr);
+    }
+
+    // 3. Sharded Members collection (each member is an isolated ~1KB doc)
+    for (const m of state.members || []) {
+      if (m && m.id) {
+        const key = `members/${m.id}`;
+        const mStr = JSON.stringify(m);
+        if (lastWrittenMap.get(key) !== mStr) {
+          await setDoc(doc(db, 'members', m.id), { ...m, updatedAt: now }, { merge: true }).catch((e) =>
+            handleFirestoreError(e, OperationType.WRITE, key)
+          );
+          lastWrittenMap.set(key, mStr);
+        }
+      }
+    }
+    for (const delId of state.deletedMemberIds || []) {
+      await deleteDoc(doc(db, 'members', delId)).catch(() => {});
+    }
+
+    // 4. Sharded Setoran collection
+    for (const s of state.setoranList || []) {
+      if (s && s.id) {
+        const key = `setoran/${s.id}`;
+        const sStr = JSON.stringify(s);
+        if (lastWrittenMap.get(key) !== sStr) {
+          await setDoc(doc(db, 'setoran', s.id), { ...s, updatedAt: now }, { merge: true }).catch((e) =>
+            handleFirestoreError(e, OperationType.WRITE, key)
+          );
+          lastWrittenMap.set(key, sStr);
+        }
+      }
+    }
+
+    // 5. Sharded Kas collection
+    for (const k of state.kasList || []) {
+      if (k && k.id) {
+        const key = `kas/${k.id}`;
+        const kStr = JSON.stringify(k);
+        if (lastWrittenMap.get(key) !== kStr) {
+          await setDoc(doc(db, 'kas', k.id), { ...k, updatedAt: now }, { merge: true }).catch((e) =>
+            handleFirestoreError(e, OperationType.WRITE, key)
+          );
+          lastWrittenMap.set(key, kStr);
+        }
+      }
+    }
+
+    // 6. Sharded Member Transactions collection
+    for (const tx of state.memberTransactions || []) {
+      if (tx && tx.id) {
+        const key = `transactions/${tx.id}`;
+        const txStr = JSON.stringify(tx);
+        if (lastWrittenMap.get(key) !== txStr) {
+          await setDoc(doc(db, 'transactions', tx.id), { ...tx, updatedAt: now }, { merge: true }).catch((e) =>
+            handleFirestoreError(e, OperationType.WRITE, key)
+          );
+          lastWrittenMap.set(key, txStr);
+        }
+      }
+    }
+    for (const delTxId of state.deletedTransactionIds || []) {
+      await deleteDoc(doc(db, 'transactions', delTxId)).catch(() => {});
+    }
+
+    // 7. Sharded Chat Messages (Recent 100)
+    const recentChats = (state.chatMessages || []).slice(-100);
+    for (const c of recentChats) {
+      if (c && c.id) {
+        const key = `chats/${c.id}`;
+        const cStr = JSON.stringify(c);
+        if (lastWrittenMap.get(key) !== cStr) {
+          await setDoc(doc(db, 'chats', c.id), { ...c }, { merge: true }).catch((e) =>
+            handleFirestoreError(e, OperationType.WRITE, key)
+          );
+          lastWrittenMap.set(key, cStr);
+        }
+      }
+    }
+
+    // 8. Sharded Surat collection
+    for (const sr of state.suratList || []) {
+      if (sr && sr.id) {
+        const key = `surat/${sr.id}`;
+        const srStr = JSON.stringify(sr);
+        if (lastWrittenMap.get(key) !== srStr) {
+          await setDoc(doc(db, 'surat', sr.id), { ...sr }, { merge: true }).catch((e) =>
+            handleFirestoreError(e, OperationType.WRITE, key)
+          );
+          lastWrittenMap.set(key, srStr);
+        }
+      }
+    }
+
+    // 9. Lightweight Metadata Pulse to koperasi_state/main_database (ONLY ~200 bytes, NO oversized payload string!)
+    await setDoc(
+      doc(db, 'koperasi_state', 'main_database'),
+      {
+        id: 'main_database',
+        lastSynced: now,
+        updatedBy: CLIENT_ID,
+        isSharded: true,
+        totalMembers: (state.members || []).length,
+        totalKas: (state.kasList || []).length,
+        totalSetoran: (state.setoranList || []).length,
+        totalTransactions: (state.memberTransactions || []).length,
+        totalChats: (state.chatMessages || []).length,
+        totalSurat: (state.suratList || []).length,
+        filesProtected: true,
+      },
+      { merge: true }
+    ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'koperasi_state/main_database'));
+  } catch (err) {
+    console.warn('Notice syncShardedToFirestore:', err);
+  }
+}
+
+export function scheduleShardedFirestoreSync(state: AppState, delay = 300) {
+  clearTimeout(shardedTimer);
+  shardedTimer = setTimeout(() => {
+    syncShardedToFirestore(state);
+  }, delay);
+}
+
+// Sync to backend & Firebase Firestore (with sharded data protection)
 export async function syncStateToServer(state: AppState) {
   try {
     const now = new Date().toISOString();
@@ -535,24 +721,8 @@ export async function syncStateToServer(state: AppState) {
       });
     } catch {}
 
-    // 2. Mirror to Firebase Firestore directly with merge: true (Req 10 & Req 13)
-    try {
-      const { db } = await import('./firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(
-        doc(db, 'koperasi_state', 'main_database'),
-        {
-          lastSynced: now,
-          updatedBy: CLIENT_ID,
-          totalMembers: globalState.members.length,
-          totalKas: globalState.kasList.length,
-          totalSetoran: globalState.setoranList.length,
-          payload: JSON.stringify(globalState),
-          filesProtected: true,
-        },
-        { merge: true }
-      );
-    } catch {}
+    // 2. Sharded sync to Google Cloud Firestore (Never exceeds 1MB!)
+    scheduleShardedFirestoreSync(globalState);
   } catch (err) {
     // State is safely cached in localStorage
   }
@@ -689,35 +859,125 @@ export function useKoperasiState() {
 
     connectSSE();
 
-    // 3. Realtime Firestore Listener (Persistent & Auto-Reconnecting)
-    let unsubscribeFirestore: (() => void) | null = null;
+    // 3. Sharded Realtime Cloud Firestore Listeners
+    const firestoreUnsubscribers: (() => void)[] = [];
     try {
       import('./firebase').then(({ db }) => {
-        import('firebase/firestore').then(({ doc, onSnapshot }) => {
+        import('firebase/firestore').then(({ collection, doc, onSnapshot }) => {
           if (!isMounted) return;
-          unsubscribeFirestore = onSnapshot(
-            doc(db, 'koperasi_state', 'main_database'),
-            (docSnap) => {
-              if (docSnap.exists()) {
-                const remote = docSnap.data();
-                if (remote && remote.payload && remote.updatedBy !== CLIENT_ID) {
-                  try {
-                    const parsed = JSON.parse(remote.payload);
-                    if (parsed && parsed.profile && parsed.members) {
-                      globalState = mergeStates(globalState, parsed);
-                      try {
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                      } catch {}
-                      notifyListeners();
-                    }
-                  } catch {}
+
+          // A. Members Collection
+          const unsubMembers = onSnapshot(
+            collection(db, 'members'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteMembers = snapshot.docs.map((d) => d.data() as MemberUser);
+              globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
+              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+              notifyListeners();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'members')
+          );
+          firestoreUnsubscribers.push(unsubMembers);
+
+          // B. Setoran Collection
+          const unsubSetoran = onSnapshot(
+            collection(db, 'setoran'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteSetoran = snapshot.docs.map((d) => d.data() as SetoranVerifikasi);
+              globalState = mergeStates(globalState, { ...globalState, setoranList: remoteSetoran });
+              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+              notifyListeners();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'setoran')
+          );
+          firestoreUnsubscribers.push(unsubSetoran);
+
+          // C. Kas Collection
+          const unsubKas = onSnapshot(
+            collection(db, 'kas'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteKas = snapshot.docs.map((d) => d.data() as KasEntry);
+              globalState = mergeStates(globalState, { ...globalState, kasList: remoteKas });
+              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+              notifyListeners();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'kas')
+          );
+          firestoreUnsubscribers.push(unsubKas);
+
+          // D. Transactions Collection
+          const unsubTx = onSnapshot(
+            collection(db, 'transactions'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteTx = snapshot.docs.map((d) => d.data() as MemberTransaction);
+              globalState = mergeStates(globalState, { ...globalState, memberTransactions: remoteTx });
+              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+              notifyListeners();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'transactions')
+          );
+          firestoreUnsubscribers.push(unsubTx);
+
+          // E. Chats Collection
+          const unsubChats = onSnapshot(
+            collection(db, 'chats'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteChats = snapshot.docs.map((d) => d.data() as ChatMessage);
+              globalState = mergeStates(globalState, { ...globalState, chatMessages: remoteChats });
+              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+              notifyListeners();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
+          );
+          firestoreUnsubscribers.push(unsubChats);
+
+          // F. Settings / General Document
+          const unsubGeneral = onSnapshot(
+            doc(db, 'settings', 'general'),
+            (snap) => {
+              if (snap.exists()) {
+                const data = snap.data();
+                if (data && data.updatedBy !== CLIENT_ID) {
+                  globalState = {
+                    ...globalState,
+                    profile: data.profile || globalState.profile,
+                    categoriesKasKoperasi: data.categoriesKasKoperasi || globalState.categoriesKasKoperasi,
+                    pengaturanBerbagi: data.pengaturanBerbagi || globalState.pengaturanBerbagi,
+                    maintenanceLock: data.maintenanceLock || globalState.maintenanceLock,
+                    lastRunningNumber: data.lastRunningNumber || globalState.lastRunningNumber,
+                    deletedMemberIds: Array.from(new Set([...(globalState.deletedMemberIds || []), ...(data.deletedMemberIds || [])])),
+                    deletedTransactionIds: Array.from(new Set([...(globalState.deletedTransactionIds || []), ...(data.deletedTransactionIds || [])])),
+                  };
+                  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+                  notifyListeners();
                 }
               }
             },
-            () => {
-              // Graceful fallback: when unauthenticated or offline, real-time sync is handled seamlessly via Express SSE & REST API
-            }
+            (err) => handleFirestoreError(err, OperationType.GET, 'settings/general')
           );
+          firestoreUnsubscribers.push(unsubGeneral);
+
+          // G. Settings / Admins Document
+          const unsubAdmins = onSnapshot(
+            doc(db, 'settings', 'admins'),
+            (snap) => {
+              if (snap.exists()) {
+                const data = snap.data();
+                if (data && data.admins && data.updatedBy !== CLIENT_ID) {
+                  globalState = { ...globalState, admins: data.admins };
+                  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
+                  notifyListeners();
+                }
+              }
+            },
+            (err) => handleFirestoreError(err, OperationType.GET, 'settings/admins')
+          );
+          firestoreUnsubscribers.push(unsubAdmins);
         });
       });
     } catch {}
@@ -728,7 +988,9 @@ export function useKoperasiState() {
       clearInterval(pollInterval);
       clearTimeout(reconnectTimeout);
       if (eventSource) eventSource.close();
-      if (unsubscribeFirestore) unsubscribeFirestore();
+      firestoreUnsubscribers.forEach((unsub) => {
+        try { unsub(); } catch {}
+      });
     };
   }, []);
 
