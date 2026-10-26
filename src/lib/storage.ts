@@ -149,6 +149,8 @@ const defaultInitialState: AppState = {
     lastSynced: new Date().toISOString(),
     googleCloudBackup: true,
     firestoreActive: true,
+    firebaseStorageActive: true,
+    analyticsActive: true,
   },
   maintenanceLock: {
     isLocked: false,
@@ -498,6 +500,8 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
       lastSynced: new Date().toISOString(),
       googleCloudBackup: true,
       firestoreActive: true,
+      firebaseStorageActive: true,
+      analyticsActive: true,
       filesProtected: true,
       permanentStorage: true,
     },

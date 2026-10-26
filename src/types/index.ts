@@ -355,6 +355,8 @@ export interface AppState {
     lastSynced: string;
     googleCloudBackup: boolean;
     firestoreActive: boolean;
+    firebaseStorageActive?: boolean;
+    analyticsActive?: boolean;
     filesProtected?: boolean;
     permanentStorage?: boolean;
   };

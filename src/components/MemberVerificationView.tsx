@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { formatRupiah, createAuditLog, fetchStateFromServer } from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
+import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { LogoHws } from '../lib/logo';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import {
@@ -173,12 +174,22 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       setMsg({ type: 'error', text: 'Nominal setoran harus lebih dari Rp 0.' });
       return;
     }
-    let finalBukti = buktiUrl;
-    if (!finalBukti) {
-      finalBukti = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="220" viewBox="0 0 400 220"><rect width="400" height="220" fill="%230f172a"/><rect x="10" y="10" width="380" height="200" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-dasharray="4"/><text x="200" y="55" font-size="15" fill="%23f59e0b" font-weight="bold" text-anchor="middle">SLIP SETORAN RESMI KOPERASI HWS</text><text x="200" y="90" font-size="12" fill="%23ffffff" text-anchor="middle">A/N: ${encodeURIComponent(currentMember.nama)}</text><text x="200" y="125" font-size="16" fill="%2338bdf8" font-weight="bold" text-anchor="middle">Rp ${nominalFinal.toLocaleString('id-ID')}</text><text x="200" y="155" font-size="11" fill="%2394a3b8" text-anchor="middle">Jenis: ${jenisSetoran.toUpperCase()} • ${metode.toUpperCase()}</text><text x="200" y="185" font-size="10" fill="%2310b981" text-anchor="middle">✓ Terdaftar Online Realtime di Sistem</text></svg>`;
-    }
 
     setIsSubmitting(true);
+    let finalBukti = buktiUrl;
+    if (finalBukti && finalBukti.startsWith('data:image')) {
+      try {
+        const cloudUrl = await uploadToCloudStorage(finalBukti, {
+          folder: 'bukti_transfer',
+          customFileName: `dep_${currentMember.id}_${Date.now()}.jpg`,
+        });
+        if (cloudUrl && cloudUrl.startsWith('http')) {
+          finalBukti = cloudUrl;
+        }
+      } catch {}
+    } else if (!finalBukti) {
+      finalBukti = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="220" viewBox="0 0 400 220"><rect width="400" height="220" fill="%230f172a"/><rect x="10" y="10" width="380" height="200" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-dasharray="4"/><text x="200" y="55" font-size="15" fill="%23f59e0b" font-weight="bold" text-anchor="middle">SLIP SETORAN RESMI KOPERASI HWS</text><text x="200" y="90" font-size="12" fill="%23ffffff" text-anchor="middle">A/N: ${encodeURIComponent(currentMember.nama)}</text><text x="200" y="125" font-size="16" fill="%2338bdf8" font-weight="bold" text-anchor="middle">Rp ${nominalFinal.toLocaleString('id-ID')}</text><text x="200" y="155" font-size="11" fill="%2394a3b8" text-anchor="middle">Jenis: ${jenisSetoran.toUpperCase()} • ${metode.toUpperCase()}</text><text x="200" y="185" font-size="10" fill="%2310b981" text-anchor="middle">✓ Terdaftar Online Realtime di Sistem</text></svg>`;
+    }
     const newDeposit: SetoranVerifikasi = {
       id: `dep-${Date.now()}`,
       nomorReferensi: `REF-HWS-${Date.now().toString().slice(-6)}`,

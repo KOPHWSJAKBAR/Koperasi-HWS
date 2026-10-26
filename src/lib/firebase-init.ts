@@ -61,6 +61,9 @@ export function getFirebaseFirestore(): Firestore {
   return cachedDb;
 }
 
+import { getStorage, FirebaseStorage } from 'firebase/storage';
+import { getAnalytics, isSupported as isAnalyticsSupported, logEvent, Analytics } from 'firebase/analytics';
+
 export function getFirebaseAuth(): Auth {
   if (!cachedAuth) {
     cachedAuth = getAuth(getFirebaseApp());
@@ -68,17 +71,54 @@ export function getFirebaseAuth(): Auth {
   return cachedAuth;
 }
 
+let cachedStorage: FirebaseStorage | null = null;
+export function getFirebaseStorage(): FirebaseStorage {
+  if (!cachedStorage) {
+    const currentApp = getFirebaseApp();
+    cachedStorage = getStorage(currentApp, firebaseConfig.storageBucket);
+  }
+  return cachedStorage;
+}
+
+let cachedAnalytics: Analytics | null = null;
+export async function getFirebaseAnalyticsSafe(): Promise<Analytics | null> {
+  if (typeof window === 'undefined') return null;
+  if (!cachedAnalytics) {
+    try {
+      const supported = await isAnalyticsSupported();
+      if (supported) {
+        cachedAnalytics = getAnalytics(getFirebaseApp());
+      }
+    } catch {}
+  }
+  return cachedAnalytics;
+}
+
+export async function logAnalyticsEvent(eventName: string, params?: Record<string, any>) {
+  try {
+    const a = await getFirebaseAnalyticsSafe();
+    if (a) {
+      logEvent(a, eventName, params);
+    }
+  } catch {}
+}
+
 // Singletons exported directly for convenience and backwards-compatibility
 export const app: FirebaseApp = getFirebaseApp();
 export const db: Firestore = getFirebaseFirestore();
 export const auth: Auth = getFirebaseAuth();
+export const storage: FirebaseStorage = getFirebaseStorage();
 
 export default {
   app,
   db,
   auth,
+  storage,
   firebaseConfig,
   getFirebaseApp,
   getFirebaseFirestore,
   getFirebaseAuth,
+  getFirebaseStorage,
+  getFirebaseAnalyticsSafe,
+  logAnalyticsEvent,
 };

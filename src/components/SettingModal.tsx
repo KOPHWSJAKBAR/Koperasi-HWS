@@ -5454,25 +5454,24 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-[11px] text-slate-300">
                 <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
-                  <div className="text-purple-300 font-bold mb-1">🔥 Firebase Firestore</div>
-                  <div className="text-[10px] text-slate-400">Collection: koperasi_state</div>
-                  <div className="text-[10px] text-slate-400 truncate">Doc: main_database</div>
-                  <div className="text-[10px] text-emerald-400 font-semibold mt-1">Status: Ter-record realtime</div>
+                  <div className="text-amber-400 font-bold mb-1">🔥 Cloud Firestore Sharded</div>
+                  <div className="text-[10px] text-slate-400">Collections: members, setoran, kas, chats</div>
+                  <div className="text-[10px] text-slate-400 truncate">Mode: Long-Polling (Anti-Disconnect)</div>
+                  <div className="text-[10px] text-emerald-400 font-semibold mt-1">✓ Status: Realtime Online Aktif</div>
                 </div>
                 <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700">
-                  <div className="text-sky-300 font-bold mb-1">🐙 GitHub Repository Sync</div>
-                  <div className="text-[10px] text-slate-400">Branch: main (Auto-sync)</div>
-                  <div className="text-[10px] text-slate-400">Snapshot: Database Terkini</div>
-                  <a
-                    href="/api/github/sync"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-block text-[10px] text-sky-400 font-semibold mt-1 hover:underline"
-                  >
-                    Periksa Status GitHub Sync ›
-                  </a>
+                  <div className="text-sky-300 font-bold mb-1">☁️ Google Cloud Firebase Storage</div>
+                  <div className="text-[10px] text-slate-400 truncate">Bucket: gen-lang-client-0761736071</div>
+                  <div className="text-[10px] text-slate-400">Penyimpanan: Foto Bukti & Identitas</div>
+                  <div className="text-[10px] text-emerald-400 font-semibold mt-1">✓ Status: Terhubung Permanen</div>
+                </div>
+                <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700 sm:col-span-2 lg:col-span-1">
+                  <div className="text-purple-300 font-bold mb-1">📊 Firebase Analytics & Live Mesh</div>
+                  <div className="text-[10px] text-slate-400">Sync: PWA, APK, iOS, PC, Web</div>
+                  <div className="text-[10px] text-slate-400">Saluran: SSE Stream & Firestore onSnapshot</div>
+                  <div className="text-[10px] text-emerald-400 font-semibold mt-1">✓ Status: Aktif Lintas Platform</div>
                 </div>
               </div>
             </div>
