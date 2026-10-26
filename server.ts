@@ -572,17 +572,28 @@ async function startServer() {
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/api/uploads', express.static(UPLOADS_DIR));
 
-  // SSE Realtime Channel
+  // SSE Realtime Channel with 15s keep-alive heartbeat for production resilience (Cloud Run & proxies)
   app.get('/api/events', (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
     sseClients.add(res);
     res.write(`data: ${JSON.stringify({ type: 'CONNECTED', timestamp: new Date().toISOString() })}\n\n`);
 
+    const keepAlivePing = setInterval(() => {
+      try {
+        res.write(`: ping\n\n`);
+      } catch {
+        clearInterval(keepAlivePing);
+        sseClients.delete(res);
+      }
+    }, 15000);
+
     req.on('close', () => {
+      clearInterval(keepAlivePing);
       sseClients.delete(res);
     });
   });
@@ -2840,8 +2851,8 @@ exit
   const server = http.createServer(app);
 
   // Mount Vite in dev or static files in production
-  if (process.env.NODE_ENV === 'production') {
-    const distPath = path.join(__dirname, 'dist');
+  const distPath = path.join(__dirname, 'dist');
+  if (process.env.NODE_ENV === 'production' && fs.existsSync(distPath)) {
     app.use(express.static(distPath));
     app.get('*', (req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
