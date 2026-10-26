@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, Firestore } from 'firebase/firestore';
 import { getAuth, Auth } from 'firebase/auth';
 
 // Centralized Firebase configuration for multi-platform sync (Web, Android, iOS, PC, AI Studio)
@@ -35,15 +35,27 @@ export function getFirebaseApp(): FirebaseApp {
 export function getFirebaseFirestore(): Firestore {
   if (!cachedDb) {
     const currentApp = getFirebaseApp();
+    // Use long-polling transport to guarantee resilient realtime sync across Cloud Run proxies and iframe sandboxes
+    const firestoreSettings = {
+      experimentalForceLongPolling: true,
+    };
+
     if (firebaseConfig.firestoreDatabaseId) {
       try {
-        cachedDb = getFirestore(currentApp, firebaseConfig.firestoreDatabaseId);
+        cachedDb = initializeFirestore(currentApp, firestoreSettings, firebaseConfig.firestoreDatabaseId);
       } catch (err) {
-        console.warn('Failed initializing named databaseId, falling back to default db:', err);
-        cachedDb = getFirestore(currentApp);
+        try {
+          cachedDb = getFirestore(currentApp, firebaseConfig.firestoreDatabaseId);
+        } catch {
+          cachedDb = getFirestore(currentApp);
+        }
       }
     } else {
-      cachedDb = getFirestore(currentApp);
+      try {
+        cachedDb = initializeFirestore(currentApp, firestoreSettings);
+      } catch {
+        cachedDb = getFirestore(currentApp);
+      }
     }
   }
   return cachedDb;

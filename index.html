@@ -24,12 +24,12 @@
         const origError = console.error;
         console.warn = function(...args) {
           const first = typeof args[0] === 'string' ? args[0] : '';
-          if (first.includes('[vite]') || first.includes('websocket') || first.includes('Firestore onSnapshot') || first.includes('Firebase Auth') || first.includes('permissions')) return;
+          if (first.includes('[vite]') || first.includes('websocket') || first.includes('Firestore onSnapshot') || first.includes('Firebase Auth') || first.includes('permissions') || first.includes('WebChannelConnection') || first.includes('RPC \'Listen\'')) return;
           origWarn.apply(console, args);
         };
         console.error = function(...args) {
           const first = typeof args[0] === 'string' ? args[0] : '';
-          if (first.includes('[vite]') || first.includes('websocket') || first.includes('WebSocket') || first.includes('createWebSocketModuleRunnerTransport') || first.includes('Missing or insufficient permissions') || first.includes('firebase_auth')) return;
+          if (first.includes('[vite]') || first.includes('websocket') || first.includes('WebSocket') || first.includes('createWebSocketModuleRunnerTransport') || first.includes('Missing or insufficient permissions') || first.includes('firebase_auth') || first.includes('WebChannelConnection') || first.includes('RPC \'Listen\'')) return;
           origError.apply(console, args);
         };
         window.addEventListener('unhandledrejection', function(event) {
