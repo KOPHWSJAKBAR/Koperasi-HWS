@@ -58,6 +58,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const [koreksiMemberSearch, setKoreksiMemberSearch] = useState<string>('');
   const [koreksiTipe, setKoreksiTipe] = useState<'masuk' | 'keluar'>('masuk');
   const [koreksiJenisTabungan, setKoreksiJenisTabungan] = useState<'pokok' | 'umum'>('umum');
+  const [koreksiJumlahHari, setKoreksiJumlahHari] = useState<string>('');
   const [koreksiNominal, setKoreksiNominal] = useState<string>('');
   const [koreksiKeterangan, setKoreksiKeterangan] = useState<string>('');
   const [isSubmittingKoreksi, setIsSubmittingKoreksi] = useState(false);
@@ -212,25 +213,38 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
 
           let updatedPokok = Number(m.saldoPokok) || 0;
           let updatedUmum = Number(m.saldoUmum) || 0;
-          const z = Number(m.saldoZakatFitrah) || 0;
-          const q = Number(m.saldoQurban) || 0;
+          let updatedZakat = Number(m.saldoZakatFitrah) || 0;
+          let updatedQurban = Number(m.saldoQurban) || 0;
+
+          const pokokPortion = Math.floor(nominalNum * 0.5);
+          const qurbanPortion = Math.floor(nominalNum * 0.25);
+          const zakatPortion = nominalNum - pokokPortion - qurbanPortion;
 
           if (koreksiJenisTabungan === 'pokok') {
-            if (koreksiTipe === 'masuk') updatedPokok += nominalNum;
-            else updatedPokok = Math.max(0, updatedPokok - nominalNum);
+            if (koreksiTipe === 'masuk') {
+              updatedPokok += pokokPortion;
+              updatedQurban += qurbanPortion;
+              updatedZakat += zakatPortion;
+            } else {
+              updatedPokok = Math.max(0, updatedPokok - pokokPortion);
+              updatedQurban = Math.max(0, updatedQurban - qurbanPortion);
+              updatedZakat = Math.max(0, updatedZakat - zakatPortion);
+            }
           } else {
             if (koreksiTipe === 'masuk') updatedUmum += nominalNum;
             else updatedUmum = Math.max(0, updatedUmum - nominalNum);
           }
 
-          const totalSimpanan = updatedPokok + updatedUmum + z + q;
+          const totalSimpanan = updatedPokok + updatedUmum + updatedZakat + updatedQurban;
           const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
           newTransactions.push({
             id: txId,
             memberId: m.id,
             tanggal: tgl,
             jam,
-            keterangan: `KOREKSI SALDO: ${koreksiKeterangan}`,
+            keterangan: koreksiJenisTabungan === 'pokok'
+              ? `KOREKSI TABUNGAN POKOK (50% Pokok, 25% Qurban, 25% Zakat): ${koreksiKeterangan}`
+              : `KOREKSI SALDO UMUM: ${koreksiKeterangan}`,
             cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
             tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
             nominal: nominalNum,
@@ -243,26 +257,79 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             ...m,
             saldoPokok: updatedPokok,
             saldoUmum: updatedUmum,
+            saldoZakatFitrah: updatedZakat,
+            saldoQurban: updatedQurban,
             totalSimpanan,
           };
         });
 
         // Entri penyeimbang di Buku Kas Anggota
         const kasEntryId = `kas-adj-${Date.now()}`;
-        newKasEntries.push({
-          id: kasEntryId,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          kategori: koreksiJenisTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Bebas',
-          keterangan: `Koreksi Saldo ${koreksiTipe === 'masuk' ? 'Masuk' : 'Keluar'} (${targetMembersKoreksi.length} Anggota): ${koreksiKeterangan}`,
-          namaPenerima: targetMembersKoreksi.length === 1 ? targetMembersKoreksi[0].nama : `Koreksi Saldo Massal (${targetMembersKoreksi.length} Anggota)`,
-          tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
-          nominal: totalDana,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin.nama,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
+        if (koreksiJenisTabungan === 'pokok') {
+          const totalPokokKas = Math.floor(totalDana * 0.5);
+          const totalQurbanKas = Math.floor(totalDana * 0.25);
+          const totalZakatKas = totalDana - totalPokokKas - totalQurbanKas;
+
+          newKasEntries.push(
+            {
+              id: `${kasEntryId}-p`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Pokok',
+              keterangan: `Koreksi Tabungan Pokok 50% (${targetMembersKoreksi.length} Anggota): ${koreksiKeterangan}`,
+              namaPenerima: targetMembersKoreksi.length === 1 ? targetMembersKoreksi[0].nama : `Koreksi Massal (${targetMembersKoreksi.length} Anggota)`,
+              tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
+              nominal: totalPokokKas,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            },
+            {
+              id: `${kasEntryId}-q`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Qurban',
+              keterangan: `Koreksi Tabungan Qurban 25% (${targetMembersKoreksi.length} Anggota): ${koreksiKeterangan}`,
+              namaPenerima: targetMembersKoreksi.length === 1 ? targetMembersKoreksi[0].nama : `Koreksi Massal (${targetMembersKoreksi.length} Anggota)`,
+              tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
+              nominal: totalQurbanKas,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            },
+            {
+              id: `${kasEntryId}-z`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Zakat',
+              keterangan: `Koreksi Tabungan Zakat 25% (${targetMembersKoreksi.length} Anggota): ${koreksiKeterangan}`,
+              namaPenerima: targetMembersKoreksi.length === 1 ? targetMembersKoreksi[0].nama : `Koreksi Massal (${targetMembersKoreksi.length} Anggota)`,
+              tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
+              nominal: totalZakatKas,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            }
+          );
+        } else {
+          newKasEntries.push({
+            id: kasEntryId,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Bebas',
+            keterangan: `Koreksi Saldo ${koreksiTipe === 'masuk' ? 'Masuk' : 'Keluar'} (${targetMembersKoreksi.length} Anggota): ${koreksiKeterangan}`,
+            namaPenerima: targetMembersKoreksi.length === 1 ? targetMembersKoreksi[0].nama : `Koreksi Saldo Massal (${targetMembersKoreksi.length} Anggota)`,
+            tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
+            nominal: totalDana,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+        }
 
         const audit = createAuditLog(
           currentAdmin,
@@ -754,6 +821,64 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 </div>
               </div>
 
+              {/* Input Hari (Khusus Tabungan Pokok) & Nominal */}
+              {koreksiJenisTabungan === 'pokok' && (
+                <div className="space-y-1.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                  <div className="flex items-center justify-between">
+                    <label className="block font-bold text-amber-300 text-xs">
+                      Aturan Tabungan Pokok: Masukkan Jumlah Hari *
+                    </label>
+                    <span className="text-[11px] text-amber-400 font-medium">Rp 2.000 / Hari</span>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="Contoh: 10 atau 30 hari"
+                      value={koreksiJumlahHari}
+                      onChange={(e) => {
+                        const h = e.target.value.replace(/\D/g, '');
+                        setKoreksiJumlahHari(h);
+                        const hNum = parseInt(h, 10) || 0;
+                        if (hNum > 0) {
+                          const total = hNum * (state.profile?.biayaWajibHarian || 2000);
+                          setKoreksiNominal(total.toLocaleString('id-ID'));
+                        }
+                      }}
+                      className="w-1/2 px-3 py-2 bg-slate-800 border border-amber-500/40 rounded-xl font-mono text-sm font-bold text-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                    <span className="text-xs text-slate-300 font-semibold">Hari</span>
+                  </div>
+                  {/* Pembagian Sesuai Aturan Koperasi: 50% Pokok, 25% Qurban, 25% Zakat */}
+                  {parseInt(koreksiNominal.replace(/\D/g, ''), 10) > 0 && (
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-center text-[11px] pt-2 border-t border-amber-500/20">
+                      <div className="p-1.5 bg-slate-900/60 rounded-lg">
+                        <div className="text-slate-400 font-medium">50% Pokok</div>
+                        <div className="font-bold text-emerald-400 font-mono">
+                          {formatRupiah(Math.floor(parseInt(koreksiNominal.replace(/\D/g, ''), 10) * 0.5))}
+                        </div>
+                      </div>
+                      <div className="p-1.5 bg-slate-900/60 rounded-lg">
+                        <div className="text-slate-400 font-medium">25% Qurban</div>
+                        <div className="font-bold text-amber-400 font-mono">
+                          {formatRupiah(Math.floor(parseInt(koreksiNominal.replace(/\D/g, ''), 10) * 0.25))}
+                        </div>
+                      </div>
+                      <div className="p-1.5 bg-slate-900/60 rounded-lg">
+                        <div className="text-slate-400 font-medium">25% Zakat</div>
+                        <div className="font-bold text-teal-400 font-mono">
+                          {formatRupiah(
+                            parseInt(koreksiNominal.replace(/\D/g, ''), 10) -
+                              Math.floor(parseInt(koreksiNominal.replace(/\D/g, ''), 10) * 0.5) -
+                              Math.floor(parseInt(koreksiNominal.replace(/\D/g, ''), 10) * 0.25)
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Input Nominal */}
               <div className="space-y-1.5">
                 <label className="block font-bold text-slate-300">
@@ -771,6 +896,10 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                     onChange={(e) => {
                       const val = e.target.value.replace(/\D/g, '');
                       setKoreksiNominal(val ? parseInt(val, 10).toLocaleString('id-ID') : '');
+                      if (koreksiJenisTabungan === 'pokok') {
+                        const n = parseInt(val, 10) || 0;
+                        setKoreksiJumlahHari(n > 0 ? String(Math.round(n / (state.profile?.biayaWajibHarian || 2000))) : '');
+                      }
                     }}
                     className="w-full pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl font-mono text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />

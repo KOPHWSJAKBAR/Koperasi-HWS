@@ -166,7 +166,7 @@ export interface MemberUser {
   terdaftarSejak: string;
 }
 
-export type JenisSetoran = 'kewajiban' | 'umum';
+export type JenisSetoran = 'kewajiban' | 'umum' | 'sedekah' | 'zakat' | 'qurban';
 
 export interface SetoranVerifikasi {
   id: string;

@@ -298,9 +298,15 @@ function mergeServerState(current: any, incoming: any): any {
       if (!existing) {
         setoranMap.set(s.id, s);
       } else {
+        // TERMINAL STATUS GUARD: Once disetujui or ditolak, NEVER revert to pending!
+        const isTerminal = existing.status === 'disetujui' || existing.status === 'ditolak';
+        const finalStatus = isTerminal ? existing.status : (s.status || existing.status);
         setoranMap.set(s.id, {
           ...existing,
           ...s,
+          status: finalStatus,
+          verifiedAt: existing.verifiedAt || s.verifiedAt,
+          verifiedBy: existing.verifiedBy || s.verifiedBy,
           buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
         });
       }
@@ -1580,12 +1586,23 @@ async function startServer() {
 
         let p = Number(m.saldoPokok) || 0;
         let u = Number(m.saldoUmum) || 0;
-        const z = Number(m.saldoZakatFitrah) || 0;
-        const q = Number(m.saldoQurban) || 0;
+        let z = Number(m.saldoZakatFitrah) || 0;
+        let q = Number(m.saldoQurban) || 0;
+
+        const pNom = Math.floor(nominalNum * 0.5);
+        const qNom = Math.floor(nominalNum * 0.25);
+        const zNom = nominalNum - pNom - qNom;
 
         if (jenisTabungan === 'pokok') {
-          if (tipe === 'masuk') p += nominalNum;
-          else p = Math.max(0, p - nominalNum);
+          if (tipe === 'masuk') {
+            p += pNom;
+            q += qNom;
+            z += zNom;
+          } else {
+            p = Math.max(0, p - pNom);
+            q = Math.max(0, q - qNom);
+            z = Math.max(0, z - zNom);
+          }
         } else {
           if (tipe === 'masuk') u += nominalNum;
           else u = Math.max(0, u - nominalNum);
@@ -1600,7 +1617,9 @@ async function startServer() {
           memberId: m.id,
           tanggal: tgl,
           jam,
-          keterangan: `KOREKSI SALDO: ${keterangan || 'Penyesuaian Saldo Anggota'}`,
+          keterangan: jenisTabungan === 'pokok'
+            ? `KOREKSI TABUNGAN POKOK (50% Pokok, 25% Qurban, 25% Zakat): ${keterangan || 'Penyesuaian Saldo'}`
+            : `KOREKSI SALDO UMUM: ${keterangan || 'Penyesuaian Saldo'}`,
           cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
           tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
           nominal: nominalNum,
@@ -1613,6 +1632,8 @@ async function startServer() {
           ...m,
           saldoPokok: p,
           saldoUmum: u,
+          saldoZakatFitrah: z,
+          saldoQurban: q,
           totalSimpanan,
         };
       });
@@ -1622,20 +1643,71 @@ async function startServer() {
       // Entri penyeimbang di Buku Kas Anggota
       const kasId = `kas-adj-${Date.now()}`;
       currentState.kasList = currentState.kasList || [];
-      currentState.kasList.unshift({
-        id: kasId,
-        bukuKas: 'anggota',
-        tanggal: tgl,
-        kategori: jenisTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Bebas',
-        keterangan: `Koreksi Saldo ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} (${targetIds.length} Anggota): ${keterangan || ''}`,
-        namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
-        tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
-        nominal: totalDana,
-        saldoKasSetelah: 0,
-        inputBy: adminName || 'Super Admin',
-        status: 'approved',
-        createdAt: now.toISOString(),
-      });
+      if (jenisTabungan === 'pokok') {
+        const totalPokokKas = Math.floor(totalDana * 0.5);
+        const totalQurbanKas = Math.floor(totalDana * 0.25);
+        const totalZakatKas = totalDana - totalPokokKas - totalQurbanKas;
+
+        currentState.kasList.unshift(
+          {
+            id: `${kasId}-p`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Pokok',
+            keterangan: `Koreksi Tabungan Pokok 50% (${targetIds.length} Anggota): ${keterangan || ''}`,
+            namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+            tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
+            nominal: totalPokokKas,
+            saldoKasSetelah: 0,
+            inputBy: adminName || 'Super Admin',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          },
+          {
+            id: `${kasId}-q`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Qurban',
+            keterangan: `Koreksi Tabungan Qurban 25% (${targetIds.length} Anggota): ${keterangan || ''}`,
+            namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+            tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
+            nominal: totalQurbanKas,
+            saldoKasSetelah: 0,
+            inputBy: adminName || 'Super Admin',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          },
+          {
+            id: `${kasId}-z`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Zakat',
+            keterangan: `Koreksi Tabungan Zakat 25% (${targetIds.length} Anggota): ${keterangan || ''}`,
+            namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+            tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
+            nominal: totalZakatKas,
+            saldoKasSetelah: 0,
+            inputBy: adminName || 'Super Admin',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          }
+        );
+      } else {
+        currentState.kasList.unshift({
+          id: kasId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          kategori: 'Tabungan Bebas',
+          keterangan: `Koreksi Saldo ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} (${targetIds.length} Anggota): ${keterangan || ''}`,
+          namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+          tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
+          nominal: totalDana,
+          saldoKasSetelah: 0,
+          inputBy: adminName || 'Super Admin',
+          status: 'approved',
+          createdAt: now.toISOString(),
+        });
+      }
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({

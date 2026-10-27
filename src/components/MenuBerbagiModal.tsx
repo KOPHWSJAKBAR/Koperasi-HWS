@@ -367,6 +367,36 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         createdAt: now.toISOString(),
       };
 
+      const newSetoranEntry = {
+        id: entryId,
+        memberId: currentMember ? currentMember.id : 'donatur-umum',
+        memberNama: currentMember ? currentMember.nama : 'Donatur Hamba Allah',
+        memberRekening: currentMember ? currentMember.nomorRekening : '-',
+        memberNomorAnggota: currentMember?.nomorAnggota,
+        jenis: 'sedekah' as const,
+        nominal,
+        rekeningTujuan: `${bankName} (${noRekening})`,
+        metode: (sumberDana === 'tabungan_umum' ? 'tabungan_umum' : 'qris') as any,
+        buktiTransferUrl: buktiTransferUrl || undefined,
+        catatanAnggota: doaPesan.trim() ? `[${jenisLabel}] ${doaPesan.trim()}` : `Donasi ${jenisLabel}`,
+        status: 'pending' as const,
+        createdAt: now.toISOString(),
+        nomorReferensi: `SDK-${Date.now().toString().slice(-6)}`,
+      };
+
+      try {
+        await fetch('/api/setoran/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deposit: newSetoranEntry,
+            sedekahEntry: newSedekahEntry,
+          }),
+        });
+      } catch (err) {
+        console.warn('Setoran sedekah submit notice:', err);
+      }
+
       await updateState((prev) => {
         const audit = createAuditLog(
           currentMember || ({ nama: 'Donatur', role: 'member' } as any),
@@ -377,6 +407,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         return {
           ...prev,
           sedekahList: [newSedekahEntry, ...(prev.sedekahList || [])],
+          setoranList: [newSetoranEntry, ...(prev.setoranList || [])],
           auditLogs: [audit, ...(prev.auditLogs || [])],
         };
       });

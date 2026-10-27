@@ -236,7 +236,21 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         return;
       }
 
-      // Update client state
+      const resData = await res.json().catch(() => ({}));
+      if (resData.state) {
+        await updateState(() => resData.state);
+      }
+
+      // Hapus dokumen transaksi langsung dari Firestore
+      try {
+        const { db } = await import('../lib/firebase');
+        const { doc, deleteDoc } = await import('firebase/firestore');
+        for (const txId of activeSelectedIds) {
+          await deleteDoc(doc(db, 'transactions', txId)).catch(() => {});
+        }
+      } catch {}
+
+      // Update client state fallback
       const targetIdsSet = new Set(activeSelectedIds);
       await updateState((prev) => {
         const remainingTx = prev.memberTransactions.filter((tx) => !targetIdsSet.has(tx.id));

@@ -333,19 +333,35 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   allDeletedMemIds.forEach((id) => memberMap.delete(id));
   const mergedMembers = Array.from(memberMap.values());
 
-  // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl)
+  // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl, protect approved status)
+  const allDeletedSetoranIds = new Set<string>([
+    ...(base.deletedSetoranIds || []),
+    ...(incoming.deletedSetoranIds || []),
+  ]);
   const setoranMap = new Map<string, SetoranVerifikasi>();
-  (base.setoranList || []).forEach((s) => setoranMap.set(s.id, { ...s }));
+  (base.setoranList || []).forEach((s) => {
+    if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
+      setoranMap.set(s.id, { ...s });
+    }
+  });
   (incoming.setoranList || []).forEach((s) => {
-    const existing = setoranMap.get(s.id);
-    if (!existing) {
-      setoranMap.set(s.id, s);
-    } else {
-      setoranMap.set(s.id, {
-        ...existing,
-        ...s,
-        buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
-      });
+    if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
+      const existing = setoranMap.get(s.id);
+      if (!existing) {
+        setoranMap.set(s.id, s);
+      } else {
+        // TERMINAL STATUS GUARD: Once disetujui or ditolak, NEVER revert to pending!
+        const isTerminal = existing.status === 'disetujui' || existing.status === 'ditolak';
+        const finalStatus = isTerminal ? existing.status : (s.status || existing.status);
+        setoranMap.set(s.id, {
+          ...existing,
+          ...s,
+          status: finalStatus,
+          verifiedAt: existing.verifiedAt || s.verifiedAt,
+          verifiedBy: existing.verifiedBy || s.verifiedBy,
+          buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
+        });
+      }
     }
   });
 
