@@ -504,6 +504,17 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             : s
         );
 
+        const updatedSetoranList = (prev.setoranList || []).map((st) =>
+          st.id === entry.id
+            ? {
+                ...st,
+                status: 'disetujui' as const,
+                verifiedBy: currentAdmin?.nama || 'Admin',
+                verifiedAt: now.toISOString(),
+              }
+            : st
+        );
+
         const audit = createAuditLog(
           currentAdmin!,
           'Konfirmasi Donasi Berbagi',
@@ -516,9 +527,22 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           memberTransactions: updatedMemberTransactions,
           kasList: [kasKoperasiEntry, ...(prev.kasList || [])],
           sedekahList: updatedSedekahList,
+          setoranList: updatedSetoranList,
           auditLogs: [audit, ...(prev.auditLogs || [])],
         };
       });
+
+      try {
+        await fetch('/api/setoran/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            depositId: entry.id,
+            isApproved: true,
+            adminName: currentAdmin?.nama || 'Admin',
+          }),
+        });
+      } catch {}
 
       alert(`✓ Donasi ${jenisLabel} senilai ${formatRupiah(entry.nominal)} berhasil dikonfirmasi dan dicatat pada Buku Kas Koperasi!`);
     } catch (err: any) {
@@ -532,7 +556,21 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     const reason = prompt(`Masukkan alasan penolakan donasi dari ${entry.donaturNama || 'Donatur'}:`, 'Data transfer tidak valid / tidak masuk');
     if (reason === null) return;
 
+    try {
+      await fetch('/api/setoran/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          depositId: entry.id,
+          isApproved: false,
+          adminName: currentAdmin?.nama || 'Admin',
+          alasan: reason,
+        }),
+      });
+    } catch {}
+
     await updateState((prev) => {
+      const nowIso = new Date().toISOString();
       const updatedSedekahList = (prev.sedekahList || []).map((s) =>
         s.id === entry.id
           ? {
@@ -540,9 +578,21 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               status: 'rejected' as const,
               rejectionReason: reason,
               verifiedBy: currentAdmin?.nama || 'Admin',
-              verifiedAt: new Date().toISOString(),
+              verifiedAt: nowIso,
             }
           : s
+      );
+
+      const updatedSetoranList = (prev.setoranList || []).map((st) =>
+        st.id === entry.id
+          ? {
+              ...st,
+              status: 'ditolak' as const,
+              catatanAdmin: reason,
+              verifiedBy: currentAdmin?.nama || 'Admin',
+              verifiedAt: nowIso,
+            }
+          : st
       );
 
       const audit = createAuditLog(
@@ -554,6 +604,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       return {
         ...prev,
         sedekahList: updatedSedekahList,
+        setoranList: updatedSetoranList,
         auditLogs: [audit, ...(prev.auditLogs || [])],
       };
     });

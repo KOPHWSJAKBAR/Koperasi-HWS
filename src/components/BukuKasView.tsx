@@ -513,91 +513,271 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       return;
     }
 
+    // Helper: Sinkronisasi otomatis mutasi, saldo anggota & running saldo buku kas saat entri Buku Kas dihapus
+    const applyKasDeletionWithMemberSync = (prev: AppState, deletedEntry: KasEntry) => {
+      const remainingKas = prev.kasList.filter((k) => k.id !== deletedEntry.id);
+
+      // Recompute running saldoKasSetelah per bukuKas
+      const recomputeKasSaldo = (list: KasEntry[]) => {
+        const byType = (type: 'anggota' | 'koperasi') => {
+          const items = list
+            .filter((k) => k.bukuKas === type)
+            .slice()
+            .sort((a, b) => (a.tanggal + (a.createdAt || '')).localeCompare(b.tanggal + (b.createdAt || '')));
+          let run = 0;
+          const map = new Map<string, number>();
+          items.forEach((it) => {
+            if (it.status === 'approved') {
+              run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+            }
+            map.set(it.id, run);
+          });
+          return map;
+        };
+        const mapAnggota = byType('anggota');
+        const mapKoperasi = byType('koperasi');
+        return list.map((k) => ({
+          ...k,
+          saldoKasSetelah:
+            k.bukuKas === 'anggota'
+              ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+              : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+        }));
+      };
+
+      const syncedKasList = recomputeKasSaldo(remainingKas);
+      const nextDeletedKasIds = Array.from(new Set([...(prev.deletedKasIds || []), deletedEntry.id]));
+
+      if (deletedEntry.bukuKas !== 'anggota') {
+        return {
+          ...prev,
+          kasList: syncedKasList,
+          deletedKasIds: nextDeletedKasIds,
+        };
+      }
+
+      // Cari anggota yang bersangkutan berdasarkan namaPenerima atau keterangan
+      const cleanPenerima = (deletedEntry.namaPenerima || '').trim().toLowerCase();
+      const cleanKet = (deletedEntry.keterangan || '').trim().toLowerCase();
+
+      const matchedMembers = prev.members.filter((m) => {
+        const mName = (m.nama || '').trim().toLowerCase();
+        if (!mName) return false;
+        if (cleanPenerima && cleanPenerima === mName) return true;
+        if (cleanKet && cleanKet.includes(mName)) return true;
+        return false;
+      });
+
+      const matchedMemberIds = new Set(matchedMembers.map((m) => m.id));
+      const newlyDeletedTxIds: string[] = [];
+
+      // Hapus atau koreksi mutasi anggota yang terkait dengan kas yang dihapus
+      let removedOrAdjustedTx = false;
+      const updatedTransactions: MemberTransaction[] = [];
+
+      for (const tx of prev.memberTransactions || []) {
+        if (
+          !removedOrAdjustedTx &&
+          matchedMemberIds.has(tx.memberId) &&
+          tx.tanggal === deletedEntry.tanggal &&
+          tx.tipe === deletedEntry.tipe
+        ) {
+          if (tx.nominal === deletedEntry.nominal) {
+            removedOrAdjustedTx = true;
+            newlyDeletedTxIds.push(tx.id);
+            continue;
+          } else if (tx.nominal > deletedEntry.nominal) {
+            removedOrAdjustedTx = true;
+            updatedTransactions.push({
+              ...tx,
+              nominal: tx.nominal - deletedEntry.nominal,
+            });
+            continue;
+          }
+        }
+        updatedTransactions.push(tx);
+      }
+
+      // Koreksi langsung saldo simpanan anggota sesuai kategori buku kas yang dihapus
+      const katLower = (deletedEntry.kategori || '').toLowerCase();
+      const updatedMembers = prev.members.map((m) => {
+        if (!matchedMemberIds.has(m.id)) return m;
+
+        const perMemberNominal =
+          matchedMembers.length > 1
+            ? Math.floor(deletedEntry.nominal / matchedMembers.length)
+            : deletedEntry.nominal;
+
+        let p = Number(m.saldoPokok) || 0;
+        let u = Number(m.saldoUmum) || 0;
+        let z = Number(m.saldoZakatFitrah) || 0;
+        let q = Number(m.saldoQurban) || 0;
+
+        if (deletedEntry.tipe === 'masuk') {
+          if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
+          else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
+          else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
+          else u = Math.max(0, u - perMemberNominal);
+        } else {
+          if (katLower.includes('pokok')) p += perMemberNominal;
+          else if (katLower.includes('qurban')) q += perMemberNominal;
+          else if (katLower.includes('zakat')) z += perMemberNominal;
+          else u += perMemberNominal;
+        }
+
+        // Rekalkulasi running saldoSetelah pada mutasi anggota tersebut
+        const mTxs = updatedTransactions
+          .filter((t) => t.memberId === m.id)
+          .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+        let runSaldo = 0;
+        mTxs.forEach((t) => {
+          runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);
+          t.saldoSetelah = runSaldo;
+        });
+
+        return {
+          ...m,
+          saldoPokok: p,
+          saldoUmum: u,
+          saldoZakatFitrah: z,
+          saldoQurban: q,
+          totalSimpanan: p + u + z + q,
+        };
+      });
+
+      return {
+        ...prev,
+        members: updatedMembers,
+        memberTransactions: updatedTransactions,
+        kasList: syncedKasList,
+        deletedKasIds: nextDeletedKasIds,
+        deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...newlyDeletedTxIds])),
+      };
+    };
+
     // Super Admin & Admin Approval direct delete
     const confirmDelete = confirm(
-      `Hapus transaksi Kas Koperasi:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai ${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}, transaksi ini akan langsung dihapus dan saldo kas koperasi otomatis disesuaikan. Lanjutkan?`
+      `Hapus transaksi Buku Kas ${entry.bukuKas === 'anggota' ? 'Anggota' : 'Koperasi'}:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai ${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}, transaksi ini akan langsung dihapus, saldo Buku Kas dikoreksi otomatis${entry.bukuKas === 'anggota' ? ', serta mutasi & saldo simpanan anggota terkait langsung disesuaikan' : ''}. Lanjutkan?`
     );
     if (!confirmDelete) return;
 
+    let serverStateApplied = false;
     try {
-      await fetch('/api/kas/delete', {
+      const res = await fetch('/api/kas/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: true }),
       });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.state) {
+          serverStateApplied = true;
+          await updateState(() => data.state);
+        }
+      }
     } catch {}
 
-    await updateState((prev) => {
-      const filteredKas = prev.kasList.filter((k) => k.id !== entry.id);
-      const audit = createAuditLog(
-        currentAdmin,
-        'Hapus Transaksi Kas',
-        `${isSuperAdmin ? 'Super Admin' : 'Admin Approval'} ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)}`,
-        entry.id
-      );
-      return {
-        ...prev,
-        kasList: filteredKas,
-        auditLogs: [audit, ...prev.auditLogs],
-      };
-    });
+    // Hapus dokumen dari Firestore secara langsung agar tidak kembali saat sinkronisasi
+    try {
+      const { db } = await import('../lib/firebase');
+      const { doc, deleteDoc } = await import('firebase/firestore');
+      await deleteDoc(doc(db, 'kas', entry.id)).catch(() => {});
+    } catch {}
 
-    alert(`✓ Transaksi "${entry.keterangan}" berhasil dihapus dari buku kas.`);
+    if (!serverStateApplied) {
+      await updateState((prev) => {
+        const nextState = applyKasDeletionWithMemberSync(prev, entry);
+        const audit = createAuditLog(
+          currentAdmin,
+          'Hapus Transaksi Kas & Koreksi Saldo',
+          `${isSuperAdmin ? 'Super Admin' : 'Admin Approval'} ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} beserta koreksi saldo otomatis`,
+          entry.id
+        );
+        return {
+          ...nextState,
+          auditLogs: [audit, ...nextState.auditLogs],
+        };
+      });
+    }
+
+    alert(`✓ Transaksi "${entry.keterangan}" berhasil dihapus dan jumlah saldo Buku Kas${entry.bukuKas === 'anggota' ? ' serta mutasi & saldo anggota' : ''} telah dikoreksi otomatis.`);
   };
 
   // Handle Approval for pending kas changes (Input, Edit, Hapus)
   const handleApproveKasAction = async (entry: KasEntry, isApproved: boolean) => {
     if (!canDirectModify) return;
 
+    let serverStateApplied = false;
     try {
-      await fetch('/api/kas/approve', {
+      const res = await fetch('/api/kas/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: entry.id, isApproved, adminName: currentAdmin.nama }),
       });
-    } catch {}
-
-    await updateState((prev) => {
-      let updatedList = [...prev.kasList];
-      if (isApproved) {
-        if (entry.pendingAction === 'delete') {
-          updatedList = updatedList.filter((k) => k.id !== entry.id);
-        } else {
-          updatedList = updatedList.map((k) =>
-            k.id === entry.id ? { ...k, status: 'approved', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
-          );
-        }
-      } else {
-        if (entry.pendingAction === 'delete') {
-          updatedList = updatedList.map((k) =>
-            k.id === entry.id ? { ...k, status: 'approved', pendingAction: undefined } : k
-          );
-        } else if (entry.pendingAction === 'update' && entry.originalData) {
-          updatedList = updatedList.map((k) =>
-            k.id === entry.id ? { ...k, ...entry.originalData, status: 'approved', pendingAction: undefined, originalData: undefined } : k
-          );
-        } else {
-          updatedList = updatedList.map((k) =>
-            k.id === entry.id ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
-          );
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.state) {
+          serverStateApplied = true;
+          await updateState(() => data.state);
         }
       }
+    } catch {}
 
-      const audit = createAuditLog(
-        currentAdmin,
-        isApproved ? 'Pengesahan Transaksi Kas' : 'Penolakan Transaksi Kas',
-        `${currentAdmin.nama} (${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}) ${isApproved ? 'menyetujui' : 'menolak'} ${
-          entry.pendingAction === 'delete' ? 'penghapusan' : entry.pendingAction === 'update' ? 'perubahan' : 'input'
-        } transaksi kas ${entry.keterangan}`,
-        entry.id
-      );
+    if (isApproved && entry.pendingAction === 'delete') {
+      try {
+        const { db } = await import('../lib/firebase');
+        const { doc, deleteDoc } = await import('firebase/firestore');
+        await deleteDoc(doc(db, 'kas', entry.id)).catch(() => {});
+      } catch {}
+    }
 
-      return {
-        ...prev,
-        kasList: updatedList,
-        auditLogs: [audit, ...prev.auditLogs],
-      };
-    });
+    if (!serverStateApplied) {
+      await updateState((prev) => {
+        let updatedList = [...prev.kasList];
+        if (isApproved) {
+          if (entry.pendingAction === 'delete') {
+            updatedList = updatedList.filter((k) => k.id !== entry.id);
+          } else {
+            updatedList = updatedList.map((k) =>
+              k.id === entry.id ? { ...k, status: 'approved', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
+            );
+          }
+        } else {
+          if (entry.pendingAction === 'delete') {
+            updatedList = updatedList.map((k) =>
+              k.id === entry.id ? { ...k, status: 'approved', pendingAction: undefined } : k
+            );
+          } else if (entry.pendingAction === 'update' && entry.originalData) {
+            updatedList = updatedList.map((k) =>
+              k.id === entry.id ? { ...k, ...entry.originalData, status: 'approved', pendingAction: undefined, originalData: undefined } : k
+            );
+          } else {
+            updatedList = updatedList.map((k) =>
+              k.id === entry.id ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
+            );
+          }
+        }
+
+        const audit = createAuditLog(
+          currentAdmin,
+          isApproved ? 'Pengesahan Transaksi Kas' : 'Penolakan Transaksi Kas',
+          `${currentAdmin.nama} (${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}) ${isApproved ? 'menyetujui' : 'menolak'} ${
+            entry.pendingAction === 'delete' ? 'penghapusan' : entry.pendingAction === 'update' ? 'perubahan' : 'input'
+          } transaksi kas ${entry.keterangan}`,
+          entry.id
+        );
+
+        return {
+          ...prev,
+          kasList: updatedList,
+          deletedKasIds:
+            isApproved && entry.pendingAction === 'delete'
+              ? Array.from(new Set([...(prev.deletedKasIds || []), entry.id]))
+              : prev.deletedKasIds,
+          auditLogs: [audit, ...prev.auditLogs],
+        };
+      });
+    }
 
     alert(
       isApproved

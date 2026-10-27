@@ -175,11 +175,31 @@ let globalState: AppState = (() => {
 })();
 
 const listeners = new Set<(state: AppState) => void>();
+let debounceNotifyTimer: any = null;
 
 function notifyListeners() {
+  if (debounceNotifyTimer) {
+    clearTimeout(debounceNotifyTimer);
+    debounceNotifyTimer = null;
+  }
   for (const listener of listeners) {
     listener({ ...globalState });
   }
+}
+
+export function scheduleDebouncedNotify(delay = 120) {
+  if (debounceNotifyTimer) {
+    clearTimeout(debounceNotifyTimer);
+  }
+  debounceNotifyTimer = setTimeout(() => {
+    debounceNotifyTimer = null;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+    } catch {}
+    for (const listener of listeners) {
+      listener({ ...globalState });
+    }
+  }, delay);
 }
 
 export const CLIENT_ID = typeof window !== 'undefined'
@@ -416,13 +436,21 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   });
   const mergedTxList = Array.from(txMap.values());
 
-  // 6. Kas List: if incoming.kasList is provided as an array, use it directly so deletions persist (Req 5).
-  let mergedKasList: KasEntry[];
-  if (Array.isArray(incoming.kasList)) {
-    mergedKasList = incoming.kasList;
-  } else {
-    mergedKasList = base.kasList || [];
-  }
+  // 6. Kas List: filter out any deletedKasIds so deletions persist across all devices & snapshots (Req 5).
+  const allDeletedKasIds = new Set<string>([
+    ...(base.deletedKasIds || []),
+    ...(incoming.deletedKasIds || []),
+  ]);
+  const rawKasList: KasEntry[] = Array.isArray(incoming.kasList)
+    ? incoming.kasList
+    : (base.kasList || []);
+  const kasMap = new Map<string, KasEntry>();
+  rawKasList.forEach((k) => {
+    if (k && k.id && !allDeletedKasIds.has(k.id)) {
+      kasMap.set(k.id, k);
+    }
+  });
+  const mergedKasList = Array.from(kasMap.values());
 
   // 7. Penyaluran List (Zakat & Qurban)
   const penyaluranMap = new Map<string, PenyaluranZakatQurban>();
@@ -493,6 +521,47 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
       : base.pengaturanBerbagi?.qrisImageUrl,
   };
 
+  // Pastikan setiap setoran sedekah anggota (tipe === 'penerimaan') muncul di antrian verifikasi admin (setoranList)
+  sedekahMap.forEach((sdk) => {
+    if (sdk && sdk.id && sdk.tipe === 'penerimaan' && !allDeletedSetoranIds.has(sdk.id)) {
+      const mappedStatus =
+        sdk.status === 'approved'
+          ? 'disetujui'
+          : sdk.status === 'rejected'
+          ? 'ditolak'
+          : 'pending';
+      const existingSetoran = setoranMap.get(sdk.id);
+      if (!existingSetoran) {
+        setoranMap.set(sdk.id, {
+          id: sdk.id,
+          memberId: sdk.donaturMemberId || 'donatur-umum',
+          memberNama: sdk.donaturNama || 'Donatur Hamba Allah',
+          memberRekening: sdk.donaturRekening || '-',
+          memberNomorAnggota: sdk.donaturNomorAnggota,
+          memberWilayah: sdk.donaturWilayah,
+          jenis: 'sedekah',
+          nominal: sdk.nominal,
+          rekeningTujuan: 'Kas Berbagi Koperasi',
+          metode: (sdk.sumberDana === 'tabungan_umum' ? 'tabungan_umum' : 'qris') as any,
+          buktiTransferUrl: sdk.buktiTransferUrl,
+          catatanAnggota: sdk.keterangan || `Donasi ${sdk.namaBerbagiKustom || 'Sedekah'}`,
+          status: mappedStatus,
+          verifiedBy: sdk.verifiedBy,
+          verifiedAt: sdk.verifiedAt,
+          createdAt: sdk.createdAt || `${sdk.tanggal}T${sdk.jam || '08:00'}:00.000Z`,
+          nomorReferensi: `SDK-${String(sdk.id).slice(-6).toUpperCase()}`,
+        });
+      } else if (mappedStatus !== 'pending' && existingSetoran.status === 'pending') {
+        setoranMap.set(sdk.id, {
+          ...existingSetoran,
+          status: mappedStatus,
+          verifiedBy: sdk.verifiedBy || existingSetoran.verifiedBy,
+          verifiedAt: sdk.verifiedAt || existingSetoran.verifiedAt,
+        });
+      }
+    }
+  });
+
   return {
     ...base,
     ...incoming,
@@ -511,6 +580,8 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     lastRunningNumber: Math.max(base.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
     deletedMemberIds: Array.from(allDeletedMemIds),
     deletedTransactionIds: Array.from(allDeletedTxIds),
+    deletedKasIds: Array.from(allDeletedKasIds),
+    deletedSetoranIds: Array.from(allDeletedSetoranIds),
     serverSyncStatus: {
       online: true,
       lastSynced: new Date().toISOString(),
@@ -584,6 +655,8 @@ export async function syncShardedToFirestore(state: AppState) {
       lastRunningNumber: state.lastRunningNumber || 66666,
       deletedMemberIds: state.deletedMemberIds || [],
       deletedTransactionIds: state.deletedTransactionIds || [],
+      deletedKasIds: state.deletedKasIds || [],
+      deletedSetoranIds: state.deletedSetoranIds || [],
       updatedAt: now,
       updatedBy: CLIENT_ID,
     });
@@ -642,6 +715,9 @@ export async function syncShardedToFirestore(state: AppState) {
         }
       }
     }
+    for (const delSetId of state.deletedSetoranIds || []) {
+      await deleteDoc(doc(db, 'setoran', delSetId)).catch(() => {});
+    }
 
     // 5. Sharded Kas collection
     for (const k of state.kasList || []) {
@@ -656,6 +732,9 @@ export async function syncShardedToFirestore(state: AppState) {
           lastWrittenMap.set(key, kStr);
         }
       }
+    }
+    for (const delKasId of state.deletedKasIds || []) {
+      await deleteDoc(doc(db, 'kas', delKasId)).catch(() => {});
     }
 
     // 6. Sharded Member Transactions collection
@@ -914,15 +993,14 @@ export function useKoperasiState() {
         import('firebase/firestore').then(({ collection, doc, onSnapshot }) => {
           if (!isMounted) return;
 
-          // A. Members Collection
+          // A. Members Collection (Debounced UI sync to prevent excessive re-renders)
           const unsubMembers = onSnapshot(
             collection(db, 'members'),
             (snapshot) => {
               if (snapshot.empty) return;
               const remoteMembers = snapshot.docs.map((d) => d.data() as MemberUser);
               globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
-              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-              notifyListeners();
+              scheduleDebouncedNotify();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'members')
           );
@@ -935,8 +1013,7 @@ export function useKoperasiState() {
               if (snapshot.empty) return;
               const remoteSetoran = snapshot.docs.map((d) => d.data() as SetoranVerifikasi);
               globalState = mergeStates(globalState, { ...globalState, setoranList: remoteSetoran });
-              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-              notifyListeners();
+              scheduleDebouncedNotify();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'setoran')
           );
@@ -949,8 +1026,7 @@ export function useKoperasiState() {
               if (snapshot.empty) return;
               const remoteKas = snapshot.docs.map((d) => d.data() as KasEntry);
               globalState = mergeStates(globalState, { ...globalState, kasList: remoteKas });
-              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-              notifyListeners();
+              scheduleDebouncedNotify();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'kas')
           );
@@ -963,8 +1039,7 @@ export function useKoperasiState() {
               if (snapshot.empty) return;
               const remoteTx = snapshot.docs.map((d) => d.data() as MemberTransaction);
               globalState = mergeStates(globalState, { ...globalState, memberTransactions: remoteTx });
-              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-              notifyListeners();
+              scheduleDebouncedNotify();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'transactions')
           );
@@ -977,8 +1052,7 @@ export function useKoperasiState() {
               if (snapshot.empty) return;
               const remoteChats = snapshot.docs.map((d) => d.data() as ChatMessage);
               globalState = mergeStates(globalState, { ...globalState, chatMessages: remoteChats });
-              try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-              notifyListeners();
+              scheduleDebouncedNotify();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
           );
@@ -991,7 +1065,7 @@ export function useKoperasiState() {
               if (snap.exists()) {
                 const data = snap.data();
                 if (data && data.updatedBy !== CLIENT_ID) {
-                  globalState = {
+                  globalState = mergeStates(globalState, {
                     ...globalState,
                     profile: data.profile || globalState.profile,
                     categoriesKasKoperasi: data.categoriesKasKoperasi || globalState.categoriesKasKoperasi,
@@ -1000,9 +1074,10 @@ export function useKoperasiState() {
                     lastRunningNumber: data.lastRunningNumber || globalState.lastRunningNumber,
                     deletedMemberIds: Array.from(new Set([...(globalState.deletedMemberIds || []), ...(data.deletedMemberIds || [])])),
                     deletedTransactionIds: Array.from(new Set([...(globalState.deletedTransactionIds || []), ...(data.deletedTransactionIds || [])])),
-                  };
-                  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-                  notifyListeners();
+                    deletedKasIds: Array.from(new Set([...(globalState.deletedKasIds || []), ...(data.deletedKasIds || [])])),
+                    deletedSetoranIds: Array.from(new Set([...(globalState.deletedSetoranIds || []), ...(data.deletedSetoranIds || [])])),
+                  });
+                  scheduleDebouncedNotify();
                 }
               }
             },
@@ -1018,8 +1093,7 @@ export function useKoperasiState() {
                 const data = snap.data();
                 if (data && data.admins && data.updatedBy !== CLIENT_ID) {
                   globalState = { ...globalState, admins: data.admins };
-                  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState)); } catch {}
-                  notifyListeners();
+                  scheduleDebouncedNotify();
                 }
               }
             },

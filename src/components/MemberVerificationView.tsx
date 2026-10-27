@@ -75,6 +75,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
   // Admin Verification State
   const [filterStatus, setFilterStatus] = useState<'semua' | 'pending' | 'disetujui' | 'ditolak'>('pending');
+  const [filterJenis, setFilterJenis] = useState<'semua' | 'kewajiban' | 'umum' | 'sedekah'>('semua');
   const [sortBy, setSortBy] = useState<
     | 'pending_first'
     | 'approved_first'
@@ -425,7 +426,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     drawRow('Waktu Pengajuan:', waktuStr, 330);
     drawRow('Nama Lengkap Anggota:', deposit.memberNama, 370);
     drawRow('No. Rekening Anggota:', deposit.memberRekening, 410);
-    drawRow('Jenis Setoran:', deposit.jenis === 'kewajiban' ? 'Kewajiban Pokok Anggota' : 'Tabungan Umum Bebas', 450);
+    drawRow(
+      'Jenis Setoran:',
+      deposit.jenis === 'kewajiban'
+        ? 'Kewajiban Pokok Anggota'
+        : deposit.jenis === 'sedekah'
+        ? 'Setoran Sedekah / Berbagi'
+        : 'Tabungan Umum Bebas',
+      450
+    );
     if (deposit.jenis === 'kewajiban') {
       drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || 1} Hari`, 490);
     }
@@ -612,7 +621,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           recipientId: dep.memberId,
           recipientNama: dep.memberNama,
           title: '✅ Verifikasi Setoran Disetujui',
-          body: `Setoran ${dep.jenis === 'kewajiban' ? 'Kewajiban Pokok' : 'Tabungan Umum'} sebesar ${formatRupiah(dep.nominal)} telah disetujui & masuk ke saldo Anda.`,
+          body: `Setoran ${
+            dep.jenis === 'kewajiban'
+              ? 'Kewajiban Pokok'
+              : dep.jenis === 'sedekah'
+              ? 'Sedekah / Berbagi'
+              : 'Tabungan Umum'
+          } sebesar ${formatRupiah(dep.nominal)} telah disetujui & diverifikasi oleh Admin.`,
           type: 'setoran_verified',
           data: { depositId: dep.id, nominal: dep.nominal },
         }).catch(() => {});
@@ -722,7 +737,39 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             status: 'approved',
             createdAt: now.toISOString(),
           });
-        } else {
+        } else if (dep.jenis === 'sedekah') {
+          if (dep.metode === 'tabungan_umum' && targetMember) {
+            updatedSaldoUmum = Math.max(0, updatedSaldoUmum - dep.nominal);
+            newTxs.push({
+              id: `tx-sdk-${Date.now()}`,
+              memberId: targetMember.id,
+              tanggal: tgl,
+              jam,
+              keterangan: `DONASI BERBAGI: ${dep.catatanAnggota || 'Sedekah Anggota'}`,
+              cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'keluar',
+              nominal: dep.nominal,
+              saldoSetelah: updatedSaldoPokok + updatedSaldoUmum,
+              kategori: 'umum',
+              referensiId: dep.id,
+            });
+          }
+
+          newKasList.push({
+            id: `kas-sedekah-${Date.now()}`,
+            bukuKas: 'koperasi',
+            tanggal: tgl,
+            kategori: 'Penerimaan Sedekah',
+            keterangan: `Penerimaan ${dep.catatanAnggota || 'Sedekah Berbagi'} a/n ${dep.memberNama}`,
+            namaPenerima: dep.memberNama,
+            tipe: 'masuk',
+            nominal: dep.nominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+        } else if (targetMember) {
           updatedSaldoUmum += dep.nominal;
 
           newTxs.push({
@@ -755,18 +802,20 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           });
         }
 
-        const updatedMembers = prev.members.map((m) =>
-          m.id === targetMember.id
-            ? {
-                ...m,
-                saldoPokok: updatedSaldoPokok,
-                saldoZakatFitrah: updatedSaldoZakat,
-                saldoQurban: updatedSaldoQurban,
-                saldoUmum: updatedSaldoUmum,
-                totalSimpanan: updatedSaldoPokok + updatedSaldoUmum + updatedSaldoZakat + updatedSaldoQurban,
-              }
-            : m
-        );
+        const updatedMembers = targetMember
+          ? prev.members.map((m) =>
+              m.id === targetMember.id
+                ? {
+                    ...m,
+                    saldoPokok: updatedSaldoPokok,
+                    saldoZakatFitrah: updatedSaldoZakat,
+                    saldoQurban: updatedSaldoQurban,
+                    saldoUmum: updatedSaldoUmum,
+                    totalSimpanan: updatedSaldoPokok + updatedSaldoUmum + updatedSaldoZakat + updatedSaldoQurban,
+                  }
+                : m
+            )
+          : prev.members;
 
         const updatedSetoran = prev.setoranList.map((s) =>
           s.id === dep.id
@@ -779,6 +828,21 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             : s
         );
 
+        const updatedSedekahList =
+          dep.jenis === 'sedekah'
+            ? (prev.sedekahList || []).map((sdk) =>
+                sdk.id === dep.id ||
+                (sdk.donaturMemberId === dep.memberId && sdk.nominal === dep.nominal && sdk.status === 'pending')
+                  ? {
+                      ...sdk,
+                      status: 'approved' as const,
+                      verifiedBy: currentAdmin.nama,
+                      verifiedAt: now.toISOString(),
+                    }
+                  : sdk
+              )
+            : prev.sedekahList;
+
         const audit = createAuditLog(
           currentAdmin,
           'Verifikasi Setoran Berhasil (Online)',
@@ -790,6 +854,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           ...prev,
           members: updatedMembers,
           setoranList: updatedSetoran,
+          sedekahList: updatedSedekahList,
           memberTransactions: [...prev.memberTransactions, ...newTxs],
           kasList: [...newKasList, ...prev.kasList],
           auditLogs: [audit, ...prev.auditLogs],
@@ -805,18 +870,48 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     if (!currentAdmin) return;
     const reason = prompt('Masukkan alasan penolakan setoran:') || 'Bukti transfer tidak valid/dana belum masuk';
 
+    try {
+      await fetch('/api/setoran/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          depositId: dep.id,
+          isApproved: false,
+          adminName: currentAdmin.nama,
+          alasan: reason,
+        }),
+      });
+    } catch {}
+
     await updateState((prev) => {
+      const nowIso = new Date().toISOString();
       const updatedSetoran = prev.setoranList.map((s) =>
         s.id === dep.id
           ? {
               ...s,
               status: 'ditolak' as const,
               alasanTolak: reason,
+              catatanAdmin: reason,
               verifiedBy: currentAdmin.nama,
-              verifiedAt: new Date().toISOString(),
+              verifiedAt: nowIso,
             }
           : s
       );
+
+      const updatedSedekahList =
+        dep.jenis === 'sedekah'
+          ? (prev.sedekahList || []).map((sdk) =>
+              sdk.id === dep.id
+                ? {
+                    ...sdk,
+                    status: 'rejected' as const,
+                    rejectionReason: reason,
+                    verifiedBy: currentAdmin.nama,
+                    verifiedAt: nowIso,
+                  }
+                : sdk
+            )
+          : prev.sedekahList;
 
       const audit = createAuditLog(
         currentAdmin,
@@ -828,6 +923,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       return {
         ...prev,
         setoranList: updatedSetoran,
+        sedekahList: updatedSedekahList,
         auditLogs: [audit, ...prev.auditLogs],
       };
     });
@@ -1561,56 +1657,114 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           const disetujuiCount = baseList.filter((s) => s.status === 'disetujui').length;
           const ditolakCount = baseList.filter((s) => s.status === 'ditolak').length;
 
+          const sedekahCount = baseList.filter((s) => s.jenis === 'sedekah').length;
+          const pendingSedekahCount = baseList.filter((s) => s.jenis === 'sedekah' && s.status === 'pending').length;
+
           return (
-            <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-slate-800">
-              <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Status Setoran:</span>
-              <button
-                type="button"
-                onClick={() => setFilterStatus('semua')}
-                className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  filterStatus === 'semua'
-                    ? 'bg-slate-700 text-white shadow'
-                    : 'bg-slate-800/80 text-slate-400 hover:text-white'
-                }`}
-              >
-                Semua ({baseList.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterStatus('pending')}
-                className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                  filterStatus === 'pending'
-                    ? 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-500/50'
-                    : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
-                }`}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                <span>Pending Verifikasi ({pendingCount})</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterStatus('disetujui')}
-                className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                  filterStatus === 'disetujui'
-                    ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-emerald-500/50'
-                    : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
-                }`}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Terverifikasi Setoran ({disetujuiCount})</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterStatus('ditolak')}
-                className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  filterStatus === 'ditolak'
-                    ? 'bg-red-500 text-white shadow-md ring-2 ring-red-500/50'
-                    : 'bg-red-500/15 text-red-300 hover:bg-red-500/25 border border-red-500/30'
-                }`}
-              >
-                <XCircle className="w-3.5 h-3.5" />
-                <span>Ditolak ({ditolakCount})</span>
-              </button>
+            <div className="space-y-2 mt-3 pt-3 border-t border-slate-800">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Status Setoran:</span>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('semua')}
+                  className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    filterStatus === 'semua'
+                      ? 'bg-slate-700 text-white shadow'
+                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Semua ({baseList.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('pending')}
+                  className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                    filterStatus === 'pending'
+                      ? 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-500/50'
+                      : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Pending Verifikasi ({pendingCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('disetujui')}
+                  className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                    filterStatus === 'disetujui'
+                      ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-emerald-500/50'
+                      : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Terverifikasi Setoran ({disetujuiCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('ditolak')}
+                  className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    filterStatus === 'ditolak'
+                      ? 'bg-red-500 text-white shadow-md ring-2 ring-red-500/50'
+                      : 'bg-red-500/15 text-red-300 hover:bg-red-500/25 border border-red-500/30'
+                  }`}
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  <span>Ditolak ({ditolakCount})</span>
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Jenis Setoran:</span>
+                <button
+                  type="button"
+                  onClick={() => setFilterJenis('semua')}
+                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                    filterJenis === 'semua'
+                      ? 'bg-sky-500 text-slate-950 shadow'
+                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Semua Jenis
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterJenis('kewajiban')}
+                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                    filterJenis === 'kewajiban'
+                      ? 'bg-amber-500 text-slate-950 shadow'
+                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Kewajiban Pokok
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterJenis('umum')}
+                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                    filterJenis === 'umum'
+                      ? 'bg-teal-500 text-slate-950 shadow'
+                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Tabungan Umum
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterJenis('sedekah')}
+                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                    filterJenis === 'sedekah'
+                      ? 'bg-rose-500 text-white shadow'
+                      : 'bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25'
+                  }`}
+                >
+                  <span>Sedekah / Berbagi ({sedekahCount})</span>
+                  {pendingSedekahCount > 0 && (
+                    <span className="px-1.5 py-0.2 bg-amber-400 text-slate-950 rounded-full text-[10px] font-black">
+                      {pendingSedekahCount} Baru
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
           );
         })()}
@@ -1634,6 +1788,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 .filter((s) => {
                   if (isMember) return s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening;
                   if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
+                  if (filterJenis !== 'semua' && s.jenis !== filterJenis) return false;
                   return true;
                 })
                 .sort((a, b) => {
@@ -1667,15 +1822,26 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                     <td className="py-3 px-3">
                       <div className="font-bold text-white">{dep.memberNama}</div>
                       <div className="text-[10px] text-slate-400 font-mono">
-                        {dep.memberRekening} • {dep.memberWilayah}
+                        {dep.memberRekening} {dep.memberWilayah ? `• ${dep.memberWilayah}` : ''}
                       </div>
                     </td>
                     <td className="py-3 px-3">
-                      <span className="font-semibold text-slate-200">
-                        {dep.jenis === 'kewajiban'
-                          ? `Tabungan Kewajiban (${dep.jumlahHari} hari)`
-                          : 'Tabungan Umum'}
-                      </span>
+                      {dep.jenis === 'sedekah' ? (
+                        <div>
+                          <span className="py-0.5 px-2 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-lg text-[10px] font-extrabold inline-block">
+                            Sedekah / Berbagi
+                          </span>
+                          {dep.catatanAnggota && (
+                            <div className="text-[10px] text-slate-400 mt-0.5">{dep.catatanAnggota}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="font-semibold text-slate-200">
+                          {dep.jenis === 'kewajiban'
+                            ? `Tabungan Kewajiban (${dep.jumlahHari} hari)`
+                            : 'Tabungan Umum'}
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-3 font-mono font-bold text-amber-400">
                       {formatRupiah(dep.nominal)}

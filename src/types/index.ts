@@ -175,14 +175,15 @@ export interface SetoranVerifikasi {
   memberNama: string;
   memberRekening: string;
   memberNomorAnggota?: string;
-  memberWilayah: WilayahKoperasi;
+  memberWilayah?: WilayahKoperasi;
   jenis: JenisSetoran;
   jumlahHari?: number; // untuk setoran kewajiban
   nominal: number;
   rekeningTujuan: string;
-  metode: 'transfer_bank' | 'qris';
-  buktiTransferUrl: string;
+  metode: 'transfer_bank' | 'qris' | 'tabungan_umum';
+  buktiTransferUrl?: string;
   catatanAnggota?: string;
+  catatanAdmin?: string;
   status: 'pending' | 'disetujui' | 'ditolak';
   verifiedBy?: string;
   verifiedAt?: string;

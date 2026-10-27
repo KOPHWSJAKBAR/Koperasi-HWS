@@ -10,7 +10,13 @@ import { LoginView } from './components/LoginView';
 import { MemberDashboard } from './components/MemberDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { auth } from './lib/firebase-init';
-import { onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
+import {
+  onAuthStateChanged,
+  signInAnonymously,
+  signOut,
+  setPersistence,
+  browserLocalPersistence,
+} from 'firebase/auth';
 
 import { detectPlatform } from './lib/activityLogger';
 
@@ -34,11 +40,19 @@ export default function App() {
   const [isFirebaseAuthReady, setIsFirebaseAuthReady] = useState(false);
   const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
 
-  // Otomatis autentikasi Firebase anonymous agar izin baca/tulis Firestore online realtime aktif
+  // Optimasi persistensi sesi Firebase menggunakan browserLocalPersistence untuk PWA, APK, dan browser restart
   useEffect(() => {
-    if (!auth.currentUser) {
-      signInAnonymously(auth).catch(() => {});
-    }
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        if (!auth.currentUser) {
+          return signInAnonymously(auth);
+        }
+      })
+      .catch(() => {
+        if (!auth.currentUser) {
+          signInAnonymously(auth).catch(() => {});
+        }
+      });
   }, []);
 
   // Sinkronisasi realtime sharded telah terhubung langsung dan otomatis melalui useKoperasiState di lib/storage.ts

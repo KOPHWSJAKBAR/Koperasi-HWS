@@ -753,12 +753,18 @@ async function startServer() {
   // Online Realtime Setoran Submission Endpoint (Req 2 & 4 & 5)
   app.post('/api/setoran/submit', (req: Request, res: Response) => {
     try {
-      const { deposit } = req.body;
+      const { deposit, sedekahEntry } = req.body;
       if (!deposit || !deposit.memberId || !deposit.nominal) {
         return res.status(400).json({ error: 'Data setoran tidak lengkap' });
       }
 
-      currentState.setoranList = [deposit, ...(currentState.setoranList || [])];
+      currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
+      if (sedekahEntry && sedekahEntry.id) {
+        currentState.sedekahList = [
+          sedekahEntry,
+          ...(currentState.sedekahList || []).filter((s: any) => s.id !== sedekahEntry.id),
+        ];
+      }
       
       // Auto-record audit log
       currentState.auditLogs = currentState.auditLogs || [];
@@ -802,7 +808,7 @@ async function startServer() {
         if (dep.memberNomorAnggota && m.nomorAnggota && String(m.nomorAnggota).trim().toLowerCase() === String(dep.memberNomorAnggota).trim().toLowerCase()) return true;
         return false;
       });
-      if (!targetMember) {
+      if (!targetMember && dep.jenis !== 'sedekah') {
         return res.status(404).json({ error: 'Anggota pemilik setoran tidak ditemukan di database server' });
       }
 
@@ -921,7 +927,60 @@ async function startServer() {
             status: 'approved',
             createdAt: now.toISOString(),
           });
-        } else {
+        } else if (dep.jenis === 'sedekah') {
+          // Setoran Sedekah / Berbagi Anggota
+          currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
+            sdk.id === dep.id ||
+            (sdk.donaturMemberId === dep.memberId && sdk.nominal === dep.nominal && sdk.status === 'pending')
+              ? {
+                  ...sdk,
+                  status: 'approved',
+                  verifiedAt: now.toISOString(),
+                  verifiedBy: adminName || 'Admin Koperasi',
+                }
+              : sdk
+          );
+
+          if (dep.metode === 'tabungan_umum' && targetMember) {
+            targetMember.saldoUmum = Math.max(0, (Number(targetMember.saldoUmum) || 0) - dep.nominal);
+            targetMember.totalSimpanan =
+              (Number(targetMember.saldoPokok) || 0) +
+              (Number(targetMember.saldoUmum) || 0) +
+              (Number(targetMember.saldoZakatFitrah) || 0) +
+              (Number(targetMember.saldoQurban) || 0);
+
+            currentState.memberTransactions = currentState.memberTransactions || [];
+            currentState.memberTransactions.unshift({
+              id: `tx-sdk-${Date.now()}`,
+              memberId: targetMember.id,
+              tanggal: tgl,
+              jam,
+              keterangan: `DONASI BERBAGI: ${dep.catatanAnggota || 'Sedekah Anggota'}`,
+              cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'keluar',
+              nominal: dep.nominal,
+              saldoSetelah: (targetMember.saldoPokok || 0) + targetMember.saldoUmum,
+              kategori: 'umum',
+              referensiId: dep.id,
+            });
+          }
+
+          currentState.kasList = currentState.kasList || [];
+          currentState.kasList.unshift({
+            id: `kas-sedekah-${Date.now()}`,
+            bukuKas: 'koperasi',
+            tanggal: tgl,
+            kategori: 'Penerimaan Sedekah',
+            keterangan: `Penerimaan ${dep.catatanAnggota || 'Sedekah Berbagi'} a/n ${dep.memberNama}`,
+            namaPenerima: dep.memberNama,
+            tipe: 'masuk',
+            nominal: dep.nominal,
+            saldoKasSetelah: 0,
+            inputBy: adminName || 'Admin Koperasi',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+        } else if (targetMember) {
           // Tabungan Umum Bebas
           targetMember.saldoUmum = (Number(targetMember.saldoUmum) || 0) + dep.nominal;
           targetMember.totalSimpanan = (Number(targetMember.saldoPokok) || 0) +
@@ -965,6 +1024,20 @@ async function startServer() {
         dep.catatanAdmin = alasan || 'Ditolak oleh admin pengurus koperasi';
         dep.verifiedAt = now.toISOString();
         dep.verifiedBy = adminName || 'Admin Koperasi';
+
+        if (dep.jenis === 'sedekah') {
+          currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
+            sdk.id === dep.id
+              ? {
+                  ...sdk,
+                  status: 'rejected',
+                  rejectionReason: dep.catatanAdmin,
+                  verifiedAt: now.toISOString(),
+                  verifiedBy: adminName || 'Admin Koperasi',
+                }
+              : sdk
+          );
+        }
       }
 
       currentState.setoranList[depIndex] = dep;
@@ -976,7 +1049,7 @@ async function startServer() {
         adminNama: adminName || 'Admin Koperasi',
         adminRole: 'super_admin',
         action: isApproved ? 'Verifikasi Setoran Disetujui (Online Realtime)' : 'Verifikasi Setoran Ditolak',
-        detail: `${isApproved ? 'Menyetujui' : 'Menolak'} setoran ${dep.jenis} Rp ${dep.nominal.toLocaleString('id-ID')} a/n ${targetMember.nama}`,
+        detail: `${isApproved ? 'Menyetujui' : 'Menolak'} setoran ${dep.jenis} Rp ${dep.nominal.toLocaleString('id-ID')} a/n ${targetMember?.nama || dep.memberNama}`,
         targetId: dep.id,
       });
 
@@ -1008,8 +1081,8 @@ async function startServer() {
         : `Pengajuan setoran Rp ${dep.nominal.toLocaleString('id-ID')} ditolak: ${dep.catatanAdmin || 'Mohon periksa bukti setoran'}`;
 
       broadcastEvent('MEMBER_NOTIFICATION', {
-        recipientId: targetMember.id,
-        recipientNama: targetMember.nama,
+        recipientId: targetMember?.id || dep.memberId,
+        recipientNama: targetMember?.nama || dep.memberNama,
         title: notifTitle,
         body: notifBody,
         type: isApproved ? 'setoran_verified' : 'info',
@@ -1017,7 +1090,7 @@ async function startServer() {
       });
       res.json({
         success: true,
-        message: `Setoran a/n ${targetMember.nama} berhasil di-${isApproved ? 'setujui' : 'tolak'} secara online realtime!`,
+        message: `Setoran a/n ${targetMember?.nama || dep.memberNama} berhasil di-${isApproved ? 'setujui' : 'tolak'} secara online realtime!`,
         deposit: dep,
         member: targetMember,
         state: currentState
@@ -1216,6 +1289,131 @@ async function startServer() {
     }
   });
 
+  // Helper: Sinkronisasi penghapusan buku kas anggota terhadap mutasi, saldo simpanan anggota, dan saldo buku kas
+  const syncMemberAndKasOnKasDelete = (deletedEntry: any) => {
+    if (!deletedEntry) return;
+    currentState.deletedKasIds = currentState.deletedKasIds || [];
+    if (!currentState.deletedKasIds.includes(deletedEntry.id)) {
+      currentState.deletedKasIds.push(deletedEntry.id);
+    }
+
+    if (deletedEntry.bukuKas === 'anggota') {
+      const cleanPenerima = String(deletedEntry.namaPenerima || '').trim().toLowerCase();
+      const cleanKet = String(deletedEntry.keterangan || '').trim().toLowerCase();
+
+      const matchedMembers = (currentState.members || []).filter((m: any) => {
+        const mName = String(m.nama || '').trim().toLowerCase();
+        if (!mName) return false;
+        if (cleanPenerima && cleanPenerima === mName) return true;
+        if (cleanKet && cleanKet.includes(mName)) return true;
+        return false;
+      });
+
+      const matchedMemberIds = new Set(matchedMembers.map((m: any) => m.id));
+      currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
+
+      let removedOrAdjustedTx = false;
+      const nextTransactions: any[] = [];
+
+      for (const tx of currentState.memberTransactions || []) {
+        if (
+          !removedOrAdjustedTx &&
+          matchedMemberIds.has(tx.memberId) &&
+          tx.tanggal === deletedEntry.tanggal &&
+          tx.tipe === deletedEntry.tipe
+        ) {
+          if (tx.nominal === deletedEntry.nominal) {
+            removedOrAdjustedTx = true;
+            if (!currentState.deletedTransactionIds.includes(tx.id)) {
+              currentState.deletedTransactionIds.push(tx.id);
+            }
+            continue;
+          } else if (tx.nominal > deletedEntry.nominal) {
+            removedOrAdjustedTx = true;
+            nextTransactions.push({
+              ...tx,
+              nominal: tx.nominal - deletedEntry.nominal,
+            });
+            continue;
+          }
+        }
+        nextTransactions.push(tx);
+      }
+      currentState.memberTransactions = nextTransactions;
+
+      const katLower = String(deletedEntry.kategori || '').toLowerCase();
+      currentState.members = (currentState.members || []).map((m: any) => {
+        if (!matchedMemberIds.has(m.id)) return m;
+
+        const perMemberNominal =
+          matchedMembers.length > 1
+            ? Math.floor(deletedEntry.nominal / matchedMembers.length)
+            : deletedEntry.nominal;
+
+        let p = Number(m.saldoPokok) || 0;
+        let u = Number(m.saldoUmum) || 0;
+        let z = Number(m.saldoZakatFitrah) || 0;
+        let q = Number(m.saldoQurban) || 0;
+
+        if (deletedEntry.tipe === 'masuk') {
+          if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
+          else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
+          else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
+          else u = Math.max(0, u - perMemberNominal);
+        } else {
+          if (katLower.includes('pokok')) p += perMemberNominal;
+          else if (katLower.includes('qurban')) q += perMemberNominal;
+          else if (katLower.includes('zakat')) z += perMemberNominal;
+          else u += perMemberNominal;
+        }
+
+        const mTxs = (currentState.memberTransactions || [])
+          .filter((t: any) => t.memberId === m.id)
+          .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+        let runSaldo = 0;
+        mTxs.forEach((t: any) => {
+          runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);
+          t.saldoSetelah = runSaldo;
+        });
+
+        return {
+          ...m,
+          saldoPokok: p,
+          saldoUmum: u,
+          saldoZakatFitrah: z,
+          saldoQurban: q,
+          totalSimpanan: p + u + z + q,
+        };
+      });
+    }
+
+    // Recompute running saldoKasSetelah pada buku kas
+    const recomputeType = (type: string) => {
+      const items = (currentState.kasList || [])
+        .filter((k: any) => k.bukuKas === type)
+        .slice()
+        .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+      let run = 0;
+      const map = new Map<string, number>();
+      items.forEach((it: any) => {
+        if (it.status === 'approved') {
+          run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+        }
+        map.set(it.id, run);
+      });
+      return map;
+    };
+    const mapAnggota = recomputeType('anggota');
+    const mapKoperasi = recomputeType('koperasi');
+    currentState.kasList = (currentState.kasList || []).map((k: any) => ({
+      ...k,
+      saldoKasSetelah:
+        k.bukuKas === 'anggota'
+          ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+          : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+    }));
+  };
+
   app.post('/api/kas/delete', (req: Request, res: Response) => {
     try {
       const { id, adminName, isDirectDelete } = req.body;
@@ -1228,10 +1426,7 @@ async function startServer() {
 
       if (isDirectDelete) {
         currentState.kasList.splice(targetIdx, 1);
-        currentState.deletedKasIds = currentState.deletedKasIds || [];
-        if (!currentState.deletedKasIds.includes(id)) {
-          currentState.deletedKasIds.push(id);
-        }
+        syncMemberAndKasOnKasDelete(deletedEntry);
       } else {
         // Admin Write propose deletion
         currentState.kasList[targetIdx] = {
@@ -1248,14 +1443,18 @@ async function startServer() {
         adminId: 'admin',
         adminNama: adminName || 'Admin Koperasi',
         adminRole: isDirectDelete ? 'super_admin' : 'admin_write',
-        action: isDirectDelete ? 'Hapus Transaksi Buku Kas' : 'Pengajuan Hapus Buku Kas',
+        action: isDirectDelete ? 'Hapus Transaksi Buku Kas & Koreksi Saldo' : 'Pengajuan Hapus Buku Kas',
         detail: `${isDirectDelete ? 'Menghapus' : 'Mengajukan hapus'} transaksi kas [${deletedEntry?.bukuKas}] ${deletedEntry?.keterangan || id}`,
         targetId: id,
       });
 
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
-      res.json({ success: true, message: isDirectDelete ? 'Transaksi kas berhasil dihapus' : 'Pengajuan hapus transaksi berhasil dikirim' });
+      res.json({
+        success: true,
+        message: isDirectDelete ? 'Transaksi kas berhasil dihapus dan saldo dikoreksi' : 'Pengajuan hapus transaksi berhasil dikirim',
+        state: currentState,
+      });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus transaksi kas: ' + err.message });
     }
@@ -1276,6 +1475,7 @@ async function startServer() {
       if (isApproved) {
         if (prevAction === 'delete') {
           currentState.kasList.splice(idx, 1);
+          syncMemberAndKasOnKasDelete(entry);
         } else {
           currentState.kasList[idx] = {
             ...entry,
