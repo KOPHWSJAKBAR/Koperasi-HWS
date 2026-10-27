@@ -1124,6 +1124,117 @@ export function useKoperasiState() {
   return { state, updateState };
 }
 
+// ================= WAKTU INDONESIA (WIB - Asia/Jakarta) HELPERS =================
+export function getWibDateStr(date: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const y = parts.find((p) => p.type === 'year')?.value || String(date.getFullYear());
+    const m = parts.find((p) => p.type === 'month')?.value || String(date.getMonth() + 1).padStart(2, '0');
+    const d = parts.find((p) => p.type === 'day')?.value || String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  } catch {
+    const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return wib.toISOString().split('T')[0];
+  }
+}
+
+export function getWibTimeStr(date: Date = new Date(), includeSeconds = false): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: includeSeconds ? '2-digit' : undefined,
+      hour12: false,
+    }).formatToParts(date);
+    const hh = parts.find((p) => p.type === 'hour')?.value || '00';
+    const mm = parts.find((p) => p.type === 'minute')?.value || '00';
+    if (includeSeconds) {
+      const ss = parts.find((p) => p.type === 'second')?.value || '00';
+      return `${hh}:${mm}:${ss}`;
+    }
+    return `${hh}:${mm}`;
+  } catch {
+    const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return wib.toISOString().split('T')[1].slice(0, includeSeconds ? 8 : 5);
+  }
+}
+
+export function formatWibDate(dateInput?: string | Date): string {
+  if (!dateInput) return '-';
+  try {
+    const d = typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)
+      ? new Date(`${dateInput}T00:00:00+07:00`)
+      : new Date(dateInput);
+    if (isNaN(d.getTime())) return String(dateInput);
+    return new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    }).format(d);
+  } catch {
+    return String(dateInput);
+  }
+}
+
+export function formatWibDateShort(dateInput?: string | Date): string {
+  if (!dateInput) return '-';
+  try {
+    const d = typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)
+      ? new Date(`${dateInput}T00:00:00+07:00`)
+      : new Date(dateInput);
+    if (isNaN(d.getTime())) return String(dateInput);
+    return new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(d);
+  } catch {
+    return String(dateInput);
+  }
+}
+
+export function formatWibDateTime(dateInput?: string | Date): string {
+  if (!dateInput) return '-';
+  try {
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return String(dateInput);
+    const datePart = new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(d);
+    const timePart = getWibTimeStr(d, false);
+    return `${datePart}, ${timePart} WIB`;
+  } catch {
+    return String(dateInput);
+  }
+}
+
+export function getLiveWibClockLabel(date: Date = new Date()): string {
+  try {
+    const dayDate = new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    }).format(date);
+    const timePart = getWibTimeStr(date, true);
+    return `${dayDate} • ${timePart} WIB`;
+  } catch {
+    return `${getWibDateStr(date)} • ${getWibTimeStr(date, true)} WIB`;
+  }
+}
+
 // Helper: Format Rupiah
 export function formatRupiah(amount: number): string {
   return new Intl.NumberFormat('id-ID', {
@@ -1156,7 +1267,7 @@ export function generateNomorAnggota(
   existingCount: number
 ): string {
   const abbr = WILAYAH_ABBR_MAP[wilayah] || 'CKR';
-  const year = new Date().getFullYear();
+  const year = getWibDateStr().slice(0, 4);
   const seq = String(existingCount + 1).padStart(3, '0');
   return `HWS-${abbr}-${year}-${seq}`;
 }
@@ -1188,3 +1299,241 @@ export function createAuditLog(
 
   return log;
 }
+
+// Helper: Sinkronisasi penuh antara Saldo Anggota Terverifikasi, Mutasi Anggota, dan Buku Kas Anggota
+export function syncMemberBalancesWithBukuKasAnggota(prev: AppState): AppState {
+  const deletedKasSet = new Set<string>(prev.deletedKasIds || []);
+  const deletedTxSet = new Set<string>(prev.deletedTransactionIds || []);
+
+  let kasList = (prev.kasList || []).filter((k) => k && !deletedKasSet.has(k.id));
+  let txList = (prev.memberTransactions || []).filter((t) => t && !deletedTxSet.has(t.id));
+
+  // 1. Pastikan setiap setoran anggota yang telah diverifikasi (disetujui) tercatat di Buku Kas Anggota
+  // kecuali memang telah dihapus oleh Super Admin (tercatat di deletedKasIds / deletedTransactionIds)
+  if (deletedKasSet.size === 0 && deletedTxSet.size === 0) {
+    (prev.setoranList || []).forEach((dep) => {
+      if (dep.status !== 'disetujui' || dep.jenis === 'sedekah') return;
+      const member = (prev.members || []).find(
+        (m) =>
+          m.id === dep.memberId ||
+          (dep.memberRekening && m.nomorRekening === dep.memberRekening) ||
+          (dep.memberNama && m.nama.trim().toLowerCase() === dep.memberNama.trim().toLowerCase())
+      );
+      if (!member) return;
+
+      const tgl = (dep.verifiedAt || dep.createdAt || getWibDateStr()).slice(0, 10);
+      const hasKasForDep = kasList.some(
+        (k) =>
+          k.bukuKas === 'anggota' &&
+          (k.referensiId === dep.id ||
+            ((k.memberId === member.id ||
+              (k.namaPenerima || '').trim().toLowerCase() === member.nama.trim().toLowerCase() ||
+              (k.keterangan || '').toLowerCase().includes(member.nama.trim().toLowerCase())) &&
+              k.tanggal === tgl))
+      );
+
+      if (!hasKasForDep) {
+        const nowIso = dep.verifiedAt || dep.createdAt || new Date().toISOString();
+        if (dep.jenis === 'kewajiban') {
+          const jlhHari = dep.jumlahHari || Math.max(1, Math.round(dep.nominal / (prev.profile?.biayaWajibHarian || 2000)));
+          const pNom = Math.floor(dep.nominal * 0.5);
+          const qNom = Math.floor(dep.nominal * 0.25);
+          const zNom = dep.nominal - pNom - qNom;
+          kasList = [
+            {
+              id: `kas-sync-p-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Pokok',
+              keterangan: `Setoran Tabungan Pokok ${member.nama} (${jlhHari} Hari)${dep.periode ? ` - Periode: ${dep.periode}` : ''}`,
+              namaPenerima: member.nama,
+              memberId: member.id,
+              referensiId: dep.id,
+              periode: dep.periode,
+              jumlahHari: jlhHari,
+              tipe: 'masuk',
+              nominal: pNom,
+              saldoKasSetelah: 0,
+              inputBy: dep.verifiedBy || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: nowIso,
+            },
+            {
+              id: `kas-sync-q-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Qurban',
+              keterangan: `Setoran Tabungan Qurban ${member.nama} (${jlhHari} Hari)`,
+              namaPenerima: member.nama,
+              memberId: member.id,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: qNom,
+              saldoKasSetelah: 0,
+              inputBy: dep.verifiedBy || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: nowIso,
+            },
+            {
+              id: `kas-sync-z-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Zakat',
+              keterangan: `Setoran Tabungan Zakat ${member.nama} (${jlhHari} Hari)`,
+              namaPenerima: member.nama,
+              memberId: member.id,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: zNom,
+              saldoKasSetelah: 0,
+              inputBy: dep.verifiedBy || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: nowIso,
+            },
+            ...kasList,
+          ];
+        } else {
+          kasList = [
+            {
+              id: `kas-sync-u-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Bebas',
+              keterangan: `Setoran Tunai ${member.nama}`,
+              namaPenerima: member.nama,
+              memberId: member.id,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: dep.verifiedBy || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: nowIso,
+            },
+            ...kasList,
+          ];
+        }
+      }
+    });
+  }
+
+  // 2. Hitung saldo setiap anggota mengikuti Buku Kas Anggota (status === 'approved') + transfer sesama anggota
+  const approvedKasAnggota = kasList.filter((k) => k.bukuKas === 'anggota' && k.status === 'approved');
+  const activeMembers = (prev.members || []).filter((m) => m.status !== 'dibekukan' && m.status !== 'nonaktif');
+
+  const updatedMembers = (prev.members || []).map((m) => {
+    const mName = (m.nama || '').trim().toLowerCase();
+    const memberKas = approvedKasAnggota.filter((k) => {
+      if (k.memberId && k.memberId === m.id) return true;
+      const pName = (k.namaPenerima || '').trim().toLowerCase();
+      if (pName && pName === mName) return true;
+      const ket = (k.keterangan || '').trim().toLowerCase();
+      if (!k.memberId && mName && ket.includes(mName)) return true;
+      return false;
+    });
+
+    // Cek juga entri koreksi massal yang mencakup semua anggota
+    const massKas = approvedKasAnggota.filter((k) => {
+      if (k.memberId) return false;
+      const pName = (k.namaPenerima || '').trim().toLowerCase();
+      return pName.includes('koreksi massal') || pName.includes('koreksi saldo massal');
+    });
+
+    let p = 0;
+    let q = 0;
+    let z = 0;
+    let u = 0;
+    let latestPeriode = m.periodeTabunganPokok;
+
+    memberKas.forEach((k) => {
+      const kat = (k.kategori || '').toLowerCase();
+      const sign = k.tipe === 'masuk' ? 1 : -1;
+      if (k.periode) latestPeriode = k.periode;
+      if (kat.includes('pokok')) {
+        p = Math.max(0, p + sign * k.nominal);
+      } else if (kat.includes('qurban')) {
+        q = Math.max(0, q + sign * k.nominal);
+      } else if (kat.includes('zakat')) {
+        z = Math.max(0, z + sign * k.nominal);
+      } else if (!kat.includes('pinjaman kas') && !kat.includes('pengembalian')) {
+        u = Math.max(0, u + sign * k.nominal);
+      }
+    });
+
+    if (massKas.length > 0 && activeMembers.length > 0) {
+      massKas.forEach((k) => {
+        const perMem = Math.floor(k.nominal / activeMembers.length);
+        const kat = (k.kategori || '').toLowerCase();
+        const sign = k.tipe === 'masuk' ? 1 : -1;
+        if (k.periode) latestPeriode = k.periode;
+        if (kat.includes('pokok')) p = Math.max(0, p + sign * perMem);
+        else if (kat.includes('qurban')) q = Math.max(0, q + sign * perMem);
+        else if (kat.includes('zakat')) z = Math.max(0, z + sign * perMem);
+        else u = Math.max(0, u + sign * perMem);
+      });
+    }
+
+    // Tambahkan dampak transfer sesama anggota atau sedekah potong saldo umum dari memberTransactions
+    const internalTxs = txList.filter(
+      (tx) =>
+        tx.memberId === m.id &&
+        (tx.referensiId?.startsWith('TF-') ||
+          tx.id.startsWith('tx-tf-') ||
+          tx.id.startsWith('tx-sdk-') ||
+          (tx.keterangan || '').toLowerCase().includes('transfer'))
+    );
+    internalTxs.forEach((tx) => {
+      if (tx.tipe === 'masuk') u += tx.nominal;
+      else u = Math.max(0, u - tx.nominal);
+    });
+
+    const totalSimpanan = p + q + z + u;
+    const jumlahHariPokok = Math.floor(p / (prev.profile?.pembagianPokokHarian || 1000));
+
+    return {
+      ...m,
+      saldoPokok: p,
+      saldoQurban: q,
+      saldoZakatFitrah: z,
+      saldoUmum: u,
+      totalSimpanan,
+      jumlahHariPokok,
+      periodeTabunganPokok: latestPeriode,
+    };
+  });
+
+  // 3. Rekalkulasi running saldoKasSetelah pada Buku Kas Anggota & Koperasi
+  const recomputeKas = (type: 'anggota' | 'koperasi') => {
+    const items = kasList
+      .filter((k) => k.bukuKas === type)
+      .slice()
+      .sort((a, b) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+    let run = 0;
+    const map = new Map<string, number>();
+    items.forEach((it) => {
+      if (it.status === 'approved') {
+        run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+      }
+      map.set(it.id, run);
+    });
+    return map;
+  };
+  const mapAnggota = recomputeKas('anggota');
+  const mapKoperasi = recomputeKas('koperasi');
+  const syncedKasList = kasList.map((k) => ({
+    ...k,
+    saldoKasSetelah:
+      k.bukuKas === 'anggota'
+        ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+        : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+  }));
+
+  return {
+    ...prev,
+    members: updatedMembers,
+    kasList: syncedKasList,
+    memberTransactions: txList,
+  };
+}
+
+

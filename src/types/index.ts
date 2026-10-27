@@ -77,6 +77,7 @@ export interface KoperasiProfile {
   pembagianPokokHarian: number; // Rp 1.000
   pembagianZakatHarian: number; // Rp 500
   pembagianQurbanHarian: number; // Rp 500
+  periodeAktifPokok?: string;
 }
 
 export type AdminRole = 
@@ -159,6 +160,10 @@ export interface MemberUser {
   saldoQurban: number; // Rp 500/hari, dikelola pengurus
   saldoUmum: number; // Bebas setor & tarik kapan saja
   totalSimpanan?: number; // Total akumulasi seluruh simpanan
+  periodeTabunganPokok?: string; // Periode tabungan pokok yang dipilih untuk ditampilkan di dashboard
+  periodeMulaiPokok?: string;
+  periodeAkhirPokok?: string;
+  jumlahHariPokok?: number;
   
   status: 'aktif' | 'nonaktif' | 'pending' | 'pending_deletion' | 'dibekukan' | 'pending_freeze';
   freezeRequest?: FreezeRequest;
@@ -178,6 +183,7 @@ export interface SetoranVerifikasi {
   memberWilayah?: WilayahKoperasi;
   jenis: JenisSetoran;
   jumlahHari?: number; // untuk setoran kewajiban
+  periode?: string; // periode setoran kewajiban / pokok
   nominal: number;
   rekeningTujuan: string;
   metode: 'transfer_bank' | 'qris' | 'tabungan_umum';
@@ -206,15 +212,22 @@ export interface MemberTransaction {
   saldoSetelah: number;
   kategori: KategoriTabunganMutasi;
   referensiId?: string;
+  periode?: string;
+  jumlahHari?: number;
 }
 
 export interface KasEntry {
   id: string;
   bukuKas: 'anggota' | 'koperasi';
   tanggal: string;
+  jam?: string;
   kategori: string;
   keterangan: string;
   namaPenerima?: string; // Nama pihak penerima / penyetor (Req 1)
+  memberId?: string; // ID anggota terkait untuk sinkronisasi otomatis
+  referensiId?: string; // ID referensi setoran / mutasi terkait
+  periode?: string;
+  jumlahHari?: number;
   tipe: 'masuk' | 'keluar';
   nominal: number;
   saldoKasSetelah: number;
