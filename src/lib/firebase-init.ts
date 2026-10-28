@@ -11,7 +11,7 @@ export const firebaseConfig = {
   firestoreDatabaseId: "ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69",
   storageBucket: "gen-lang-client-0761736071.firebasestorage.app",
   messagingSenderId: "697954213543",
-  measurementId: "",
+  measurementId: "G-92QTZ4642R",
   oAuthClientId: "697954213543-3q3o605nabhq0ogqiapcjjsr9b0ckcub.apps.googleusercontent.com",
   recaptchaSiteKey: ""
 };
@@ -63,6 +63,7 @@ export function getFirebaseFirestore(): Firestore {
 
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, isSupported as isAnalyticsSupported, logEvent, Analytics } from 'firebase/analytics';
+import { doc, setDoc } from 'firebase/firestore';
 
 export function getFirebaseAuth(): Auth {
   if (!cachedAuth) {
@@ -100,6 +101,29 @@ export async function logAnalyticsEvent(eventName: string, params?: Record<strin
     if (a) {
       logEvent(a, eventName, params);
     }
+    const firestoreDb = getFirebaseFirestore();
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    const platform = /Android/i.test(ua)
+      ? 'Android'
+      : /iPhone|iPad|iPod/i.test(ua)
+      ? 'iOS'
+      : /Windows|Macintosh|Linux/i.test(ua)
+      ? 'PC / Web'
+      : 'Web';
+    await setDoc(
+      doc(firestoreDb, 'settings', 'analytics_realtime'),
+      {
+        id: 'analytics_realtime',
+        lastEventName: eventName,
+        lastEventParams: params ? JSON.parse(JSON.stringify(params)) : {},
+        lastEventPlatform: platform,
+        lastEventTime: new Date().toISOString(),
+        measurementId: firebaseConfig.measurementId,
+        projectId: firebaseConfig.projectId,
+        databaseId: firebaseConfig.firestoreDatabaseId,
+      },
+      { merge: true }
+    ).catch(() => {});
   } catch {}
 }
 

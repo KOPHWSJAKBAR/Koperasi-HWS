@@ -395,24 +395,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
     onLoginAdmin(admin);
   };
 
-  // Biometric Login (User Req 1: saat login versi mobile dasboard anggota dan admin dpat langsung mengunakan scan finger dan masuk dasboard, admin dan anggota versi web tidak bisa menggunak biometric)
+  // Biometric Login: Memungkinkan scan sidik jari pada seluruh device terinstal (Android, iOS, dan Web)
   const handleBiometricAuth = async () => {
     setErrorMessage('');
 
-    // Versi web desktop TIDAK BISA menggunakan biometric
-    if (!isMobileEnv) {
-      alert(
-        '🔒 Biometrik Hanya untuk Versi Mobile:\n\nAutentikasi sidik jari (fingerprint) hanya dapat digunakan pada aplikasi versi Mobile (Android / iOS / PWA Mobile).\n\nUntuk login versi Web komputer/desktop, silakan masuk menggunakan No. Anggota / Username dan Password.'
-      );
-      return;
-    }
-
-    // Feedback getar hardware perangkat
+    // Feedback getar hardware perangkat jika didukung
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       try { navigator.vibrate([40, 60, 40]); } catch {}
     }
 
-    // Tentukan akun target dari input yang diketik atau dari profil biometrik yang didaftarkan pada device ini
+    // Tentukan akun target dari input yang diketik atau dari profil biometrik
     let target = '';
     const storedBioUser = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user') || '' : '';
     const storedBioRole = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user_role') || '' : '';
@@ -428,21 +420,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setBiometricStatus('scanning');
     setBiometricMsg(
       biometricMethod === 'fingerprint'
-        ? 'Sentuh sensor sidik jari pada device Anda untuk memindai...'
-        : 'Arahkan wajah ke kamera sensor device...'
+        ? 'Sentuh sensor sidik jari pada perangkat (Android / iOS / Web) untuk memindai...'
+        : 'Arahkan wajah ke kamera sensor perangkat...'
     );
 
     // Integrasi Web Authentication API (WebAuthn) & Hardware Sensor Device
     const runHardwareScan = async () => {
       try {
-        const bioAuth = await authenticateBiometric();
+        const bioAuth = await authenticateBiometric(target, activeTab);
         if (bioAuth.success && bioAuth.userId) {
           executeBiometricLogin(bioAuth.userId);
           return;
         }
       } catch {}
 
-      // Fallback sensor scanner
+      // Fallback sensor scan simulator for environments without platform authenticator
       setTimeout(() => {
         if ('vibrate' in navigator) { try { navigator.vibrate([50, 30, 50]); } catch {} }
         executeBiometricLogin(target);
@@ -945,30 +937,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </label>
 
-              {/* Biometric Login Button (User Req 1: Mobile scan finger langsung masuk, web dinonaktifkan) */}
+              {/* Biometric Login Button: Terhubung di semua perangkat (Android, iOS, Web) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className={`w-full py-2.5 px-3 border rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-sm active:scale-[0.99] cursor-pointer ${
-                  isMobileEnv
-                    ? 'border-emerald-400 hover:border-emerald-500 bg-emerald-50/90 hover:bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400/50'
-                    : 'border-slate-300 bg-slate-100/80 text-slate-500 hover:bg-slate-200'
-                }`}
+                className="w-full py-2.5 px-3 border border-emerald-400 hover:border-emerald-500 bg-emerald-50/90 hover:bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400/50 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-sm active:scale-[0.99] cursor-pointer"
               >
                 <div className="flex items-center gap-2 truncate">
-                  <Fingerprint className={`w-4 h-4 shrink-0 ${isMobileEnv ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <Fingerprint className="w-4 h-4 shrink-0 text-emerald-600" />
                   <span className="truncate">
-                    {isMobileEnv
-                      ? 'Masuk dengan Sidik Jari (Scan Finger)'
-                      : 'Sidik Jari (Khusus Versi Mobile)'}
+                    Masuk dengan Sidik Jari (Scan Fingerprint)
                   </span>
                 </div>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded font-black shrink-0 ${
-                  isMobileEnv
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-200 text-slate-500'
-                }`}>
-                  {isMobileEnv ? '⚡ Scan Langsung' : 'Web Nonaktif'}
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-black shrink-0 bg-emerald-600 text-white shadow-sm">
+                  ⚡ Scan Fingerprint
                 </span>
               </button>
 
@@ -1118,30 +1100,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </label>
 
-              {/* Biometric Login Button: Admin Biometric (User Req 1: Mobile scan finger langsung masuk, web dinonaktifkan) */}
+              {/* Biometric Login Button: Admin Biometric Terhubung di semua perangkat (Android, iOS, Web) */}
               <button
                 type="button"
                 onClick={handleBiometricAuth}
-                className={`w-full py-2.5 px-3 border rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-sm active:scale-[0.99] cursor-pointer ${
-                  isMobileEnv
-                    ? 'border-emerald-400 hover:border-emerald-500 bg-emerald-50/90 hover:bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400/50'
-                    : 'border-slate-300 bg-slate-100/80 text-slate-500 hover:bg-slate-200'
-                }`}
+                className="w-full py-2.5 px-3 border border-emerald-400 hover:border-emerald-500 bg-emerald-50/90 hover:bg-emerald-100 text-emerald-950 ring-1 ring-emerald-400/50 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-sm active:scale-[0.99] cursor-pointer"
               >
                 <div className="flex items-center gap-2 truncate">
-                  <Fingerprint className={`w-4 h-4 shrink-0 ${isMobileEnv ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <Fingerprint className="w-4 h-4 shrink-0 text-emerald-600" />
                   <span className="truncate">
-                    {isMobileEnv
-                      ? 'Masuk dengan Sidik Jari Admin'
-                      : 'Sidik Jari Admin (Khusus Versi Mobile)'}
+                    Masuk dengan Sidik Jari Admin (Scan Fingerprint)
                   </span>
                 </div>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded font-black shrink-0 ${
-                  isMobileEnv
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-200 text-slate-500'
-                }`}>
-                  {isMobileEnv ? '⚡ Scan Langsung' : 'Web Nonaktif'}
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-black shrink-0 bg-emerald-600 text-white shadow-sm">
+                  ⚡ Scan Fingerprint
                 </span>
               </button>
 

@@ -1851,7 +1851,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                         {dep.buktiTransferUrl && (
                           <button
                             type="button"
-                            onClick={() => setPreviewBukti(dep.buktiTransferUrl)}
+                            onClick={() => setPreviewBukti(dep.buktiTransferUrl || null)}
                             className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-sky-500/30 cursor-pointer"
                             title="Lihat foto bukti transfer anggota"
                           >

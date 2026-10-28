@@ -108,7 +108,11 @@ export async function registerBiometricCredentials(
  * Verifikasi Masuk Biometrik (WebAuthn)
  * Dipanggil saat pengguna login menggunakan scan fingerprint / Face ID
  */
-export async function authenticateBiometric(): Promise<{
+export async function authenticateBiometric(
+  explicitUserId?: string,
+  explicitRole?: 'member' | 'admin',
+  explicitNama?: string
+): Promise<{
   success: boolean;
   userId?: string;
   userRole?: 'member' | 'admin';
@@ -117,15 +121,15 @@ export async function authenticateBiometric(): Promise<{
 }> {
   try {
     const isRegistered = localStorage.getItem(BIO_ACTIVE_KEY) === 'true';
-    const userId = localStorage.getItem(BIO_USER_KEY);
-    const userRole = (localStorage.getItem(BIO_ROLE_KEY) as 'member' | 'admin') || 'member';
-    const userName = localStorage.getItem(BIO_NAMA_KEY) || 'Anggota Koperasi';
+    const userId = explicitUserId || localStorage.getItem(BIO_USER_KEY);
+    const userRole = explicitRole || (localStorage.getItem(BIO_ROLE_KEY) as 'member' | 'admin') || 'member';
+    const userName = explicitNama || localStorage.getItem(BIO_NAMA_KEY) || 'Anggota / Pengurus Koperasi';
     const credId = localStorage.getItem(BIO_CRED_KEY);
 
-    if (!isRegistered || !userId) {
+    if (!userId && !isRegistered) {
       return {
         success: false,
-        error: 'Biometrik belum didaftarkan pada perangkat ini. Silakan masuk manual dan daftarkan biometrik di Menu Pengaturan.',
+        error: 'Identitas akun belum ditentukan. Masukkan Nomor Anggota atau Username Anda terlebih dahulu.',
       };
     }
 
@@ -172,9 +176,9 @@ export async function authenticateBiometric(): Promise<{
 
     return {
       success: true,
-      userId,
+      userId: userId || undefined,
       userRole,
-      userName,
+      userName: userName || undefined,
     };
   } catch (err: any) {
     return { success: false, error: err?.message || 'Gagal autentikasi biometrik' };

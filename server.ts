@@ -496,42 +496,7 @@ function mergeServerState(current: any, incoming: any): any {
   };
 }
 
-// Save DB with automated backup and physical file archiving
-function saveDatabase(state: any) {
-  try {
-    state.serverSyncStatus = {
-      ...state.serverSyncStatus,
-      lastSynced: new Date().toISOString(),
-      online: true,
-      firestoreActive: true,
-      filesProtected: true,
-      permanentStorage: true,
-    };
-
-    // Rolling backup before writing to prevent data corruption or loss
-    try {
-      if (fs.existsSync(DB_FILE)) {
-        fs.copyFileSync(DB_FILE, path.join(DATA_DIR, 'koperasi_db.bak'));
-      }
-    } catch {}
-
-    // Physical file archiving for all uploaded base64 data URLs
-    archiveAllUploadedFiles(state);
-
-    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
-    broadcastEvent('STATE_UPDATED', state);
-    return true;
-  } catch (err) {
-    console.error('Failed saving DB file', err);
-    return false;
-  }
-}
-
-let currentState = loadDatabase();
-// Archive any files in current database on startup
-archiveAllUploadedFiles(currentState);
-
-// SSE (Server-Sent Events) clients for instant cross-device realtime sync
+// SSE (Server-Sent Events) clients for instant cross-device realtime sync (Declared before saveDatabase to prevent ReferenceError)
 const sseClients = new Set<Response>();
 
 // Connected Devices & Online Users Presence Store (Req 1 & 19)
@@ -559,6 +524,7 @@ function cleanStalePresence() {
 setInterval(cleanStalePresence, 20000);
 
 function broadcastEvent(type: string, payload: any) {
+  if (!sseClients || sseClients.size === 0) return;
   const data = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
   for (const client of sseClients) {
     try {
@@ -568,6 +534,434 @@ function broadcastEvent(type: string, payload: any) {
     }
   }
 }
+
+// Save DB with automated backup and physical file archiving
+function saveDatabase(state: any) {
+  try {
+    state.serverSyncStatus = {
+      ...state.serverSyncStatus,
+      lastSynced: new Date().toISOString(),
+      online: true,
+      firestoreActive: true,
+      firebaseStorageActive: true,
+      analyticsActive: true,
+      filesProtected: true,
+      permanentStorage: true,
+    };
+
+    // Rolling backup before writing to prevent data corruption or loss
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        fs.copyFileSync(DB_FILE, path.join(DATA_DIR, 'koperasi_db.bak'));
+      }
+    } catch {}
+
+    // Physical file archiving for all uploaded base64 data URLs
+    archiveAllUploadedFiles(state);
+
+    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
+    broadcastEvent('STATE_UPDATED', state);
+    return true;
+  } catch (err) {
+    console.error('Failed saving DB file', err);
+    return false;
+  }
+}
+
+// Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
+function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCount: number; addedKasCount: number; addedTxCount: number } {
+  if (!state || typeof state !== 'object') {
+    return { state, reconciledCount: 0, addedKasCount: 0, addedTxCount: 0 };
+  }
+
+  const deletedMemSet = new Set<string>(state.deletedMemberIds || []);
+  const deletedSetSet = new Set<string>(state.deletedSetoranIds || []);
+  const deletedTxSet = new Set<string>(state.deletedTransactionIds || []);
+  const deletedKasSet = new Set<string>(state.deletedKasIds || []);
+
+  // 1. Filter active members strictly against deletedMemberIds
+  const members: any[] = (Array.isArray(state.members) ? state.members : []).filter(
+    (m: any) => m && m.id && !deletedMemSet.has(m.id)
+  );
+  const memberMap = new Map<string, any>();
+  members.forEach((m: any) => memberMap.set(m.id, m));
+
+  // 2. Filter setoranList strictly: must not be in deletedSetoranIds AND must belong to an active member (or donatur-umum for sedekah)
+  const rawSetoran: any[] = Array.isArray(state.setoranList) ? state.setoranList : [];
+  const validSetoran: any[] = [];
+  rawSetoran.forEach((s: any) => {
+    if (!s || !s.id) return;
+    if (deletedSetSet.has(s.id)) return;
+    const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
+    if (!memberMap.has(s.memberId) && !(isSedekah && s.memberId === 'donatur-umum')) {
+      // Belongs to an old deleted member — mark setoran as deleted so it never resurrects
+      deletedSetSet.add(s.id);
+      return;
+    }
+    const m = memberMap.get(s.memberId);
+    if (m) {
+      s.memberNama = m.nama;
+      s.memberRekening = m.nomorRekening;
+      s.memberNomorAnggota = m.nomorAnggota;
+      s.memberWilayah = m.wilayah;
+    }
+    validSetoran.push(s);
+  });
+
+  // 3. Two-way synchronize sedekahList <-> setoranList (jenis === 'sedekah')
+  const sedekahMap = new Map<string, any>();
+  (Array.isArray(state.sedekahList) ? state.sedekahList : []).forEach((sdk: any) => {
+    if (sdk && sdk.id && !deletedSetSet.has(sdk.id)) {
+      sedekahMap.set(sdk.id, { ...sdk });
+    }
+  });
+
+  validSetoran.forEach((s: any) => {
+    if (s.jenis === 'sedekah' || String(s.id).startsWith('sdk-')) {
+      const m = memberMap.get(s.memberId);
+      const existingSdk = sedekahMap.get(s.id);
+      const ketLower = String(s.catatanAnggota || existingSdk?.keterangan || '').toLowerCase();
+      const jenisSdk = existingSdk?.jenis || (ketLower.includes('jumat') ? 'sedekah_jumat' : ketLower.includes('umum') ? 'sedekah_umum' : 'sedekah_subuh');
+      const namaKustom = existingSdk?.namaBerbagiKustom || (jenisSdk === 'sedekah_jumat' ? 'Sedekah Jumat' : jenisSdk === 'sedekah_umum' ? 'Sedekah Umum' : 'Sedekah Subuh');
+      const isApproved = s.status === 'disetujui' || s.status === 'approved' || existingSdk?.status === 'approved';
+      const isRejected = !isApproved && (s.status === 'ditolak' || s.status === 'rejected' || existingSdk?.status === 'rejected');
+      const finalSdkStatus = isApproved ? 'approved' : isRejected ? 'rejected' : 'pending';
+      s.status = isApproved ? 'disetujui' : isRejected ? 'ditolak' : 'pending';
+
+      const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
+      const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
+      const tgl = existingSdk?.tanggal || s.tanggal || wibTime.toISOString().split('T')[0];
+      const jam = existingSdk?.jam || s.jam || wibTime.toISOString().split('T')[1].slice(0, 5);
+
+      sedekahMap.set(s.id, {
+        ...(existingSdk || {}),
+        id: s.id,
+        tanggal: tgl,
+        jam,
+        tipe: 'penerimaan',
+        jenis: jenisSdk,
+        namaBerbagiKustom: namaKustom,
+        nominal: Number(s.nominal) || 0,
+        donaturMemberId: s.memberId,
+        donaturNama: m?.nama || s.memberNama || existingSdk?.donaturNama || 'Anggota Koperasi',
+        donaturRekening: m?.nomorRekening || s.memberRekening || existingSdk?.donaturRekening || '-',
+        donaturNomorAnggota: m?.nomorAnggota || s.memberNomorAnggota || existingSdk?.donaturNomorAnggota || '',
+        donaturWilayah: m?.wilayah || s.memberWilayah || existingSdk?.donaturWilayah || 'Cengkareng',
+        sumberDana: s.metode === 'tabungan_umum' ? 'tabungan_umum' : 'qris_transfer',
+        buktiTransferUrl: s.buktiTransferUrl || existingSdk?.buktiTransferUrl,
+        keterangan: s.catatanAnggota || existingSdk?.keterangan || `Donasi ${namaKustom}`,
+        status: finalSdkStatus,
+        verifiedBy: s.verifiedBy || existingSdk?.verifiedBy || (isApproved ? 'Abzqar' : undefined),
+        verifiedAt: s.verifiedAt || existingSdk?.verifiedAt || (isApproved ? new Date().toISOString() : undefined),
+        createdAt: s.createdAt || existingSdk?.createdAt || new Date().toISOString(),
+      });
+    }
+  });
+
+  // Also ensure any penerimaan in sedekahMap is mirrored in validSetoran
+  const validSetoranIds = new Set(validSetoran.map((s: any) => s.id));
+  sedekahMap.forEach((sdk: any) => {
+    if (sdk.tipe === 'penerimaan' && !validSetoranIds.has(sdk.id) && !deletedSetSet.has(sdk.id)) {
+      validSetoran.push({
+        id: sdk.id,
+        memberId: sdk.donaturMemberId || 'donatur-umum',
+        memberNama: sdk.donaturNama || 'Anggota Koperasi',
+        memberRekening: sdk.donaturRekening || '-',
+        memberNomorAnggota: sdk.donaturNomorAnggota,
+        memberWilayah: sdk.donaturWilayah,
+        jenis: 'sedekah',
+        nominal: Number(sdk.nominal) || 0,
+        rekeningTujuan: 'Kas Berbagi Koperasi',
+        metode: sdk.sumberDana === 'tabungan_umum' ? 'tabungan_umum' : 'qris',
+        buktiTransferUrl: sdk.buktiTransferUrl,
+        catatanAnggota: sdk.keterangan || `Donasi ${sdk.namaBerbagiKustom || 'Sedekah'}`,
+        status: sdk.status === 'approved' ? 'disetujui' : sdk.status === 'rejected' ? 'ditolak' : 'pending',
+        verifiedBy: sdk.verifiedBy,
+        verifiedAt: sdk.verifiedAt,
+        createdAt: sdk.createdAt || `${sdk.tanggal}T${sdk.jam || '08:00'}:00.000Z`,
+        nomorReferensi: `SDK-${String(sdk.id).slice(-6).toUpperCase()}`,
+      });
+    }
+  });
+
+  // 4. Filter active memberTransactions strictly against deletedTransactionIds & active members
+  const nextTxList: any[] = (Array.isArray(state.memberTransactions) ? state.memberTransactions : []).filter(
+    (t: any) => t && t.id && !deletedTxSet.has(t.id) && memberMap.has(t.memberId)
+  );
+  const existingTxRefs = new Set<string>();
+  nextTxList.forEach((t: any) => {
+    existingTxRefs.add(t.id);
+    if (t.referensiId) existingTxRefs.add(t.referensiId);
+  });
+
+  // Ensure approved savings deposits (that haven't had their transaction deleted) have a transaction entry
+  let addedTxCount = 0;
+  const approvedSavingsDeposits = validSetoran.filter(
+    (s: any) => (s.status === 'disetujui' || s.status === 'approved') && (s.jenis === 'kewajiban' || s.jenis === 'umum')
+  );
+
+  approvedSavingsDeposits.forEach((s: any) => {
+    const m = memberMap.get(s.memberId);
+    if (!m) return;
+    const depTxId = `tx-dep-${s.id}`;
+    if (existingTxRefs.has(s.id) || existingTxRefs.has(depTxId) || deletedTxSet.has(depTxId)) return;
+
+    addedTxCount++;
+    const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
+    const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
+    const tgl = s.tanggal || wibTime.toISOString().split('T')[0];
+    const jam = s.jam || wibTime.toISOString().split('T')[1].slice(0, 5);
+
+    nextTxList.push({
+      id: depTxId,
+      memberId: m.id,
+      tanggal: tgl,
+      jam,
+      keterangan: s.jenis === 'kewajiban'
+        ? `SETORAN KEWAJIBAN ${s.jumlahHari || Math.round(s.nominal / 2000) || 1} HARI (POKOK, ZAKAT, QURBAN)`
+        : `Setoran Tunai ${m.nama}`,
+      cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+      tipe: 'masuk',
+      nominal: Number(s.nominal) || 0,
+      saldoSetelah: 0,
+      kategori: s.jenis === 'kewajiban' ? 'pokok' : 'umum',
+      referensiId: s.id,
+    });
+    existingTxRefs.add(s.id);
+  });
+
+  // 5. Calculate member balances strictly from active memberTransactions
+  let reconciledCount = 0;
+  state.members = members.map((m: any) => {
+    reconciledCount++;
+    const mTxs = nextTxList
+      .filter((t: any) => t.memberId === m.id)
+      .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+    let p = 0, u = 0, z = 0, q = 0;
+    mTxs.forEach((tx: any) => {
+      const nom = Number(tx.nominal) || 0;
+      const isKewajibanSplit =
+        tx.kategori === 'pokok' ||
+        String(tx.id).startsWith('tx-wajib-') ||
+        String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+        String(tx.keterangan || '').includes('50% Pokok');
+
+      if (tx.tipe === 'masuk') {
+        if (isKewajibanSplit) {
+          const pPart = Math.floor(nom * 0.5);
+          const qPart = Math.floor(nom * 0.25);
+          const zPart = nom - pPart - qPart;
+          p += pPart;
+          q += qPart;
+          z += zPart;
+        } else if (tx.kategori === 'qurban') {
+          q += nom;
+        } else if (tx.kategori === 'zakat') {
+          z += nom;
+        } else {
+          u += nom;
+        }
+      } else {
+        if (isKewajibanSplit) {
+          const pPart = Math.floor(nom * 0.5);
+          const qPart = Math.floor(nom * 0.25);
+          const zPart = nom - pPart - qPart;
+          p = Math.max(0, p - pPart);
+          q = Math.max(0, q - qPart);
+          z = Math.max(0, z - zPart);
+        } else if (tx.kategori === 'qurban') {
+          q = Math.max(0, q - nom);
+        } else if (tx.kategori === 'zakat') {
+          z = Math.max(0, z - nom);
+        } else {
+          u = Math.max(0, u - nom);
+        }
+      }
+      tx.saldoSetelah = p + u;
+    });
+
+    return {
+      ...m,
+      saldoPokok: p,
+      saldoUmum: u,
+      saldoZakatFitrah: z,
+      saldoQurban: q,
+      totalSimpanan: p + u + z + q,
+    };
+  });
+
+  state.memberTransactions = nextTxList.sort((a: any, b: any) =>
+    `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
+  );
+
+  // 6. Filter & synchronize kasList (Buku Kas Anggota & Koperasi) strictly against deletedKasIds
+  let addedKasCount = 0;
+  const nextKasList: any[] = (Array.isArray(state.kasList) ? state.kasList : []).filter(
+    (k: any) => k && k.id && !deletedKasSet.has(k.id)
+  );
+  const existingKasTokens = new Set<string>();
+  nextKasList.forEach((k: any) => {
+    if (k.id) existingKasTokens.add(k.id);
+    if (k.referensiId) existingKasTokens.add(k.referensiId);
+    const tsMatch = String(k.id).match(/(\d{10,})/);
+    if (tsMatch) existingKasTokens.add(tsMatch[1]);
+  });
+
+  // Check active memberTransactions to see if any approved deposit transaction is missing its Buku Kas Anggota entry
+  nextTxList.forEach((tx: any) => {
+    const m = memberMap.get(tx.memberId);
+    if (!m || tx.tipe !== 'masuk') return;
+    const tsMatch = String(tx.id).match(/(\d{10,})/);
+    const tsToken = tsMatch ? tsMatch[1] : tx.id;
+    const refToken = tx.referensiId || '';
+
+    if (
+      existingKasTokens.has(tsToken) ||
+      (refToken && existingKasTokens.has(refToken)) ||
+      existingKasTokens.has(`kas-ang-pokok-${tsToken}`) ||
+      existingKasTokens.has(`kas-ang-umum-${tsToken}`)
+    ) {
+      return;
+    }
+
+    const nom = Number(tx.nominal) || 0;
+    const jlhHari = Math.round(nom / 2000) || 1;
+    const nowIso = `${tx.tanggal}T${tx.jam || '09:00'}:00.000Z`;
+    const isKewajibanSplit =
+      tx.kategori === 'pokok' ||
+      String(tx.id).startsWith('tx-wajib-') ||
+      String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN');
+
+    if (isKewajibanSplit) {
+      const pId = `kas-ang-pokok-${tsToken}`;
+      const zId = `kas-ang-zakat-${Number(tsToken) ? Number(tsToken) + 1 : tsToken + '-z'}`;
+      const qId = `kas-ang-qurban-${Number(tsToken) ? Number(tsToken) + 2 : tsToken + '-q'}`;
+      if (deletedKasSet.has(pId)) return;
+
+      const pokokNom = Math.floor(nom * 0.5);
+      const qurbanNom = Math.floor(nom * 0.25);
+      const zakatNom = nom - pokokNom - qurbanNom;
+      addedKasCount += 3;
+      nextKasList.push(
+        {
+          id: pId,
+          bukuKas: 'anggota',
+          tanggal: tx.tanggal,
+          kategori: 'Tabungan Pokok',
+          keterangan: `Setoran Tabungan Pokok ${m.nama} (${jlhHari} Hari)`,
+          namaPenerima: m.nama,
+          tipe: 'masuk',
+          nominal: pokokNom,
+          saldoKasSetelah: 0,
+          inputBy: 'Abzqar',
+          status: 'approved',
+          createdAt: nowIso,
+          referensiId: refToken || tx.id,
+        },
+        {
+          id: zId,
+          bukuKas: 'anggota',
+          tanggal: tx.tanggal,
+          kategori: 'Tabungan Zakat',
+          keterangan: `Setoran Tabungan Zakat ${m.nama} (${jlhHari} Hari)`,
+          namaPenerima: m.nama,
+          tipe: 'masuk',
+          nominal: zakatNom,
+          saldoKasSetelah: 0,
+          inputBy: 'Abzqar',
+          status: 'approved',
+          createdAt: nowIso,
+          referensiId: refToken || tx.id,
+        },
+        {
+          id: qId,
+          bukuKas: 'anggota',
+          tanggal: tx.tanggal,
+          kategori: 'Tabungan Qurban',
+          keterangan: `Setoran Tabungan Qurban ${m.nama} (${jlhHari} Hari)`,
+          namaPenerima: m.nama,
+          tipe: 'masuk',
+          nominal: qurbanNom,
+          saldoKasSetelah: 0,
+          inputBy: 'Abzqar',
+          status: 'approved',
+          createdAt: nowIso,
+          referensiId: refToken || tx.id,
+        }
+      );
+      existingKasTokens.add(tsToken);
+    } else if (tx.kategori === 'umum' && !String(tx.id).startsWith('tx-tf-')) {
+      const uId = `kas-ang-umum-${tsToken}`;
+      if (deletedKasSet.has(uId)) return;
+      addedKasCount++;
+      nextKasList.push({
+        id: uId,
+        bukuKas: 'anggota',
+        tanggal: tx.tanggal,
+        kategori: 'Tabungan Bebas',
+        keterangan: `Setoran Tunai ${m.nama}`,
+        namaPenerima: m.nama,
+        tipe: 'masuk',
+        nominal: nom,
+        saldoKasSetelah: 0,
+        inputBy: 'Abzqar',
+        status: 'approved',
+        createdAt: nowIso,
+        referensiId: refToken || tx.id,
+      });
+      existingKasTokens.add(tsToken);
+    }
+  });
+
+  // Recompute running saldoKasSetelah on kasList
+  const recomputeType = (type: string) => {
+    const items = nextKasList
+      .filter((k: any) => k.bukuKas === type)
+      .slice()
+      .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+    let run = 0;
+    const map = new Map<string, number>();
+    items.forEach((it: any) => {
+      if (it.status === 'approved') {
+        run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+      }
+      map.set(it.id, run);
+    });
+    return map;
+  };
+
+  const mapAnggota = recomputeType('anggota');
+  const mapKoperasi = recomputeType('koperasi');
+  state.kasList = nextKasList
+    .map((k: any) => ({
+      ...k,
+      saldoKasSetelah:
+        k.bukuKas === 'anggota'
+          ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+          : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+    }))
+    .sort((a: any, b: any) => `${b.tanggal} ${b.createdAt || ''}`.localeCompare(`${a.tanggal} ${a.createdAt || ''}`));
+
+  state.setoranList = validSetoran.sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1));
+  state.sedekahList = Array.from(sedekahMap.values()).sort((a: any, b: any) =>
+    (b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1
+  );
+  state.deletedMemberIds = Array.from(deletedMemSet);
+  state.deletedSetoranIds = Array.from(deletedSetSet);
+  state.deletedTransactionIds = Array.from(deletedTxSet);
+  state.deletedKasIds = Array.from(deletedKasSet);
+
+  return { state, reconciledCount, addedKasCount, addedTxCount };
+}
+
+let currentState = loadDatabase();
+// Auto-reconcile balances with verified deposits on server boot
+const startupRecon = reconcileBalancesWithDeposits(currentState);
+currentState = startupRecon.state;
+// Archive any files in current database on startup
+archiveAllUploadedFiles(currentState);
+saveDatabase(currentState);
 
 async function startServer() {
   const app = express();
@@ -1066,6 +1460,9 @@ async function startServer() {
               }
             : m
         );
+        // Authoritative reconciliation to align all balances, kasList, and member transactions
+        const reconResult = reconcileBalancesWithDeposits(currentState);
+        currentState = reconResult.state;
       }
 
       saveDatabase(currentState);
@@ -1748,10 +2145,70 @@ async function startServer() {
     }
   });
 
-  // Dedicated Koreksi Saldo / Balance Adjustment Endpoint
+  // Dedicated Endpoint: Sinkronisasi & Penyesuaian Saldo Anggota dan Buku Kas Realtime sesuai Seluruh Setoran
+  app.post('/api/balance/reconcile-deposits', (req: Request, res: Response) => {
+    try {
+      const { adminName } = req.body || {};
+      const result = reconcileBalancesWithDeposits(currentState);
+      currentState = result.state;
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-recon-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Sinkronisasi Saldo Realtime (Setoran)',
+        detail: `Menyelaraskan saldo seluruh anggota (${result.reconciledCount} anggota), mutasi transaksi (+${result.addedTxCount}), dan buku kas (+${result.addedKasCount}) sesuai seluruh setoran yang terverifikasi.`,
+      });
+
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastEvent('BALANCE_RECONCILED', {
+        reconciledCount: result.reconciledCount,
+        addedKasCount: result.addedKasCount,
+        addedTxCount: result.addedTxCount,
+      });
+
+      res.json({
+        success: true,
+        message: 'Saldo anggota dan admin pada dashboard berhasil disinkronkan 100% sesuai dengan yang telah disetorkan!',
+        reconciledCount: result.reconciledCount,
+        addedKasCount: result.addedKasCount,
+        addedTxCount: result.addedTxCount,
+        state: currentState,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/balance/reconcile-deposits:', err);
+      res.status(500).json({ error: 'Gagal menyinkronkan saldo: ' + err.message });
+    }
+  });
+
+  app.get('/api/balance/reconcile-deposits', (req: Request, res: Response) => {
+    try {
+      const result = reconcileBalancesWithDeposits(currentState);
+      currentState = result.state;
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({
+        success: true,
+        message: 'Saldo anggota dan admin pada dashboard berhasil disinkronkan 100%!',
+        reconciledCount: result.reconciledCount,
+        addedKasCount: result.addedKasCount,
+        addedTxCount: result.addedTxCount,
+        membersCount: currentState.members.length,
+        kasCount: currentState.kasList.length,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Dedicated Koreksi Saldo / Balance Adjustment Endpoint (Admin Write submits, Admin Approval / Super Admin approves)
   app.post('/api/balance/adjust', (req: Request, res: Response) => {
     try {
-      const { targetIds, nominal, tipe, jenisTabungan, keterangan, adminName, password } = req.body;
+      const { targetIds, nominal, tipe, jenisTabungan, keterangan, adminName, password, isDirectApproval = true } = req.body;
       const nominalNum = Number(nominal);
       if (!Array.isArray(targetIds) || targetIds.length === 0 || !nominalNum || nominalNum <= 0) {
         return res.status(400).json({ error: 'Parameter koreksi saldo tidak lengkap atau nominal tidak valid' });
@@ -1913,11 +2370,11 @@ async function startServer() {
       currentState.auditLogs.unshift({
         id: `log-adj-${Date.now()}`,
         timestamp: now.toISOString(),
-        adminId: 'super_admin',
-        adminNama: adminName || 'Super Admin',
-        adminRole: 'super_admin',
-        action: 'Koreksi Saldo Anggota',
-        detail: `Koreksi saldo ${tipe} (${jenisTabungan}) senilai Rp ${nominalNum.toLocaleString('id-ID')} ke ${targetIds.length} anggota. Ket: "${keterangan}"`,
+        adminId: isDirectApproval ? 'super_admin' : 'admin_write',
+        adminNama: adminName || (isDirectApproval ? 'Super Admin' : 'Admin Write'),
+        adminRole: (isDirectApproval ? 'super_admin' : 'admin_write') as any,
+        action: isDirectApproval ? 'Koreksi Saldo Anggota' : 'Pengajuan Koreksi Saldo (Admin Write)',
+        detail: `${isDirectApproval ? 'Koreksi' : 'Pengajuan koreksi'} saldo ${tipe} (${jenisTabungan}) senilai Rp ${nominalNum.toLocaleString('id-ID')} ke ${targetIds.length} anggota. Ket: "${keterangan}"`,
         targetId: kasId,
       });
 

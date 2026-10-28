@@ -3,6 +3,7 @@ import {
   AppState,
   AdminUser,
   KasEntry,
+  MemberTransaction,
 } from '../types';
 import { formatRupiah, createAuditLog } from '../lib/storage';
 import {
@@ -438,42 +439,8 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
   // Handle Delete Kas Entry (Req: Super Admin dapat menghapus buku kas anggota & kas koperasi)
   const handleDeleteKas = async (entry: KasEntry) => {
-    if (entry.bukuKas === 'anggota') {
-      if (!isSuperAdmin) {
-        alert('Buku Kas Anggota bersifat otomatis dan dilindungi. Hanya Super Admin yang berhak menghapus catatan Buku Kas Anggota.');
-        return;
-      }
-
-      const confirmDelAnggota = confirm(
-        `PERINGATAN SUPER ADMIN:\nApakah Anda yakin ingin menghapus catatan Buku Kas Anggota ini?\n\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nPenghapusan akan langsung disinkronkan ke server dan database secara permanen. Lanjutkan?`
-      );
-      if (!confirmDelAnggota) return;
-
-      try {
-        await fetch('/api/kas/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: true }),
-        });
-      } catch {}
-
-      await updateState((prev) => {
-        const filteredKas = prev.kasList.filter((k) => k.id !== entry.id);
-        const audit = createAuditLog(
-          currentAdmin,
-          'Hapus Buku Kas Anggota (Super Admin)',
-          `Super Admin ${currentAdmin.nama} menghapus catatan Buku Kas Anggota [${entry.kategori}] "${entry.keterangan}" senilai ${formatRupiah(entry.nominal)}`,
-          entry.id
-        );
-        return {
-          ...prev,
-          kasList: filteredKas,
-          deletedKasIds: [...(prev.deletedKasIds || []), entry.id],
-          auditLogs: [audit, ...prev.auditLogs],
-        };
-      });
-
-      alert(`✓ Catatan transaksi "${entry.keterangan}" berhasil dihapus dari Buku Kas Anggota oleh Super Admin.`);
+    if (entry.bukuKas === 'anggota' && !isSuperAdmin) {
+      alert('Buku Kas Anggota bersifat otomatis dan dilindungi. Hanya Super Admin yang berhak menghapus catatan Buku Kas Anggota.');
       return;
     }
 

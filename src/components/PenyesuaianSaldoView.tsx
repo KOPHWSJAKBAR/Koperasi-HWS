@@ -60,31 +60,9 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const [koreksiTipe, setKoreksiTipe] = useState<'masuk' | 'keluar'>('masuk');
   const [koreksiJenisTabungan, setKoreksiJenisTabungan] = useState<'pokok' | 'umum'>('umum');
   const [koreksiJumlahHari, setKoreksiJumlahHari] = useState<string>('');
-  const [koreksiPeriodeMulai, setKoreksiPeriodeMulai] = useState<string>(() => getWibDateStr());
-  const [koreksiPeriodeAkhir, setKoreksiPeriodeAkhir] = useState<string>(() => getWibDateStr());
   const [koreksiNominal, setKoreksiNominal] = useState<string>('');
   const [koreksiKeterangan, setKoreksiKeterangan] = useState<string>('');
   const [isSubmittingKoreksi, setIsSubmittingKoreksi] = useState(false);
-
-  // Helper hitung tanggal akhir otomatis dari tanggal mulai + jumlah hari
-  const calcEndDateFromDays = (startStr: string, days: number): string => {
-    try {
-      const base = new Date(`${startStr}T00:00:00+07:00`);
-      if (isNaN(base.getTime())) return startStr;
-      base.setDate(base.getDate() + Math.max(0, days - 1));
-      return getWibDateStr(base);
-    } catch {
-      return startStr;
-    }
-  };
-
-  const hariNumPreview = parseInt(koreksiJumlahHari.replace(/\D/g, ''), 10) || 0;
-  const periodeLabelPreview =
-    koreksiJenisTabungan === 'pokok'
-      ? koreksiPeriodeMulai === koreksiPeriodeAkhir
-        ? `${formatWibDateShort(koreksiPeriodeMulai)}${hariNumPreview > 0 ? ` (${hariNumPreview} Hari)` : ''}`
-        : `${formatWibDateShort(koreksiPeriodeMulai)} s/d ${formatWibDateShort(koreksiPeriodeAkhir)}${hariNumPreview > 0 ? ` (${hariNumPreview} Hari)` : ''}`
-      : '';
 
   // Security password state for Super Admin (Req User)
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
@@ -128,10 +106,14 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const totalPokokTarget = targetMembersBagiHasil.reduce((sum, m) => sum + (m.saldoPokok || 0), 0);
   const totalBagiHasilEstimasi = Math.round(totalPokokTarget * (persenNum / 100));
 
-  // Role check: Hanya Super Admin yang berwenang masuk transaksi anggota (Req User)
+  // Role check: Admin Write dapat menginput, Admin Approval / Super Admin menyetujui (Req User)
   const isSuperAdmin = currentAdmin.role === 'super_admin';
+  const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola';
+  const isWriter = currentAdmin.role === 'admin_write';
+  const isPembukuan = currentAdmin.role === 'admin_pembukuan';
   const isLaporan = currentAdmin.role === 'admin_laporan';
-  const canPerformAdjustment = isSuperAdmin;
+  const canPerformAdjustment = isSuperAdmin || isApproval || isWriter || isPembukuan;
+  const isDirectApproval = isSuperAdmin || isApproval;
 
   // ================= SUBMIT KOREKSI SALDO =================
   const handleKirimKoreksi = async (e: React.FormEvent) => {
@@ -139,27 +121,29 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     setPasswordError('');
 
     if (!canPerformAdjustment) {
-      alert('Akses Ditolak: Hanya Super Admin atau Admin yang berwenang melakukan koreksi saldo anggota.');
+      alert('Akses Ditolak: Anda tidak memiliki wewenang untuk mengajukan atau melakukan koreksi saldo anggota.');
       return;
     }
 
-    // Validasi Password Super Admin / Admin
-    const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
-    const validPasswords = new Set([
-      currentAdmin.password,
-      ...superAdmins.map((a) => a.password),
-      ...(state.admins || []).map((a) => a.password),
-      'Abieza88',
-      'ciganea',
-      'admin123',
-      'superadmin',
-      'admin',
-    ].filter(Boolean).map((p) => String(p).trim()));
+    // Validasi Password Super Admin / Admin Approval jika direct
+    if (isDirectApproval) {
+      const superAdmins = (state.admins || []).filter((a) => a.role === 'super_admin');
+      const validPasswords = new Set([
+        currentAdmin.password,
+        ...superAdmins.map((a) => a.password),
+        ...(state.admins || []).map((a) => a.password),
+        'Abieza88',
+        'ciganea',
+        'admin123',
+        'superadmin',
+        'admin',
+      ].filter(Boolean).map((p) => String(p).trim()));
 
-    if (adminPasswordInput.trim() && !validPasswords.has(adminPasswordInput.trim())) {
-      setPasswordError('Password konfirmasi salah!');
-      alert('Verifikasi Gagal: Password yang Anda masukkan tidak sesuai.');
-      return;
+      if (adminPasswordInput.trim() && !validPasswords.has(adminPasswordInput.trim())) {
+        setPasswordError('Password konfirmasi salah!');
+        alert('Verifikasi Gagal: Password yang Anda masukkan tidak sesuai.');
+        return;
+      }
     }
 
     const nominalNum = parseInt(koreksiNominal.replace(/\D/g, ''), 10);
@@ -181,19 +165,20 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     const hariNum = koreksiJenisTabungan === 'pokok'
       ? (parseInt(koreksiJumlahHari.replace(/\D/g, ''), 10) || Math.max(1, Math.round(nominalNum / (state.profile?.biayaWajibHarian || 2000))))
       : undefined;
-    const periodeFinal = koreksiJenisTabungan === 'pokok' ? periodeLabelPreview : undefined;
 
     const totalDana = nominalNum * targetMembersKoreksi.length;
     const confirmMsg =
-      `Konfirmasi Koreksi Saldo:\n` +
+      `Konfirmasi ${isDirectApproval ? 'Koreksi Saldo' : 'Pengajuan Koreksi Saldo (Admin Write)'}:\n` +
       `- Tipe: ${koreksiTipe === 'masuk' ? 'Penambahan / Pemasukan (+)' : 'Pengurangan / Pengeluaran (-)'}\n` +
       `- Tabungan: ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (50% Pokok, 25% Qurban, 25% Zakat)` : 'Tabungan Umum'}\n` +
-      (koreksiJenisTabungan === 'pokok' ? `- Jumlah Hari: ${hariNum} Hari\n- Periode: ${periodeFinal}\n` : '') +
+      (koreksiJenisTabungan === 'pokok' ? `- Jumlah Hari: ${hariNum} Hari\n` : '') +
       `- Nominal per Anggota: ${formatRupiah(nominalNum)}\n` +
       `- Target: ${targetMembersKoreksi.length} Anggota\n` +
       `- Total Dana: ${formatRupiah(totalDana)}\n` +
       `- Keterangan: ${koreksiKeterangan}\n\n` +
-      `Apakah Anda yakin ingin memproses koreksi saldo ini?`;
+      (isDirectApproval
+        ? 'Apakah Anda yakin ingin memproses transaksi ini dan langsung mengkoreksi saldo anggota?'
+        : 'Apakah Anda yakin ingin mengirim pengajuan koreksi saldo ini ke Admin Approval / Super Admin?');
 
     if (!confirm(confirmMsg)) return;
 
@@ -218,11 +203,9 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             tipe: koreksiTipe,
             jenisTabungan: koreksiJenisTabungan,
             jumlahHari: hariNum,
-            periode: periodeFinal,
-            periodeMulai: koreksiJenisTabungan === 'pokok' ? koreksiPeriodeMulai : undefined,
-            periodeAkhir: koreksiJenisTabungan === 'pokok' ? koreksiPeriodeAkhir : undefined,
             keterangan: koreksiKeterangan.trim(),
             adminName: currentAdmin.nama,
+            isDirectApproval,
             password: adminPasswordInput.trim() || undefined,
           }),
         });
@@ -274,13 +257,15 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             const totalSimpanan = updatedPokok + updatedUmum + updatedZakat + updatedQurban;
             const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
             const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
+            const statusTransaksi = isDirectApproval ? 'approved' : 'pending_approval';
+
             newTransactions.push({
               id: txId,
               memberId: m.id,
               tanggal: tgl,
               jam,
               keterangan: koreksiJenisTabungan === 'pokok'
-                ? `KOREKSI TABUNGAN POKOK (${hariNum} Hari • Periode: ${periodeFinal} • 50% Pokok, 25% Qurban, 25% Zakat): ${koreksiKeterangan}`
+                ? `KOREKSI TABUNGAN POKOK (${hariNum} Hari • 50% Pokok, 25% Qurban, 25% Zakat): ${koreksiKeterangan}`
                 : `KOREKSI SALDO UMUM: ${koreksiKeterangan}`,
               cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
               tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
@@ -288,7 +273,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               saldoSetelah: updatedPokok + updatedUmum,
               kategori: koreksiJenisTabungan === 'pokok' ? 'pokok' : 'umum',
               referensiId: refId,
-              periode: periodeFinal,
               jumlahHari: hariNum,
             });
 
@@ -301,17 +285,17 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   tanggal: tgl,
                   jam,
                   kategori: 'Tabungan Pokok',
-                  keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hariNum} Hari • Periode: ${periodeFinal}): ${koreksiKeterangan}`,
+                  keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hariNum} Hari): ${koreksiKeterangan}`,
                   namaPenerima: m.nama,
                   memberId: m.id,
                   referensiId: refId,
-                  periode: periodeFinal,
                   jumlahHari: hariNum,
                   tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
                   nominal: pokokPortion,
                   saldoKasSetelah: 0,
                   inputBy: currentAdmin.nama,
-                  status: 'approved',
+                  status: statusTransaksi,
+                  pendingAction: isDirectApproval ? undefined : 'create',
                   createdAt: now.toISOString(),
                 },
                 {
@@ -320,17 +304,17 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   tanggal: tgl,
                   jam,
                   kategori: 'Tabungan Qurban',
-                  keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hariNum} Hari • Periode: ${periodeFinal}): ${koreksiKeterangan}`,
+                  keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hariNum} Hari): ${koreksiKeterangan}`,
                   namaPenerima: m.nama,
                   memberId: m.id,
                   referensiId: refId,
-                  periode: periodeFinal,
                   jumlahHari: hariNum,
                   tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
                   nominal: qurbanPortion,
                   saldoKasSetelah: 0,
                   inputBy: currentAdmin.nama,
-                  status: 'approved',
+                  status: statusTransaksi,
+                  pendingAction: isDirectApproval ? undefined : 'create',
                   createdAt: now.toISOString(),
                 },
                 {
@@ -339,17 +323,17 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   tanggal: tgl,
                   jam,
                   kategori: 'Tabungan Zakat',
-                  keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hariNum} Hari • Periode: ${periodeFinal}): ${koreksiKeterangan}`,
+                  keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hariNum} Hari): ${koreksiKeterangan}`,
                   namaPenerima: m.nama,
                   memberId: m.id,
                   referensiId: refId,
-                  periode: periodeFinal,
                   jumlahHari: hariNum,
                   tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
                   nominal: zakatPortion,
                   saldoKasSetelah: 0,
                   inputBy: currentAdmin.nama,
-                  status: 'approved',
+                  status: statusTransaksi,
+                  pendingAction: isDirectApproval ? undefined : 'create',
                   createdAt: now.toISOString(),
                 }
               );
@@ -368,23 +352,21 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 nominal: nominalNum,
                 saldoKasSetelah: 0,
                 inputBy: currentAdmin.nama,
-                status: 'approved',
+                status: statusTransaksi,
+                pendingAction: isDirectApproval ? undefined : 'create',
                 createdAt: now.toISOString(),
               });
             }
 
             return {
               ...m,
-              saldoPokok: updatedPokok,
-              saldoUmum: updatedUmum,
-              saldoZakatFitrah: updatedZakat,
-              saldoQurban: updatedQurban,
-              totalSimpanan,
-              ...(koreksiJenisTabungan === 'pokok'
+              saldoPokok: isDirectApproval ? updatedPokok : m.saldoPokok,
+              saldoUmum: isDirectApproval ? updatedUmum : m.saldoUmum,
+              saldoZakatFitrah: isDirectApproval ? updatedZakat : m.saldoZakatFitrah,
+              saldoQurban: isDirectApproval ? updatedQurban : m.saldoQurban,
+              totalSimpanan: isDirectApproval ? totalSimpanan : m.totalSimpanan,
+              ...(koreksiJenisTabungan === 'pokok' && isDirectApproval
                 ? {
-                    periodeTabunganPokok: periodeFinal,
-                    periodeMulaiPokok: koreksiPeriodeMulai,
-                    periodeAkhirPokok: koreksiPeriodeAkhir,
                     jumlahHariPokok: Math.floor(updatedPokok / (prev.profile?.pembagianPokokHarian || 1000)),
                   }
                 : {}),
@@ -393,37 +375,42 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
 
           const audit = createAuditLog(
             currentAdmin,
-            'Koreksi Saldo Anggota',
-            `Super Admin ${currentAdmin.nama} menyetujui koreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]${periodeFinal ? ` Periode: ${periodeFinal}` : ''}) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Ket: ${koreksiKeterangan}`,
+            isDirectApproval ? 'Koreksi Saldo Anggota' : 'Pengajuan Koreksi Saldo',
+            `${currentAdmin.nama} (${isDirectApproval ? 'Super Admin/Approval' : 'Admin Write'}) ${isDirectApproval ? 'mengkoreksi' : 'mengajukan koreksi'} saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Ket: ${koreksiKeterangan}`,
             newKasEntries[0]?.id
           );
 
           return {
             ...prev,
-            profile: koreksiJenisTabungan === 'pokok' && periodeFinal
-              ? { ...prev.profile, periodeAktifPokok: periodeFinal }
-              : prev.profile,
             members: updatedMembers,
-            memberTransactions: [...newTransactions, ...(prev.memberTransactions || [])],
+            memberTransactions: isDirectApproval
+              ? [...newTransactions, ...(prev.memberTransactions || [])]
+              : prev.memberTransactions,
             kasList: [...newKasEntries, ...(prev.kasList || [])],
             auditLogs: [audit, ...(prev.auditLogs || [])],
           };
         });
       }
 
-      // Kirim Real-time FCM Notification ke masing-masing anggota target
-      targetMembersKoreksi.forEach((m) => {
-        sendRealtimeNotification({
-          recipientId: m.id,
-          recipientNama: m.nama,
-          title: `💳 Penyesuaian Saldo: ${koreksiTipe === 'masuk' ? 'Penambahan (+)' : 'Pengurangan (-)'}`,
-          body: `Transaksi ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (${hariNum} Hari • Periode: ${periodeFinal})` : 'Tabungan Umum'} sebesar ${formatRupiah(nominalNum)} telah diproses. Ket: ${koreksiKeterangan}.`,
-          type: 'mutasi_baru',
-          data: { nominal: nominalNum, tipe: koreksiTipe },
-        }).catch(() => {});
-      });
+      // Kirim Real-time FCM Notification ke masing-masing anggota target jika approved
+      if (isDirectApproval) {
+        targetMembersKoreksi.forEach((m) => {
+          sendRealtimeNotification({
+            recipientId: m.id,
+            recipientNama: m.nama,
+            title: `💳 Penyesuaian Saldo: ${koreksiTipe === 'masuk' ? 'Penambahan (+)' : 'Pengurangan (-)'}`,
+            body: `Transaksi ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (${hariNum} Hari)` : 'Tabungan Umum'} sebesar ${formatRupiah(nominalNum)} telah diproses. Ket: ${koreksiKeterangan}.`,
+            type: 'mutasi_baru',
+            data: { nominal: nominalNum, tipe: koreksiTipe },
+          }).catch(() => {});
+        });
+      }
 
-      alert(`✓ Koreksi Saldo Berhasil! Transaksi ${koreksiTipe === 'masuk' ? 'penambahan' : 'pengurangan'} sebesar ${formatRupiah(nominalNum)} untuk ${targetMembersKoreksi.length} anggota berhasil diproses${periodeFinal ? ` (Periode: ${periodeFinal})` : ''}.`);
+      alert(
+        isDirectApproval
+          ? `✓ Koreksi Saldo Berhasil! Transaksi ${koreksiTipe === 'masuk' ? 'penambahan (+)' : 'pengurangan (-)'} sebesar ${formatRupiah(nominalNum)} untuk ${targetMembersKoreksi.length} anggota berhasil diproses.`
+          : `✓ Pengajuan Penyesuaian Saldo Berhasil Dikirim oleh Admin Write! Dokumen telah masuk ke antrean verifikasi dan menunggu persetujuan (approval) oleh Admin Approval atau Super Admin.`
+      );
       setKoreksiNominal('');
       setKoreksiJumlahHari('');
       setKoreksiKeterangan('');
@@ -898,7 +885,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                         if (hNum > 0) {
                           const total = hNum * (state.profile?.biayaWajibHarian || 2000);
                           setKoreksiNominal(total.toLocaleString('id-ID'));
-                          setKoreksiPeriodeAkhir(calcEndDateFromDays(koreksiPeriodeMulai, hNum));
                         }
                       }}
                       className="w-36 px-3 py-2 bg-slate-800 border border-amber-500/40 rounded-xl font-mono text-sm font-bold text-amber-300 focus:outline-none focus:ring-1 focus:ring-amber-500"
@@ -914,7 +900,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                             setKoreksiJumlahHari(String(presetHari));
                             const total = presetHari * (state.profile?.biayaWajibHarian || 2000);
                             setKoreksiNominal(total.toLocaleString('id-ID'));
-                            setKoreksiPeriodeAkhir(calcEndDateFromDays(koreksiPeriodeMulai, presetHari));
                           }}
                           className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-amber-300 border border-amber-500/30 text-[11px] font-bold transition-all"
                         >
@@ -924,44 +909,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Pilih Periode Tabungan Pokok (Tampil di Dashboard) */}
-                  <div className="pt-2 border-t border-amber-500/20 space-y-2">
-                    <label className="block font-bold text-amber-300 text-xs">
-                      Pilih Periode Tabungan Pokok (Ditampilkan pada Halaman Dashboard) *
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div>
-                        <span className="text-[10px] text-slate-300 block mb-1">Dari Tanggal (Mulai Periode):</span>
-                        <input
-                          type="date"
-                          value={koreksiPeriodeMulai}
-                          onChange={(e) => {
-                            const newStart = e.target.value;
-                            setKoreksiPeriodeMulai(newStart);
-                            const hNum = parseInt(koreksiJumlahHari.replace(/\D/g, ''), 10) || 1;
-                            setKoreksiPeriodeAkhir(calcEndDateFromDays(newStart, hNum));
-                          }}
-                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-mono"
-                        />
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-300 block mb-1">Sampai Tanggal (Akhir Periode):</span>
-                        <input
-                          type="date"
-                          value={koreksiPeriodeAkhir}
-                          onChange={(e) => setKoreksiPeriodeAkhir(e.target.value)}
-                          className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-mono"
-                        />
-                      </div>
-                    </div>
-                    {periodeLabelPreview && (
-                      <div className="p-2 bg-slate-900/80 border border-amber-500/30 rounded-xl flex items-center justify-between text-[11px]">
-                        <span className="text-slate-400">Tampilan Periode di Dashboard:</span>
-                        <span className="font-bold text-amber-300 font-mono">
-                          {periodeLabelPreview} {koreksiJumlahHari ? `(${koreksiJumlahHari} Hari)` : ''}
-                        </span>
-                      </div>
-                    )}
+                  {/* Info Otomatis Hari & Nominal */}
+                  <div className="p-2.5 bg-slate-900/60 border border-amber-500/20 rounded-xl flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400">Aturan Tabungan Pokok:</span>
+                    <span className="font-bold text-amber-300">
+                      {koreksiJumlahHari ? `${koreksiJumlahHari} Hari (${koreksiNominal ? `Rp ${koreksiNominal}` : 'Rp 0'})` : 'Input hari atau nominal'}
+                    </span>
                   </div>
 
                   {/* Pembagian Sesuai Aturan Koperasi: 50% Pokok, 25% Qurban, 25% Zakat */}
@@ -1018,9 +971,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                         const n = parseInt(val, 10) || 0;
                         const hCalc = n > 0 ? Math.max(1, Math.round(n / (state.profile?.biayaWajibHarian || 2000))) : 0;
                         setKoreksiJumlahHari(hCalc > 0 ? String(hCalc) : '');
-                        if (hCalc > 0) {
-                          setKoreksiPeriodeAkhir(calcEndDateFromDays(koreksiPeriodeMulai, hCalc));
-                        }
                       }
                     }}
                     className="w-full pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl font-mono text-sm font-bold text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
@@ -1101,11 +1051,11 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                     {koreksiNominal ? `Rp ${koreksiNominal}` : 'Rp 0'}
                   </span>
                 </div>
-                {koreksiJenisTabungan === 'pokok' && periodeLabelPreview && (
+                {koreksiJenisTabungan === 'pokok' && koreksiJumlahHari && (
                   <div className="flex justify-between items-center text-slate-300">
-                    <span>Periode Dashboard:</span>
+                    <span>Ekuivalen Hari:</span>
                     <span className="font-mono font-bold text-emerald-400 text-[11px]">
-                      {periodeLabelPreview}
+                      {koreksiJumlahHari} Hari Tabungan Pokok
                     </span>
                   </div>
                 )}

@@ -319,17 +319,63 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           };
         });
 
+        // Sinkronkan juga penghapusan catatan terkait pada Buku Kas Anggota
+        const deletedTxs = prev.memberTransactions.filter((tx) => targetIdsSet.has(tx.id));
+        const deletedRefIds = new Set(deletedTxs.map((t) => t.referensiId || t.id));
+        const nextDeletedKasIds: string[] = [];
+
+        let remainingKas = (prev.kasList || []).filter((k) => {
+          if (k.bukuKas !== 'anggota') return true;
+          if (k.referensiId && deletedRefIds.has(k.referensiId)) {
+            nextDeletedKasIds.push(k.id);
+            return false;
+          }
+          if (targetIdsSet.has(k.id)) {
+            nextDeletedKasIds.push(k.id);
+            return false;
+          }
+          return true;
+        });
+
+        // Recompute running saldoKasSetelah pada buku kas
+        const recomputeKas = (type: 'anggota' | 'koperasi') => {
+          const items = remainingKas
+            .filter((k) => k.bukuKas === type)
+            .slice()
+            .sort((a, b) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+          let run = 0;
+          const map = new Map<string, number>();
+          items.forEach((it) => {
+            if (it.status === 'approved') {
+              run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+            }
+            map.set(it.id, run);
+          });
+          return map;
+        };
+        const mapAnggota = recomputeKas('anggota');
+        const mapKoperasi = recomputeKas('koperasi');
+        remainingKas = remainingKas.map((k) => ({
+          ...k,
+          saldoKasSetelah:
+            k.bukuKas === 'anggota'
+              ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+              : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+        }));
+
         const audit = createAuditLog(
           currentAdmin,
           'Hapus Transaksi Anggota',
-          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan & histori rekening berhasil disinkronkan.`
+          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan, mutasi & Buku Kas Anggota berhasil disinkronkan.`
         );
 
         return {
           ...prev,
           members: updatedMembers,
           memberTransactions: remainingTx,
+          kasList: remainingKas,
           deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...activeSelectedIds])),
+          deletedKasIds: Array.from(new Set([...(prev.deletedKasIds || []), ...nextDeletedKasIds])),
           auditLogs: [audit, ...prev.auditLogs],
         };
       });

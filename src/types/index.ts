@@ -119,6 +119,7 @@ export interface AdminUser {
   };
   status?: 'aktif' | 'nonaktif' | 'dibekukan' | 'pending_freeze';
   freezeRequest?: FreezeRequest;
+  biometricActive?: boolean;
 }
 
 export interface MemberUser {
@@ -169,6 +170,7 @@ export interface MemberUser {
   freezeRequest?: FreezeRequest;
   lockPokokRequest?: LockPokokRequest;
   terdaftarSejak: string;
+  biometricActive?: boolean;
 }
 
 export type JenisSetoran = 'kewajiban' | 'umum' | 'sedekah' | 'zakat' | 'qurban';

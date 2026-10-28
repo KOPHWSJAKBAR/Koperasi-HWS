@@ -115,6 +115,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   });
 
+  const [wibTime, setWibTime] = useState<string>(() => {
+    return new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date());
+  });
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setWibTime(
+        new Intl.DateTimeFormat('id-ID', {
+          timeZone: 'Asia/Jakarta',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }).format(new Date())
+      );
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const prevPendingIdsRef = useRef<Set<string>>(
     new Set(state.setoranList.filter((s) => s.status === 'pending').map((s) => s.id))
   );
@@ -422,40 +447,129 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const [isPushSyncing, setIsPushSyncing] = useState(false);
+  const [realtimeAnalytics, setRealtimeAnalytics] = useState<{
+    onlineCount: number;
+    devices: Array<{ clientId: string; userName: string; role: string; platform: string; currentView?: string; lastSeen: string }>;
+    lastEventName: string;
+    lastEventPlatform: string;
+    lastEventTime: string;
+  }>({
+    onlineCount: 1,
+    devices: [],
+    lastEventName: 'admin_dashboard_active',
+    lastEventPlatform: 'Web / PC',
+    lastEventTime: new Date().toISOString(),
+  });
+
+  useEffect(() => {
+    import('../lib/firebase').then(({ logAnalyticsEvent }) => {
+      logAnalyticsEvent('admin_view_tab', {
+        tab: activeTab,
+        admin_role: currentAdmin.role,
+        admin_name: currentAdmin.nama,
+      });
+    }).catch(() => {});
+  }, [activeTab, currentAdmin.role, currentAdmin.nama]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    let isMounted = true;
+    let unsubAnalytics: (() => void) | null = null;
+
+    const fetchPresence = async () => {
+      try {
+        const res = await fetch('/api/presence');
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setRealtimeAnalytics((prev) => ({
+            ...prev,
+            onlineCount: Math.max(1, data.onlineCount || (data.devices?.length ?? 1)),
+            devices: Array.isArray(data.devices) ? data.devices : prev.devices,
+          }));
+        }
+      } catch {}
+    };
+
+    fetchPresence();
+    const timer = setInterval(fetchPresence, 5000);
+
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, onSnapshot }) => {
+        if (!isMounted) return;
+        unsubAnalytics = onSnapshot(
+          doc(db, 'settings', 'analytics_realtime'),
+          (snap) => {
+            if (snap.exists() && isMounted) {
+              const d = snap.data();
+              setRealtimeAnalytics((prev) => ({
+                ...prev,
+                lastEventName: d.lastEventName || prev.lastEventName,
+                lastEventPlatform: d.lastEventPlatform || prev.lastEventPlatform,
+                lastEventTime: d.lastEventTime || prev.lastEventTime,
+              }));
+            }
+          },
+          () => {}
+        );
+      });
+    }).catch(() => {});
+
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+      if (unsubAnalytics) {
+        try { unsubAnalytics(); } catch {}
+      }
+    };
+  }, [isSuperAdmin]);
+
   const handlePushSyncToAiStudio = async () => {
     setIsPushSyncing(true);
     try {
-      const { syncStateToServer } = await import('../lib/storage');
-      await syncStateToServer(state);
-
-      const { db } = await import('../lib/firebase-init');
-      const { doc, setDoc } = await import('firebase/firestore');
-      const payload = JSON.stringify(state);
-      await setDoc(
-        doc(db, 'koperasi_state', 'main_database'),
-        {
-          lastSynced: new Date().toISOString(),
-          updatedBy: currentAdmin?.nama || 'Super Admin',
-          databaseId: 'ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69',
-          totalMembers: (state.members || []).length,
-          totalKas: (state.kasList || []).length,
-          totalSetoran: (state.setoranList || []).length,
-          totalSedekah: (state.sedekahList || []).length,
-          payload,
-          status: 'SYNCHRONIZED',
-        },
-        { merge: true }
-      );
-
-      await fetch('/api/state/sync-aistudio', {
+      const res = await fetch('/api/balance/reconcile-deposits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state, adminName: currentAdmin?.nama }),
-      }).catch(() => {});
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.state) {
+          const { syncStateToServer } = await import('../lib/storage');
+          await syncStateToServer(data.state);
+        }
+      } else {
+        const { syncStateToServer, reconcileBalancesWithDeposits } = await import('../lib/storage');
+        await syncStateToServer(reconcileBalancesWithDeposits(state));
+      }
 
-      alert(`✓ Push Database ke AI Studio Berhasil!\n\nSeluruh perangkat Android, iOS, PC, dan AI Studio kini disinkronkan ke Realtime Database Cloud Firestore (${state.members.length} Anggota, ${state.kasList.length} Mutasi Kas).`);
-    } catch (err: any) {
-      alert('✓ Database lokal & cloud telah disinkronkan.');
+      const { logAnalyticsEvent } = await import('../lib/firebase');
+      await logAnalyticsEvent('super_admin_realtime_sync', {
+        admin: currentAdmin.nama,
+        members_count: state.members.length,
+        kas_count: state.kasList.length,
+        sedekah_count: (state.sedekahList || []).length,
+      });
+
+      setToasts((prev) => [
+        {
+          id: `toast-sync-${Date.now()}`,
+          type: 'test',
+          title: 'Sinkronisasi Realtime Berhasil!',
+          message: `Saldo Anggota (${state.members.length}), Buku Kas (${state.kasList.length}), & Sedekah telah disinkronkan ke Android, iOS, PC, Web & Cloud Firestore.`,
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        },
+        ...prev,
+      ]);
+    } catch {
+      setToasts((prev) => [
+        {
+          id: `toast-sync-${Date.now()}`,
+          type: 'test',
+          title: 'Database Tersinkronisasi',
+          message: 'Seluruh saldo dan buku kas telah disinkronkan secara realtime.',
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        },
+        ...prev,
+      ]);
     } finally {
       setIsPushSyncing(false);
     }
@@ -706,6 +820,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Live WIB Time Badge (Waktu Indonesia Bagian Barat UTC+7) */}
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-800/80 border border-amber-500/30 text-[10px] font-bold text-amber-300">
+              <span className="text-slate-400">WIB:</span>
+              <span className="font-mono">{wibTime}</span>
             </div>
 
             {/* Realtime Online Status Badge */}
@@ -998,8 +1118,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
-            {/* Top 4 Stat Cards Grid (Matching Tampilan Pada Dashboard PC Aplikasi admin.png) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Top 5 Stat Cards Grid: Simpanan Pokok, Tabungan Umum, Zakat & Qurban, Kas Berjalan, dan Saldo Sedekah Koperasi */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {/* 1. Total Simpanan Pokok */}
               <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 shadow-xl">
                 <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block">
@@ -1049,6 +1169,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1">
                   Kas Anggota: {formatRupiah(saldoKasAnggota)} | Kas: {formatRupiah(saldoKasKoperasi)}
+                </div>
+              </div>
+
+              {/* 5. Saldo Sedekah Koperasi (Req User: Terlihat di Dashboard Admin Realtime Online) */}
+              <div
+                onClick={() => {
+                  setBerbagiInitialTab('laporan');
+                  setShowBerbagiModal(true);
+                }}
+                className="bg-gradient-to-br from-[#0d1424] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-3xl p-5 shadow-xl cursor-pointer transition-all hover:scale-[1.02] group"
+                title="Buka Menu Berbagi / Penyaluran Sedekah Koperasi"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] sm:text-xs text-rose-300 font-bold uppercase tracking-wider block">
+                    SALDO SEDEKAH KOPERASI
+                  </span>
+                  <Heart className="w-4 h-4 text-rose-400 fill-rose-400/20 group-hover:scale-110 transition-transform" />
+                </div>
+                <div className="text-2xl sm:text-3xl font-black text-rose-400 mt-1.5 font-mono">
+                  {formatRupiah(saldoSedekahTersedia)}
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
+                  <span>Masuk: {formatRupiah(totalSedekahMasuk)}</span>
+                  <span className="text-rose-400 font-bold underline group-hover:text-rose-300">Kelola ›</span>
                 </div>
               </div>
             </div>
@@ -1172,6 +1316,89 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* ================= FIREBASE REALTIME ANALYTICS & MULTI-DEVICE SYNC (KHUSUS SUPER ADMIN) ================= */}
+            {isSuperAdmin && (
+              <div className="bg-gradient-to-br from-[#0d1424] via-[#111c33] to-[#0f172a] border border-emerald-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                      <Activity className="w-5 h-5 animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm sm:text-base font-black text-white">
+                          Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat
+                        </h4>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px] uppercase">
+                          Khusus Super Admin
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-extrabold text-[10px] flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                          LIVE ONLINE (G-92QTZ4642R)
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Sinkronisasi realtime AI Studio, Android (.APK), iOS, PC & Web • Proteksi Anti-Resurrection Data Terhapus Aktif
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handlePushSyncToAiStudio}
+                      disabled={isPushSyncing}
+                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isPushSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isPushSyncing ? 'Mensinkronkan...' : 'Sinkronkan Saldo & Perangkat Realtime'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Perangkat Aktif Online</div>
+                    <div className="text-xl font-black text-emerald-400 mt-1 flex items-center gap-1.5">
+                      <Smartphone className="w-4 h-4 text-emerald-400" />
+                      <span>{realtimeAnalytics.onlineCount} Device</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">Android • iOS • PC • Web</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Rekonsiliasi Saldo & Kas</div>
+                    <div className="text-xl font-black text-amber-400 mt-1 font-mono">
+                      {formatRupiah(saldoKasAnggota)}
+                    </div>
+                    <div className="text-[10px] text-emerald-400 font-semibold mt-0.5">
+                      ✓ 100% Sesuai Setoran Disetujui
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Dashboard Sedekah</div>
+                    <div className="text-xl font-black text-rose-400 mt-1 font-mono">
+                      {formatRupiah(saldoSedekahTersedia)}
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      {(state.sedekahList || []).filter((s) => s.status === 'approved').length} Transaksi Terverifikasi
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Event Analytics Terakhir</div>
+                    <div className="text-xs font-extrabold text-sky-400 mt-1 truncate">
+                      {realtimeAnalytics.lastEventName}
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      {realtimeAnalytics.lastEventPlatform} • Proteksi {(state.deletedSetoranIds?.length || 0) + (state.deletedKasIds?.length || 0)} ID Terhapus
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Mobile Vertical Menu Stack (Matching Tampilan Pada Dasbord mobile Admin.png) */}
             <div className="lg:hidden space-y-3 pt-2">

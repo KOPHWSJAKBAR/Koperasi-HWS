@@ -1,8 +1,63 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // 1. Sharded State & Metadata pulse
+    match /koperasi_state/{stateId} {
+      allow get, list: if true;
+      allow write: if isValidId(stateId);
+    }
+
+    // 2. Members Collection: Personal member data & savings balance
+    match /members/{memberId} {
+      allow get, list: if true;
+      allow write: if isValidId(memberId);
+    }
+
+    // 3. Transactions Collection: Member mutation records
+    match /transactions/{transactionId} {
+      allow get, list: if true;
+      allow write: if isValidId(transactionId);
+    }
+
+    // 4. Setoran Collection: Deposit verifications
+    match /setoran/{setoranId} {
+      allow get, list: if true;
+      allow write: if isValidId(setoranId);
+    }
+
+    // 5. Kas Collection: Buku Kas Anggota & Buku Kas Koperasi
+    match /kas/{kasId} {
+      allow get, list: if true;
+      allow write: if isValidId(kasId);
+    }
+
+    // 6. Chats Collection: Realtime member-admin support messages
+    match /chats/{chatId} {
+      allow get, list: if true;
+      allow write: if isValidId(chatId);
+    }
+
+    // 7. Surat Collection: Official circulars & letters
+    match /surat/{suratId} {
+      allow get, list: if true;
+      allow write: if isValidId(suratId);
+    }
+
+    // 8. Settings Collection: Profiles, admins, categories & sharing configuration
+    match /settings/{settingId} {
+      allow get, list: if true;
+      allow write: if isValidId(settingId);
+    }
+
+    // 9. Logs Collection: Admin activity and audit logs
+    match /logs/{logId} {
+      allow get, list: if true;
+      allow write: if isValidId(logId);
     }
   }
 }

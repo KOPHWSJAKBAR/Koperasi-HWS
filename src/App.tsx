@@ -64,14 +64,12 @@ export default function App() {
       auth,
       (firebaseUser) => {
         setIsFirebaseAuthReady(true);
-        if (firebaseUser) {
-          try {
-            const saved = localStorage.getItem(SESSION_KEY);
-            if (saved && !activeSession) {
-              setActiveSession(JSON.parse(saved));
-            }
-          } catch {}
-        }
+        try {
+          const saved = localStorage.getItem(SESSION_KEY);
+          if (saved && !activeSession) {
+            setActiveSession(JSON.parse(saved));
+          }
+        } catch {}
       },
       () => {
         setIsFirebaseAuthReady(true);
