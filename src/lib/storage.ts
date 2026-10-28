@@ -83,10 +83,10 @@ const defaultInitialState: AppState = {
     {
       id: 'adm-abzqar',
       username: 'Abzqar',
-      nama: 'Abzqar',
-      email: 'abzqar@hws.koperasi.id',
-      whatsapp: '08119882233',
-      nik: '3173010101700001',
+      nama: 'Tezar Basith Hidayat',
+      email: 'Tezarbasith@gmail.com',
+      whatsapp: '0816889171',
+      nik: '3173012601880003',
       wilayahKantor: 'Cengkareng',
       role: 'super_admin',
       password: 'Abieza88',
@@ -103,10 +103,10 @@ const defaultInitialState: AppState = {
       bankPribadi: {
         namaBank: 'Bank Central Asia (BCA)',
         nomorRekening: '5490706161',
-        atasNama: 'Abzqar',
+        atasNama: 'Tezar Basith Hidayat',
       },
       status: 'aktif',
-      createdAt: new Date().toISOString(),
+      createdAt: '2026-10-24T08:22:19.659Z',
     },
   ],
   members: [],
@@ -158,9 +158,9 @@ const defaultInitialState: AppState = {
   pengaturanBerbagi: {
     namaSubuh: 'Sedekah Subuh',
     namaJumat: 'Sedekah Jumat',
-    namaUmum: 'Sedekah Umum',
-    bankName: 'Bank Syariah Indonesia (BSI)',
-    noRekening: '7123-4567-8901',
+    namaUmum: 'Sedekah',
+    bankName: 'Bank Negara Indonesia (BNI)',
+    noRekening: '048-963-2761',
     namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
     qrisImageUrl: '',
   },
@@ -457,26 +457,79 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   (base.penyaluranList || []).forEach((p) => penyaluranMap.set(p.id, p));
   (incoming.penyaluranList || []).forEach((p) => penyaluranMap.set(p.id, p));
 
-  // 8. Audit Logs: if incoming.auditLogs is provided as an array, use it directly so logs can be cleared or reset (Req 3).
-  let mergedAuditLogs: AuditLog[];
-  if (Array.isArray(incoming.auditLogs)) {
-    mergedAuditLogs = incoming.auditLogs;
-  } else {
-    mergedAuditLogs = base.auditLogs || [];
-  }
+  // 8. Audit Logs: UNION of base and incoming auditLogs so every connected admin's activity is permanently preserved in Super Admin log history!
+  const logMap = new Map<string, AuditLog>();
+  (base.auditLogs || []).forEach((l) => {
+    if (l && l.id) logMap.set(l.id, { ...l });
+  });
+  (incoming.auditLogs || []).forEach((l) => {
+    if (l && l.id) {
+      const existing = logMap.get(l.id);
+      logMap.set(l.id, existing ? { ...existing, ...l } : { ...l });
+    }
+  });
+  const mergedAuditLogs = Array.from(logMap.values())
+    .sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1))
+    .slice(0, 300);
 
-  // 9. Admins: if incoming.admins is provided, use it directly so admin management works properly.
-  let mergedAdmins: AdminUser[];
-  if (Array.isArray(incoming.admins)) {
-    mergedAdmins = incoming.admins;
-  } else {
-    mergedAdmins = base.admins || [];
-  }
+  // 9. Admins: UNION of base and incoming admins by ID and username (filtering deletedAdminIds) so registered admins & admin names NEVER change or disappear on update!
+  const allDeletedAdminIds = new Set<string>([
+    ...((base as any).deletedAdminIds || []),
+    ...((incoming as any).deletedAdminIds || []),
+  ]);
+  const adminMap = new Map<string, AdminUser>();
+  const usernameToIdMap = new Map<string, string>();
+
+  const upsertAdmin = (a: AdminUser) => {
+    if (!a || (!a.id && !a.username)) return;
+    if (a.id && allDeletedAdminIds.has(a.id)) return;
+    const uKey = String(a.username || '').trim().toLowerCase();
+    const targetId = (uKey && usernameToIdMap.get(uKey)) || a.id || uKey;
+    if (allDeletedAdminIds.has(targetId)) return;
+
+    const existing = adminMap.get(targetId);
+    if (!existing) {
+      adminMap.set(targetId, { ...a, id: targetId });
+      if (uKey) usernameToIdMap.set(uKey, targetId);
+    } else {
+      // Never let a generic fallback name ('Abzqar') overwrite a personalized Super Admin name (e.g. 'Tezar Basith Hidayat')
+      const incomingIsDefaultPlaceholder =
+        targetId === 'adm-abzqar' &&
+        a.nama === 'Abzqar' &&
+        existing.nama &&
+        existing.nama !== 'Abzqar';
+      const preservedNama = incomingIsDefaultPlaceholder ? existing.nama : (a.nama || existing.nama);
+      const preservedEmail = incomingIsDefaultPlaceholder ? existing.email : (a.email || existing.email);
+      const preservedWa = incomingIsDefaultPlaceholder ? existing.whatsapp : (a.whatsapp || existing.whatsapp);
+      const preservedNik = incomingIsDefaultPlaceholder ? existing.nik : (a.nik || existing.nik);
+
+      adminMap.set(targetId, {
+        ...existing,
+        ...a,
+        id: targetId,
+        nama: preservedNama,
+        email: preservedEmail,
+        whatsapp: preservedWa,
+        nik: preservedNik,
+        bankPribadi: {
+          namaBank: a.bankPribadi?.namaBank || existing.bankPribadi?.namaBank || 'Bank Mandiri',
+          nomorRekening: a.bankPribadi?.nomorRekening || existing.bankPribadi?.nomorRekening || '',
+          atasNama: incomingIsDefaultPlaceholder
+            ? (existing.bankPribadi?.atasNama || preservedNama)
+            : (a.bankPribadi?.atasNama || existing.bankPribadi?.atasNama || preservedNama),
+        },
+      });
+    }
+  };
+
+  (base.admins || []).forEach(upsertAdmin);
+  (incoming.admins || []).forEach(upsertAdmin);
+  const mergedAdmins = Array.from(adminMap.values());
 
   // 10. Profile: preserve rekeningPenampungan, QRIS and official details
   const incomingRek = incoming.profile?.rekeningPenampungan;
   const baseRek = base.profile?.rekeningPenampungan;
-  const rekeningPenampungan = Array.isArray(incomingRek)
+  const rekeningPenampungan = Array.isArray(incomingRek) && incomingRek.length > 0
     ? incomingRek
     : (Array.isArray(baseRek) ? baseRek : []);
 
@@ -487,7 +540,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     qrisImageUrl: incoming.profile?.qrisImageUrl || base.profile?.qrisImageUrl,
   };
 
-  // 11. Sedekah List (Preserve all donations & receipts, never resurrect deleted items)
+  // 11. Sedekah List (Preserve all donations, terminal status & receipts, never resurrect deleted items)
   const sedekahMap = new Map<string, any>();
   (base.sedekahList || []).forEach((s) => {
     if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
@@ -500,9 +553,14 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     if (!existing) {
       sedekahMap.set(s.id, s);
     } else {
+      const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
+      const finalStatus = isTerminal ? existing.status : (s.status || existing.status);
       sedekahMap.set(s.id, {
         ...existing,
         ...s,
+        status: finalStatus,
+        verifiedBy: existing.verifiedBy || s.verifiedBy,
+        verifiedAt: existing.verifiedAt || s.verifiedAt,
         buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
       });
     }
@@ -512,9 +570,9 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   const defaultBerbagi = {
     namaSubuh: 'Sedekah Subuh',
     namaJumat: 'Sedekah Jumat',
-    namaUmum: 'Sedekah Umum',
-    bankName: 'Bank Syariah Indonesia (BSI)',
-    noRekening: '7123-4567-8901',
+    namaUmum: 'Sedekah',
+    bankName: 'Bank Negara Indonesia (BNI)',
+    noRekening: '048-963-2761',
     namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
   };
   const pengaturanBerbagi = {
@@ -587,6 +645,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     deletedTransactionIds: Array.from(allDeletedTxIds),
     deletedKasIds: Array.from(allDeletedKasIds),
     deletedSetoranIds: Array.from(allDeletedSetoranIds),
+    deletedAdminIds: Array.from(allDeletedAdminIds),
     serverSyncStatus: {
       online: true,
       lastSynced: new Date().toISOString(),
@@ -1175,10 +1234,11 @@ export async function syncShardedToFirestore(state: AppState) {
       lastWrittenMap.set('settings/general', generalStr);
     }
 
-    // 2. Sharded settings/admins
+    // 2. Sharded settings/admins + sharded admins collection
     const adminsData = sanitizeForFirestore({
       id: 'admins',
       admins: state.admins || [],
+      deletedAdminIds: (state as any).deletedAdminIds || [],
       updatedAt: now,
       updatedBy: CLIENT_ID,
     });
@@ -1188,6 +1248,20 @@ export async function syncShardedToFirestore(state: AppState) {
         handleFirestoreError(e, OperationType.WRITE, 'settings/admins')
       );
       lastWrittenMap.set('settings/admins', adminsStr);
+    }
+    for (const adm of state.admins || []) {
+      if (adm && adm.id) {
+        const key = `admins/${adm.id}`;
+        const cleanAdm = sanitizeForFirestore({ ...adm, updatedAt: now });
+        const aStr = JSON.stringify(cleanAdm);
+        if (lastWrittenMap.get(key) !== aStr) {
+          await setDoc(doc(db, 'admins', adm.id), cleanAdm, { merge: true }).catch(() => {});
+          lastWrittenMap.set(key, aStr);
+        }
+      }
+    }
+    for (const delAdmId of (state as any).deletedAdminIds || []) {
+      await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
     }
 
     // 3. Sharded Members collection (each member is an isolated ~1KB doc, stripped of any undefined fields)
@@ -1208,7 +1282,7 @@ export async function syncShardedToFirestore(state: AppState) {
       await deleteDoc(doc(db, 'members', delId)).catch(() => {});
     }
 
-    // 4. Sharded Setoran collection
+    // 4. Sharded Setoran & Sedekah collections
     for (const s of state.setoranList || []) {
       if (s && s.id) {
         const key = `setoran/${s.id}`;
@@ -1222,8 +1296,20 @@ export async function syncShardedToFirestore(state: AppState) {
         }
       }
     }
+    for (const sdk of state.sedekahList || []) {
+      if (sdk && sdk.id) {
+        const key = `sedekah/${sdk.id}`;
+        const cleanSdk = sanitizeForFirestore({ ...sdk, updatedAt: now });
+        const sdkStr = JSON.stringify(cleanSdk);
+        if (lastWrittenMap.get(key) !== sdkStr) {
+          await setDoc(doc(db, 'sedekah', sdk.id), cleanSdk, { merge: true }).catch(() => {});
+          lastWrittenMap.set(key, sdkStr);
+        }
+      }
+    }
     for (const delSetId of state.deletedSetoranIds || []) {
       await deleteDoc(doc(db, 'setoran', delSetId)).catch(() => {});
+      await deleteDoc(doc(db, 'sedekah', delSetId)).catch(() => {});
     }
 
     // 5. Sharded Kas collection
@@ -1293,15 +1379,17 @@ export async function syncShardedToFirestore(state: AppState) {
       }
     }
 
-    // 9. Lightweight Metadata Pulse to koperasi_state/main_database (ONLY ~200 bytes, NO oversized payload string!)
+    // 9. Lightweight Metadata Pulse to koperasi_state/main_database (ONLY ~300 bytes, replaces any legacy >1MB payload)
     const metadataDoc = sanitizeForFirestore({
       id: 'main_database',
       lastSynced: now,
       updatedBy: CLIENT_ID,
       isSharded: true,
+      totalAdmins: (state.admins || []).length,
       totalMembers: (state.members || []).length,
       totalKas: (state.kasList || []).length,
       totalSetoran: (state.setoranList || []).length,
+      totalSedekah: (state.sedekahList || []).length,
       totalTransactions: (state.memberTransactions || []).length,
       totalChats: (state.chatMessages || []).length,
       totalSurat: (state.suratList || []).length,
@@ -1309,8 +1397,7 @@ export async function syncShardedToFirestore(state: AppState) {
     });
     await setDoc(
       doc(db, 'koperasi_state', 'main_database'),
-      metadataDoc,
-      { merge: true }
+      metadataDoc
     ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'koperasi_state/main_database'));
   } catch (err) {
     console.warn('Notice syncShardedToFirestore:', err);
@@ -1606,14 +1693,20 @@ export function useKoperasiState() {
           );
           firestoreUnsubscribers.push(unsubGeneral);
 
-          // G. Settings / Admins Document
+          // G. Settings / Admins Document + Sharded Admins Collection
           const unsubAdmins = onSnapshot(
             doc(db, 'settings', 'admins'),
             (snap) => {
               if (snap.exists()) {
                 const data = snap.data();
                 if (data && data.admins && data.updatedBy !== CLIENT_ID) {
-                  globalState = { ...globalState, admins: data.admins };
+                  globalState = mergeStates(globalState, {
+                    ...globalState,
+                    admins: data.admins,
+                    deletedAdminIds: Array.from(
+                      new Set([...((globalState as any).deletedAdminIds || []), ...(data.deletedAdminIds || [])])
+                    ),
+                  });
                   scheduleDebouncedNotify();
                 }
               }
@@ -1621,6 +1714,50 @@ export function useKoperasiState() {
             (err) => handleFirestoreError(err, OperationType.GET, 'settings/admins')
           );
           firestoreUnsubscribers.push(unsubAdmins);
+
+          // H. Sharded Sedekah Collection
+          const unsubSedekah = onSnapshot(
+            collection(db, 'sedekah'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const delSet = new Set(globalState.deletedSetoranIds || []);
+              const remoteSedekah = snapshot.docs
+                .map((d) => d.data() as any)
+                .filter((s) => s && s.id && !delSet.has(s.id));
+              globalState = mergeStates(globalState, { ...globalState, sedekahList: remoteSedekah });
+              scheduleDebouncedNotify();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'sedekah')
+          );
+          firestoreUnsubscribers.push(unsubSedekah);
+
+          // I. Realtime Admin Activity Logs Collection (Setiap aktivitas admin yang terhubung langsung masuk ke Log History Super Admin)
+          import('firebase/firestore').then(({ query, orderBy, limit }) => {
+            if (!isMounted) return;
+            const unsubLogs = onSnapshot(
+              query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)),
+              (snapshot) => {
+                if (snapshot.empty) return;
+                const remoteLogs: AuditLog[] = snapshot.docs.map((d) => {
+                  const data = d.data();
+                  return {
+                    id: d.id,
+                    timestamp: data.timestamp || new Date().toISOString(),
+                    adminId: data.adminId || 'admin',
+                    adminNama: data.adminNama || 'Admin',
+                    adminRole: data.adminRole || 'admin_write',
+                    action: data.action || 'Aktivitas Admin',
+                    detail: data.detail || '',
+                    targetId: data.targetId || undefined,
+                  };
+                });
+                globalState = mergeStates(globalState, { ...globalState, auditLogs: remoteLogs });
+                scheduleDebouncedNotify();
+              },
+              (err) => handleFirestoreError(err, OperationType.LIST, 'logs')
+            );
+            firestoreUnsubscribers.push(unsubLogs);
+          }).catch(() => {});
         });
       });
     } catch {}
@@ -1800,21 +1937,35 @@ export function createAuditLog(
   detail: string,
   targetId?: string
 ): AuditLog {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  const platform = /android/i.test(ua)
+    ? 'MOBILE_ANDROID'
+    : /iphone|ipad|ipod/i.test(ua)
+    ? 'MOBILE_IOS'
+    : /windows|win32|macintosh|linux/i.test(ua) && !/mobile/i.test(ua)
+    ? 'DESKTOP_PC'
+    : 'WEB';
+  const formattedDetail = detail.includes('[Platform:')
+    ? detail
+    : `[Platform: ${platform}] ${detail}`;
+  const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const timestamp = new Date().toISOString();
+
   const log: AuditLog = {
-    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    timestamp: new Date().toISOString(),
+    id: logId,
+    timestamp,
     adminId: admin.id,
     adminNama: admin.nama,
     adminRole: admin.role,
     action,
-    detail,
+    detail: formattedDetail,
     targetId,
   };
 
-  // Asynchronously record to Firestore 'logs' collection and server API
+  // Asynchronously record to Firestore 'logs' collection and server API with the exact same logId
   import('./activityLogger')
     .then(({ recordAdminActivity }) => {
-      recordAdminActivity(admin, action, detail, targetId).catch(() => {});
+      recordAdminActivity(admin, action, formattedDetail, targetId, logId, timestamp).catch(() => {});
     })
     .catch(() => {});
 

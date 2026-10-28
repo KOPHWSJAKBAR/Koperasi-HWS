@@ -59,5 +59,17 @@ service cloud.firestore {
       allow get, list: if true;
       allow write: if isValidId(logId);
     }
+
+    // 10. Sedekah Collection: Sharded member & public sedekah transactions
+    match /sedekah/{sedekahId} {
+      allow get, list: if true;
+      allow write: if isValidId(sedekahId);
+    }
+
+    // 11. Admins Collection: Sharded registered admin accounts
+    match /admins/{adminId} {
+      allow get, list: if true;
+      allow write: if isValidId(adminId);
+    }
   }
 }

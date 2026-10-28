@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDocs, query, orderBy, limit, serverTimestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import { AdminUser, AuditLog } from '../types';
 
@@ -19,11 +19,16 @@ export async function recordAdminActivity(
   admin: AdminUser,
   action: string,
   detail: string,
-  targetId?: string
+  targetId?: string,
+  existingLogId?: string,
+  existingTimestamp?: string
 ): Promise<AuditLog> {
   const platform = detectPlatform();
-  const timestamp = new Date().toISOString();
-  const logId = `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const timestamp = existingTimestamp || new Date().toISOString();
+  const logId = existingLogId || `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const formattedDetail = detail.includes('[Platform:')
+    ? detail
+    : `[Platform: ${platform.toUpperCase()}] ${detail}`;
 
   const logEntry: AuditLog = {
     id: logId,
@@ -32,13 +37,12 @@ export async function recordAdminActivity(
     adminNama: admin.nama,
     adminRole: admin.role,
     action,
-    detail: `[Platform: ${platform.toUpperCase()}] ${detail}`,
+    detail: formattedDetail,
     targetId,
   };
 
-  // 1. Write to Firestore 'logs' collection
+  // 1. Write to Firestore 'logs' collection with deterministic logId
   try {
-    const logsCol = collection(db, 'logs');
     const { sanitizeForFirestore } = await import('./storage');
     const cleanLog = sanitizeForFirestore({
       ...logEntry,
@@ -47,7 +51,7 @@ export async function recordAdminActivity(
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
       createdAtServer: serverTimestamp(),
     });
-    await addDoc(logsCol, cleanLog);
+    await setDoc(doc(db, 'logs', logId), cleanLog, { merge: true });
   } catch {
     // Handled gracefully - log is persisted reliably via /api/logs
   }

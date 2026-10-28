@@ -11,7 +11,7 @@ export const firebaseConfig = {
   firestoreDatabaseId: "ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69",
   storageBucket: "gen-lang-client-0761736071.firebasestorage.app",
   messagingSenderId: "697954213543",
-  measurementId: "G-92QTZ4642R",
+  measurementId: "G-7PGPBDM652",
   oAuthClientId: "697954213543-3q3o605nabhq0ogqiapcjjsr9b0ckcub.apps.googleusercontent.com",
   recaptchaSiteKey: ""
 };

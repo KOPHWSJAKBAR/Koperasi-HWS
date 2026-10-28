@@ -1335,7 +1335,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                         <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-extrabold text-[10px] flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                          LIVE ONLINE (G-92QTZ4642R)
+                          LIVE ONLINE (G-7PGPBDM652)
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-400 mt-0.5">

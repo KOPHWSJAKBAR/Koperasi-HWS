@@ -87,7 +87,7 @@ const getInitialState = () => ({
     {
       id: 'adm-abzqar',
       username: 'Abzqar',
-      nama: 'Abzqar',
+      nama: 'Tezar Basith Hidayat',
       email: 'abzqar@hws.koperasi.id',
       whatsapp: '08119882233',
       nik: '3173010101700001',
@@ -125,9 +125,9 @@ const getInitialState = () => ({
   pengaturanBerbagi: {
     namaSubuh: 'Sedekah Subuh',
     namaJumat: 'Sedekah Jumat',
-    namaUmum: 'Sedekah Umum',
-    bankName: 'Bank Syariah Indonesia (BSI)',
-    noRekening: '7123-4567-8901',
+    namaUmum: 'Sedekah',
+    bankName: 'Bank Negara Indonesia (BNI)',
+    noRekening: '048-963-2761',
     namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
     qrisImageUrl: '',
   },
@@ -390,37 +390,47 @@ function mergeServerState(current: any, incoming: any): any {
   (current.penyaluranList || []).forEach((p: any) => penyaluranMap.set(p.id, p));
   (incoming.penyaluranList || []).forEach((p: any) => penyaluranMap.set(p.id, p));
 
-  // 8. Audit Logs: if incoming.auditLogs is provided as an array, use it directly so logs can be cleared or reset (Req 3).
-  let mergedAuditLogs: any[];
-  if (Array.isArray(incoming.auditLogs)) {
-    mergedAuditLogs = incoming.auditLogs;
-  } else {
-    mergedAuditLogs = current.auditLogs || [];
-  }
+  // 8. Audit Logs: UNION of current and incoming audit logs so every connected admin's activity is recorded for Super Admin!
+  const logMap = new Map<string, any>();
+  (current.auditLogs || []).forEach((l: any) => {
+    if (l && l.id) logMap.set(l.id, l);
+  });
+  (incoming.auditLogs || []).forEach((l: any) => {
+    if (l && l.id) logMap.set(l.id, l);
+  });
+  const mergedAuditLogs = Array.from(logMap.values())
+    .sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1))
+    .slice(0, 300);
 
   // 9. Admins: Union of current and incoming admins by ID and username so registered admins NEVER disappear!
+  const allDeletedAdminIds = new Set<string>([
+    ...(current.deletedAdminIds || []),
+    ...(incoming.deletedAdminIds || []),
+  ]);
   const adminMap = new Map<string, any>();
   (current.admins || []).forEach((a: any) => {
-    if (a && (a.id || a.username)) {
+    if (a && (a.id || a.username) && !allDeletedAdminIds.has(a.id)) {
       adminMap.set(a.id || a.username.toLowerCase(), { ...a });
     }
   });
   (incoming.admins || []).forEach((a: any) => {
-    if (a && (a.id || a.username)) {
+    if (a && (a.id || a.username) && !allDeletedAdminIds.has(a.id)) {
       const key = a.id || a.username.toLowerCase();
       const existing = adminMap.get(key);
       if (!existing) {
         adminMap.set(key, { ...a });
       } else {
-        adminMap.set(key, { ...existing, ...a });
+        // Prevent generic default 'Abzqar' name from overwriting personalized 'Tezar Basith Hidayat'
+        const keepExistingName = existing.nama && existing.nama !== 'Abzqar' && a.nama === 'Abzqar';
+        adminMap.set(key, {
+          ...existing,
+          ...a,
+          nama: keepExistingName ? existing.nama : (a.nama || existing.nama),
+          password: a.password || existing.password,
+        });
       }
     }
   });
-
-  const allDeletedAdminIds = new Set<string>([
-    ...(current.deletedAdminIds || []),
-    ...(incoming.deletedAdminIds || []),
-  ]);
   allDeletedAdminIds.forEach((id) => adminMap.delete(id));
   const mergedAdmins = Array.from(adminMap.values());
   const mergedDeletedAdminIds = Array.from(allDeletedAdminIds);
@@ -439,19 +449,30 @@ function mergeServerState(current: any, incoming: any): any {
     qrisImageUrl: incoming.profile?.qrisImageUrl || current.profile?.qrisImageUrl,
   };
 
-  // 11. Sedekah List
+  // 11. Sedekah List (with terminal status guard & deletedSetoranIds filter)
   const sedekahMap = new Map<string, any>();
-  (current.sedekahList || []).forEach((s: any) => sedekahMap.set(s.id, { ...s }));
+  (current.sedekahList || []).forEach((s: any) => {
+    if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
+      sedekahMap.set(s.id, { ...s });
+    }
+  });
   (incoming.sedekahList || []).forEach((s: any) => {
-    const existing = sedekahMap.get(s.id);
-    if (!existing) {
-      sedekahMap.set(s.id, s);
-    } else {
-      sedekahMap.set(s.id, {
-        ...existing,
-        ...s,
-        buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
-      });
+    if (s && s.id && !allDeletedSetoranIds.has(s.id)) {
+      const existing = sedekahMap.get(s.id);
+      if (!existing) {
+        sedekahMap.set(s.id, s);
+      } else {
+        const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
+        const finalStatus = isTerminal ? existing.status : (s.status || existing.status);
+        sedekahMap.set(s.id, {
+          ...existing,
+          ...s,
+          status: finalStatus,
+          verifiedBy: existing.verifiedBy || s.verifiedBy,
+          verifiedAt: existing.verifiedAt || s.verifiedAt,
+          buktiTransferUrl: s.buktiTransferUrl || existing.buktiTransferUrl,
+        });
+      }
     }
   });
 

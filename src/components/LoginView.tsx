@@ -359,7 +359,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    if (admin.password && admin.password !== adminPassword) {
+    const linkedMember = state.members.find(
+      (m) => m.nik === admin.nik || (m.email && admin.email && m.email.toLowerCase() === admin.email.toLowerCase())
+    );
+    const passwordMatches =
+      !admin.password ||
+      admin.password === adminPassword ||
+      (linkedMember?.password && linkedMember.password === adminPassword);
+
+    if (!passwordMatches) {
       setErrorMessage('Password pengurus salah.');
       return;
     }
