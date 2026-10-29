@@ -786,6 +786,8 @@ export interface BukuKasExportPayload {
   categoriesKoperasi?: { pemasukan: string[]; pengeluaran: string[] };
   saldoKasAnggota?: number;
   saldoKasKoperasi?: number;
+  saldoSedekahKoperasi?: number;
+  saldoKasBerjalan?: number;
 }
 
 // User Req 1: Buku kas anggota, koperasi / konsolidasi download PDF
@@ -899,6 +901,8 @@ export function exportBukuKasPdf(payload: BukuKasExportPayload) {
     categoriesKoperasi,
     saldoKasAnggota = 0,
     saldoKasKoperasi = 0,
+    saldoSedekahKoperasi = 0,
+    saldoKasBerjalan,
   } = payload;
 
   const titleBuku =
@@ -1071,22 +1075,26 @@ export function exportBukuKasPdf(payload: BukuKasExportPayload) {
           </div>
 
           <div style="padding: 10px 14px;">
-            <div style="font-weight: 800; font-size: 11px; color: #0369a1; margin-bottom: 6px;">KEWAJIBAN & EKUITAS:</div>
+            <div style="font-weight: 800; font-size: 11px; color: #0369a1; margin-bottom: 6px;">KOMPONEN SALDO KAS BERJALAN:</div>
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
-              <span>Simpanan Pokok Anggota</span>
+              <span>1. Total Simpanan Pokok</span>
               <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(totalSimpananPokok)}</span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
-              <span>Simpanan Umum Anggota</span>
+              <span>2. Total Tabungan Umum</span>
               <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(totalSimpananUmum)}</span>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
-              <span>Titipan Zakat & Qurban</span>
+              <span>3. Dana Zakat dan Qurban</span>
               <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(totalZakatQurban)}</span>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 900; border-top: 1px dashed #cbd5e1; padding-top: 4px; color: #0369a1;">
-              <span>TOTAL KEWAJIBAN & EKUITAS</span>
-              <span style="font-family: 'JetBrains Mono', monospace;">${formatRupiah(totalSimpananPokok + totalSimpananUmum + totalZakatQurban)}</span>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: #be123c;">
+              <span>4. Saldo Sedekah Koperasi</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-weight: 700;">${formatRupiah(saldoSedekahKoperasi)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 900; border-top: 1.5px solid #047857; padding-top: 5px; color: #047857;">
+              <span>SALDO KAS BERJALAN</span>
+              <span style="font-family: 'JetBrains Mono', monospace;">${formatRupiah(saldoKasBerjalan ?? (totalSimpananPokok + totalSimpananUmum + totalZakatQurban + saldoSedekahKoperasi))}</span>
             </div>
           </div>
         </div>
@@ -1282,6 +1290,8 @@ export function exportBukuKasExcel(payload: BukuKasExportPayload) {
     categoriesKoperasi,
     saldoKasAnggota = 0,
     saldoKasKoperasi = 0,
+    saldoSedekahKoperasi = 0,
+    saldoKasBerjalan,
   } = payload;
 
   const titleBuku =
@@ -1456,14 +1466,20 @@ export function exportBukuKasExcel(payload: BukuKasExportPayload) {
         <tr>
           <td>-</td>
           <td class="num">-</td>
-          <td>Titipan Zakat & Qurban</td>
+          <td>Dana Zakat dan Qurban</td>
           <td class="num">${formatRupiah(totalZakatQurban)}</td>
+        </tr>
+        <tr>
+          <td>-</td>
+          <td class="num">-</td>
+          <td>Saldo Sedekah Koperasi</td>
+          <td class="num" style="color: #be123c;">${formatRupiah(saldoSedekahKoperasi)}</td>
         </tr>
         <tr class="total-row">
           <td>TOTAL ASET LANCAR</td>
           <td class="num">${formatRupiah(totalAsetLancar)}</td>
-          <td>TOTAL KEWAJIBAN & EKUITAS</td>
-          <td class="num">${formatRupiah(totalSimpananPokok + totalSimpananUmum + totalZakatQurban)}</td>
+          <td>SALDO KAS BERJALAN</td>
+          <td class="num" style="color: #047857; font-weight: bold;">${formatRupiah(saldoKasBerjalan ?? (totalSimpananPokok + totalSimpananUmum + totalZakatQurban + saldoSedekahKoperasi))}</td>
         </tr>
       </table>
     `;

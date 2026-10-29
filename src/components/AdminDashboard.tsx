@@ -366,6 +366,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const umumSaldo = Math.max(0, allSedekah.filter((e) => e.jenis === 'sedekah_umum' && e.tipe === 'penerimaan' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0)
     - allSedekah.filter((e) => e.jenis === 'sedekah_umum' && e.tipe === 'penyaluran' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0));
 
+  // User Formula: Saldo kas berjalan = Total simpanan pokok + Total tabungan umum + Dana Zakat dan Qurban + Saldo Sedekah Koperasi
+  const totalDanaZakatQurban = totalZakat + totalQurban;
+  const saldoKasBerjalan = totalPokok + totalUmum + totalDanaZakatQurban + saldoSedekahTersedia;
+
   // Pending deposits count
   const pendingDepositsCount = state.setoranList.filter((s) => s.status === 'pending').length;
 
@@ -436,11 +440,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <table style="width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px;">
           <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Total Simpanan Pokok:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(totalPokok)}</td></tr>
           <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Total Tabungan Umum:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(totalUmum)}</td></tr>
-          <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Total Titipan Zakat Fitrah:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(totalZakat)}</td></tr>
-          <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Total Titipan Tabungan Qurban:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(totalQurban)}</td></tr>
-          <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Saldo Berjalan Buku Kas Anggota:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(saldoKasAnggota)}</td></tr>
-          <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Saldo Berjalan Buku Kas Koperasi:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(saldoKasKoperasi)}</td></tr>
-          <tr style="background: #f3f4f6; font-weight: 800; font-size: 13px;"><td style="padding: 8px;">TOTAL KONSOLIDASI KEUANGAN:</td><td style="text-align: right;">${formatRupiah(saldoKasAnggota + saldoKasKoperasi)}</td></tr>
+          <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Dana Zakat dan Qurban:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(totalDanaZakatQurban)}</td></tr>
+          <tr style="border-bottom: 1px solid #ddd;"><td style="padding: 8px;">Saldo Sedekah Koperasi:</td><td style="text-align: right; font-weight: 700; color: #e11d48;">${formatRupiah(saldoSedekahTersedia)}</td></tr>
+          <tr style="border-bottom: 1px solid #ddd; background: #fafafa;"><td style="padding: 8px;">Buku Kas Anggota:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(saldoKasAnggota)}</td></tr>
+          <tr style="border-bottom: 1px solid #ddd; background: #fafafa;"><td style="padding: 8px;">Buku Kas Koperasi:</td><td style="text-align: right; font-weight: 700;">${formatRupiah(saldoKasKoperasi)}</td></tr>
+          <tr style="background: #ecfdf5; font-weight: 900; font-size: 13px; color: #047857; border-top: 2px solid #059669;"><td style="padding: 10px 8px;">SALDO KAS BERJALAN:</td><td style="text-align: right; font-family: monospace;">${formatRupiah(saldoKasBerjalan)}</td></tr>
         </table>
       </div>
     `;
@@ -1160,16 +1164,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* 4. Saldo Kas Berjalan */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 shadow-xl">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block">
-                  SALDO KAS BERJALAN
-                </span>
-                <div className="text-2xl sm:text-3xl font-black text-white mt-1.5">
-                  {formatRupiah(saldoKasAnggota + saldoKasKoperasi)}
+              {/* 4. Saldo Kas Berjalan (User Req: Total simpanan pokok + Total tabungan umum + Dana Zakat dan Qurban + Saldo Sedekah Koperasi) */}
+              <div className="bg-[#0d1424] border border-emerald-500/40 rounded-3xl p-5 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] sm:text-xs text-emerald-400 font-bold uppercase tracking-wider block">
+                    SALDO KAS BERJALAN
+                  </span>
+                  <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">
+                    Konsolidasi
+                  </span>
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1">
-                  Kas Anggota: {formatRupiah(saldoKasAnggota)} | Kas: {formatRupiah(saldoKasKoperasi)}
+                <div className="text-2xl sm:text-3xl font-black text-white mt-1.5 font-mono">
+                  {formatRupiah(saldoKasBerjalan)}
+                </div>
+                <div
+                  className="text-[10px] text-slate-400 mt-1 truncate"
+                  title={`Simpanan Pokok: ${formatRupiah(totalPokok)} + Tabungan Umum: ${formatRupiah(totalUmum)} + Zakat & Qurban: ${formatRupiah(totalDanaZakatQurban)} + Sedekah: ${formatRupiah(saldoSedekahTersedia)}`}
+                >
+                  Pokok + Umum + Zakat/Qurban + Sedekah
                 </div>
               </div>
 
@@ -1449,12 +1461,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Rekonsiliasi Saldo & Kas</div>
-                    <div className="text-xl font-black text-amber-400 mt-1 font-mono">
-                      {formatRupiah(saldoKasAnggota)}
+                    <div className="text-[10px] text-slate-400 font-bold uppercase">Saldo Kas Berjalan</div>
+                    <div className="text-xl font-black text-emerald-400 mt-1 font-mono">
+                      {formatRupiah(saldoKasBerjalan)}
                     </div>
-                    <div className="text-[10px] text-emerald-400 font-semibold mt-0.5">
-                      ✓ 100% Sesuai Setoran Disetujui
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Pokok + Umum + Zakat/Qurban + Sedekah
                     </div>
                   </div>
 
