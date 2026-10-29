@@ -1085,11 +1085,9 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                         <div className="text-[10px] text-slate-400 font-mono">
                           {m.nomorAnggota} • KCP {m.wilayah}
                         </div>
-                        {m.periodeTabunganPokok && (
-                          <div className="text-[10px] text-emerald-400 font-semibold mt-0.5">
-                            Periode: {m.periodeTabunganPokok}
-                          </div>
-                        )}
+                        <div className="text-[10px] text-amber-300/90 font-medium mt-0.5">
+                          Ekuivalen: {Math.floor((m.saldoPokok || 0) / (state.profile?.pembagianPokokHarian || 1000))} Hari Pokok Terkumpul
+                        </div>
                       </div>
                       <div className="text-right">
                         <div className="text-[10px] text-slate-400">Pokok / Total:</div>

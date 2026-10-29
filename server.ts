@@ -12,13 +12,17 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'koperasi_db.json');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 
-// Ensure data and uploads directories exist permanently
+// Ensure data, uploads, and backups directories exist permanently
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+if (!fs.existsSync(BACKUPS_DIR)) {
+  fs.mkdirSync(BACKUPS_DIR, { recursive: true });
 }
 
 // Default clean initial database state
@@ -574,6 +578,11 @@ function saveDatabase(state: any) {
     try {
       if (fs.existsSync(DB_FILE)) {
         fs.copyFileSync(DB_FILE, path.join(DATA_DIR, 'koperasi_db.bak'));
+        const dateKey = new Date().toISOString().slice(0, 13).replace('T', '_');
+        const snapPath = path.join(BACKUPS_DIR, `koperasi_snapshot_${dateKey}.json`);
+        if (!fs.existsSync(snapPath)) {
+          fs.copyFileSync(DB_FILE, snapPath);
+        }
       }
     } catch {}
 
@@ -3608,12 +3617,11 @@ exit
       res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
+    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: {
-          server,
-        },
+        hmr: isHmrDisabled ? false : { server },
       },
       appType: 'spa',
     });

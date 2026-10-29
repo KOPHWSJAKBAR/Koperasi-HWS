@@ -3,12 +3,13 @@ import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
 import { generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
-import { authenticateBiometric } from '../lib/webauthn';
+import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
 import {
   Fingerprint,
   Lock,
   User,
+  KeyRound,
   ArrowRight,
   ShieldCheck,
   UserPlus,
@@ -416,11 +417,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
     let target = '';
     const storedBioUser = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user') || '' : '';
     const storedBioRole = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user_role') || '' : '';
+    const isBioActive = typeof window !== 'undefined' && localStorage.getItem('hws_biometric_active') === 'true';
 
     if (activeTab === 'member') {
       target = memberIdentifier.trim() || (storedBioRole === 'member' ? storedBioUser : '') || (state.members[0]?.nomorAnggota || '');
     } else {
-      target = adminUsername.trim() || (storedBioRole === 'admin' ? storedBioUser : '') || 'Abzqar';
+      target = adminUsername.trim() || (storedBioRole === 'admin' ? storedBioUser : '') || (state.admins[0]?.username || 'Abzqar');
+    }
+
+    if (!target) {
+      alert('Autentikasi Biometrik: Silakan masukkan Nomor Anggota / Username Anda atau masuk menggunakan kata sandi.');
+      return;
     }
 
     setBiometricTargetUser(target);
@@ -440,7 +447,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
           executeBiometricLogin(bioAuth.userId);
           return;
         }
-      } catch {}
+      } catch (err: any) {
+        console.warn('Biometric hardware error:', err);
+      }
 
       // Fallback sensor scan simulator for environments without platform authenticator
       setTimeout(() => {
@@ -1901,6 +1910,34 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   {biometricMsg || 'Sensor biometrik aktif - Otomatis masuk ke dashboard setelah scan'}
                 </p>
               </div>
+            </div>
+
+            {/* Fallback to Password & Putuskan Tautan Biometrik */}
+            <div className="pt-3 border-t border-slate-800 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBiometricModal(false);
+                  setBiometricStatus('ready');
+                }}
+                className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer border border-slate-700 hover:border-amber-500/50"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                <span>Masuk dengan Kata Sandi / PIN (Password Fallback)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  clearBiometricData();
+                  setShowBiometricModal(false);
+                  setBiometricStatus('ready');
+                  alert('Tautan biometrik dengan perangkat ini telah diputuskan.');
+                }}
+                className="w-full py-1 text-[11px] text-slate-400 hover:text-red-400 transition-colors underline cursor-pointer text-center"
+              >
+                Putuskan Koneksi Biometrik dengan Tautan Device Ini
+              </button>
             </div>
 
           </div>

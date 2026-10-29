@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound } from '../lib/storage';
+import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { initFCM } from '../lib/fcm';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -113,14 +113,15 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     return true;
   });
 
-  // Req 3C: Saldo Sedekah Anggota (berkurang sesuai penyaluran, tidak tercatat di mutasi tabungan)
-  const sedekahList = state.sedekahList || [];
+  // Req 3C: Saldo Sedekah Anggota & Total Kas Sedekah Koperasi (Realtime Online)
+  const sedekahList = getUnifiedSedekahList(state);
   const totalSedekahPenerimaan = sedekahList
     .filter((e) => e.tipe === 'penerimaan' && e.status === 'approved')
     .reduce((s, e) => s + e.nominal, 0);
   const totalSedekahPenyaluran = sedekahList
     .filter((e) => e.tipe === 'penyaluran' && e.status === 'approved')
     .reduce((s, e) => s + e.nominal, 0);
+  const totalKasSedekahTersedia = Math.max(0, totalSedekahPenerimaan - totalSedekahPenyaluran);
 
   const memberApprovedSedekah = sedekahList
     .filter(
@@ -800,7 +801,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* 5. Saldo Sedekah Anggota (Req 3C) */}
+                {/* 5. Saldo Sedekah Anggota & Kas Sedekah Koperasi (Req 3C) */}
                 <div
                   onClick={() => setShowBerbagiModal(true)}
                   className="bg-gradient-to-br from-[#141d33] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-2xl p-3.5 sm:p-4 cursor-pointer transition-all hover:scale-[1.02] shadow-md group col-span-2 sm:col-span-1"
@@ -808,7 +809,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] sm:text-xs text-rose-300 font-semibold block">
-                      Saldo Sedekah
+                      Saldo Sedekah Saya
                     </span>
                     <Heart className="w-3.5 h-3.5 text-rose-400 fill-rose-400/30 group-hover:scale-110 transition-transform" />
                   </div>
@@ -816,8 +817,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     {formatRupiah(memberSaldoSedekah)}
                   </div>
                   <div className="text-[10px] text-rose-400/90 mt-1 flex items-center justify-between">
-                    <span>Siap Disalurkan</span>
-                    <span className="font-bold underline text-[9px] group-hover:text-rose-200">Setor ›</span>
+                    <span>Kas: {formatRupiah(totalKasSedekahTersedia)}</span>
+                    <span className="font-bold underline text-[9px] group-hover:text-rose-200">Donasi ›</span>
                   </div>
                 </div>
               </div>

@@ -861,12 +861,30 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         setBioEnrollStep('prompt');
         setShowBioEnrollModal(true);
       } else {
-        const confirmDisable = confirm('Apakah Anda yakin ingin menonaktifkan autentikasi biometrik pada perangkat ini?');
+        const confirmDisable = confirm('Apakah Anda yakin ingin memutuskan tautan biometrik pada perangkat ini?');
         if (!confirmDisable) return;
         localStorage.removeItem('hws_biometric_active');
         clearBiometricData();
         setBiometricEnabled(false);
-        alert('Autentikasi biometrik telah dinonaktifkan pada perangkat ini.');
+        await updateState((prev) => {
+          if (currentMember) {
+            return {
+              ...prev,
+              members: prev.members.map((m) =>
+                m.id === currentMember.id ? { ...m, biometricActive: false } : m
+              ),
+            };
+          } else if (currentAdmin) {
+            return {
+              ...prev,
+              admins: prev.admins.map((a) =>
+                a.id === currentAdmin.id ? { ...a, biometricActive: false } : a
+              ),
+            };
+          }
+          return prev;
+        });
+        alert('Tautan autentikasi biometrik telah diputuskan dari perangkat ini.');
       }
     } catch {
       setBiometricEnabled(false);
@@ -883,6 +901,24 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     if (res.success) {
       setBioEnrollStep('success');
       setBiometricEnabled(true);
+      await updateState((prev) => {
+        if (currentMember) {
+          return {
+            ...prev,
+            members: prev.members.map((m) =>
+              m.id === currentMember.id ? { ...m, biometricActive: true } : m
+            ),
+          };
+        } else if (currentAdmin) {
+          return {
+            ...prev,
+            admins: prev.admins.map((a) =>
+              a.id === currentAdmin.id ? { ...a, biometricActive: true } : a
+            ),
+          };
+        }
+        return prev;
+      });
       setTimeout(() => {
         setShowBioEnrollModal(false);
       }, 1000);

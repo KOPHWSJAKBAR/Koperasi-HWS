@@ -10,6 +10,7 @@ import {
   ChatMessage,
   SuratResmi,
   AuditLog,
+  SedekahBerbagiEntry,
   WilayahKoperasi,
   WILAYAH_CODE_MAP,
   WILAYAH_ABBR_MAP,
@@ -1169,12 +1170,64 @@ export enum OperationType {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  // Silently ignore normal WebChannel listen stream dropped / reconnecting events
+  if (
+    !errMsg ||
+    errMsg.includes('Listen') ||
+    errMsg.includes('transport errored') ||
+    errMsg.includes('WebChannelConnection') ||
+    errMsg.includes('Name: Message:') ||
+    errMsg.includes('resource-exhausted') ||
+    errMsg.includes('cancelled')
+  ) {
+    return;
+  }
   const errInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     operationType,
     path,
   };
   console.warn('Firestore Notice:', JSON.stringify(errInfo));
+}
+
+// Unified Sedekah List Helper (Cross-matches setoran with jenis: sedekah and sedekahList)
+export function getUnifiedSedekahList(state: AppState): SedekahBerbagiEntry[] {
+  const sedekahMap = new Map<string, SedekahBerbagiEntry>();
+  (state.sedekahList || []).forEach((s) => {
+    if (s && s.id) sedekahMap.set(s.id, s);
+  });
+  (state.setoranList || []).forEach((st) => {
+    if (st && st.jenis === 'sedekah' && !sedekahMap.has(st.id)) {
+      const isApproved = st.status === 'disetujui' || (st as any).status === 'approved';
+      sedekahMap.set(st.id, {
+        id: st.id,
+        tanggal: (st.createdAt || new Date().toISOString()).slice(0, 10),
+        jam: (st.createdAt || new Date().toISOString()).slice(11, 16),
+        tipe: 'penerimaan',
+        jenis: (st.catatanAnggota?.toLowerCase().includes('jumat')
+          ? 'sedekah_jumat'
+          : st.catatanAnggota?.toLowerCase().includes('subuh')
+          ? 'sedekah_subuh'
+          : 'sedekah_umum') as any,
+        namaBerbagiKustom: st.catatanAnggota || 'Donasi Sedekah',
+        nominal: st.nominal,
+        donaturMemberId: st.memberId,
+        donaturNama: st.memberNama,
+        donaturRekening: st.memberRekening,
+        donaturNomorAnggota: st.memberNomorAnggota,
+        donaturWilayah: (st as any).memberWilayah || '',
+        sumberDana: st.metode === 'tabungan_umum' ? 'tabungan_umum' : 'qris',
+        keterangan: st.catatanAnggota || 'Donasi Sedekah',
+        status: isApproved ? 'approved' : 'pending',
+        inputBy: st.memberNama || 'Anggota',
+        verifiedBy: st.verifiedBy,
+        verifiedAt: st.verifiedAt,
+        createdAt: st.createdAt || new Date().toISOString(),
+      });
+    }
+  });
+  return Array.from(sedekahMap.values());
 }
 
 // Deep sanitization helper to strip all undefined values before writing to Firestore

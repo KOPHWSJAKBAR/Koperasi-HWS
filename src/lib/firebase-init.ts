@@ -32,12 +32,18 @@ export function getFirebaseApp(): FirebaseApp {
   return cachedApp;
 }
 
+import { setLogLevel } from 'firebase/firestore';
+
+// Suppress transient WebChannel connection drop warnings in browser / iframe
+try {
+  setLogLevel('error');
+} catch {}
+
 export function getFirebaseFirestore(): Firestore {
   if (!cachedDb) {
     const currentApp = getFirebaseApp();
-    // Use long-polling transport to guarantee resilient realtime sync across Cloud Run proxies and iframe sandboxes
     const firestoreSettings = {
-      experimentalForceLongPolling: true,
+      experimentalAutoDetectLongPolling: true,
     };
 
     if (firebaseConfig.firestoreDatabaseId) {

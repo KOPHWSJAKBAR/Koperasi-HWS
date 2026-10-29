@@ -8,6 +8,7 @@ import {
   playNotificationSound,
   requestNotificationPermission,
   triggerBrowserNotification,
+  getUnifiedSedekahList,
 } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -354,7 +355,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const namaSubuh = state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh';
   const namaJumat = state.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat';
   const namaUmum = state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum';
-  const allSedekah = state.sedekahList || [];
+  const allSedekah = getUnifiedSedekahList(state);
   const totalSedekahMasuk = allSedekah.filter((e) => e.tipe === 'penerimaan' && e.status === 'approved').reduce((acc, e) => acc + e.nominal, 0);
   const totalSedekahSalur = allSedekah.filter((e) => e.tipe === 'penyaluran' && e.status === 'approved').reduce((acc, e) => acc + e.nominal, 0);
   const saldoSedekahTersedia = Math.max(0, totalSedekahMasuk - totalSedekahSalur);
@@ -1197,16 +1198,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            {/* 2 Main Cards: Buku Kas Anggota & Buku Kas Koperasi */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* 3 Main Cards: Buku Kas Anggota, Buku Kas Koperasi & Kas Berbagi Sedekah Koperasi */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               {/* Card 1: Buku Kas Anggota */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-6 shadow-2xl flex flex-col justify-between space-y-5">
+              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col justify-between space-y-4">
                 <div>
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                     <div className="flex items-center gap-2.5">
                       <BookOpen className="w-5 h-5 text-amber-500" />
                       <div>
-                        <h4 className="text-base font-extrabold text-white">Buku Kas Anggota</h4>
+                        <h4 className="text-sm sm:text-base font-extrabold text-white">Buku Kas Anggota</h4>
                         <div className="text-[11px] text-slate-400">
                           Tabungan Pokok & Tabungan Umum Seluruh Anggota
                         </div>
@@ -1220,12 +1221,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  <div className="space-y-3 mt-4 text-xs">
-                    <div className="p-3 bg-[#162035] rounded-xl flex justify-between items-center">
+                  <div className="space-y-2.5 mt-3 text-xs">
+                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
                       <span className="text-slate-300">Total Simpanan Pokok:</span>
                       <span className="font-bold text-amber-400 font-mono">{formatRupiah(totalPokok)}</span>
                     </div>
-                    <div className="p-3 bg-[#162035] rounded-xl flex justify-between items-center">
+                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
                       <span className="text-slate-300">Total Tabungan Umum Anggota:</span>
                       <span className="font-bold text-sky-400 font-mono">{formatRupiah(totalUmum)}</span>
                     </div>
@@ -1240,23 +1241,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setSettingSubModal('sesuaikan_saldo');
                         setShowSettings(true);
                       }}
-                      className="w-full py-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
+                      className="w-full py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
                     >
-                      <DollarSign className="w-4 h-4 text-emerald-400" />
+                      <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Sesuaikan Saldo Anggota</span>
                     </button>
                   )}
                   <div className="flex gap-2">
                     <button
                       onClick={() => setActiveTab('kas')}
-                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
                     >
                       <Printer className="w-3.5 h-3.5" />
-                      Cetak Laporan PDF
+                      PDF Laporan
                     </button>
                     <button
                       onClick={() => setActiveTab('kas')}
-                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
                     >
                       <FileDown className="w-3.5 h-3.5" />
                       Unduh Excel
@@ -1266,13 +1267,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* Card 2: Buku Kas Koperasi */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-6 shadow-2xl flex flex-col justify-between space-y-5">
+              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col justify-between space-y-4">
                 <div>
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                     <div className="flex items-center gap-2.5">
                       <Building className="w-5 h-5 text-sky-400" />
                       <div>
-                        <h4 className="text-base font-extrabold text-white">Buku Kas Koperasi</h4>
+                        <h4 className="text-sm sm:text-base font-extrabold text-white">Buku Kas Koperasi</h4>
                         <div className="text-[11px] text-slate-400">
                           Overhead Operasional, Penyaluran Zakat & Qurban
                         </div>
@@ -1286,12 +1287,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  <div className="space-y-3 mt-4 text-xs">
-                    <div className="p-3 bg-[#162035] rounded-xl flex justify-between items-center">
+                  <div className="space-y-2.5 mt-3 text-xs">
+                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
                       <span className="text-slate-300">Total Zakat Fitrah Tersedia:</span>
                       <span className="font-bold text-emerald-400 font-mono">{formatRupiah(totalZakat)}</span>
                     </div>
-                    <div className="p-3 bg-[#162035] rounded-xl flex justify-between items-center">
+                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
                       <span className="text-slate-300">Total Tabungan Qurban Tersedia:</span>
                       <span className="font-bold text-emerald-400 font-mono">{formatRupiah(totalQurban)}</span>
                     </div>
@@ -1301,17 +1302,97 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="flex gap-2 pt-2">
                   <button
                     onClick={() => setActiveTab('kas')}
-                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
                   >
                     <PlusCircle className="w-3.5 h-3.5 text-emerald-400" />
                     + Input Kas Koperasi
                   </button>
                   <button
                     onClick={() => setActiveTab('zakat')}
-                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
                   >
                     <HeartHandshake className="w-3.5 h-3.5" />
-                    Salurkan Zakat & Qurban
+                    Salurkan Zakat
+                  </button>
+                </div>
+              </div>
+
+              {/* Card 3: Kas Berbagi & Sedekah Koperasi (Prominent & Realtime Online) */}
+              <div className="bg-[#0d1424] border border-rose-500/50 hover:border-rose-400 rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col justify-between space-y-4">
+                <div>
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center gap-2.5">
+                      <Heart className="w-5 h-5 text-rose-400 fill-rose-400/30" />
+                      <div>
+                        <h4 className="text-sm sm:text-base font-extrabold text-white">Kas Berbagi & Sedekah</h4>
+                        <div className="text-[11px] text-rose-300/80">
+                          {namaSubuh}, {namaJumat} & {namaUmum}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] text-slate-400">Saldo Siap Disalurkan</span>
+                      <div className="text-sm font-black text-rose-400 font-mono">
+                        {formatRupiah(saldoSedekahTersedia)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 mt-3 text-xs">
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
+                      <span className="text-slate-300">{namaSubuh}:</span>
+                      <span className="font-bold text-amber-300 font-mono">{formatRupiah(subuhSaldo)}</span>
+                    </div>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
+                      <span className="text-slate-300">{namaJumat}:</span>
+                      <span className="font-bold text-emerald-400 font-mono">{formatRupiah(jumatSaldo)}</span>
+                    </div>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
+                      <span className="text-slate-300">{namaUmum}:</span>
+                      <span className="font-bold text-sky-400 font-mono">{formatRupiah(umumSaldo)}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 flex justify-between pt-1 px-1">
+                      <span>Masuk: {formatRupiah(totalSedekahMasuk)}</span>
+                      <span>Disalurkan: {formatRupiah(totalSedekahSalur)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-2">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBerbagiInitialTab('konfirmasi');
+                        setShowBerbagiModal(true);
+                      }}
+                      className="flex-1 py-2 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-rose-600/20 cursor-pointer"
+                    >
+                      <Heart className="w-3.5 h-3.5 fill-current" />
+                      <span>Kas Sedekah</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBerbagiInitialTab('salurkan');
+                        setShowBerbagiModal(true);
+                      }}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Salurkan</span>
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBerbagiInitialTab('laporan');
+                      setShowBerbagiModal(true);
+                    }}
+                    className="w-full py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-xl font-semibold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
+                    <span>Laporan Mutasi Sedekah (PDF / Excel)</span>
                   </button>
                 </div>
               </div>
