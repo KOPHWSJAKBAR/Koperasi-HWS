@@ -114,6 +114,21 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["id", "updatedAt"]
+    },
+    "notifications": {
+      "title": "Notifikasi Realtime Koperasi",
+      "description": "Notifikasi verifikasi setoran, mutasi rekening, dan surat resmi koperasi",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "recipientId": { "type": "string" },
+        "recipientNama": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "type": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["recipientId", "title"]
     }
   },
   "firestore": {
@@ -148,6 +163,10 @@
     "/settings/{settingId}": {
       "schema": "settings",
       "description": "Penyimpanan pengaturan lembaga dan konfigurasi sistem"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "notifications",
+      "description": "Penyimpanan notifikasi realtime per dokumen"
     }
   }
 }

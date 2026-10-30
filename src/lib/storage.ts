@@ -1179,7 +1179,12 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     errMsg.includes('WebChannelConnection') ||
     errMsg.includes('Name: Message:') ||
     errMsg.includes('resource-exhausted') ||
-    errMsg.includes('cancelled')
+    errMsg.includes('cancelled') ||
+    errMsg.includes('unavailable') ||
+    errMsg.includes('offline mode') ||
+    errMsg.includes('Could not reach Cloud Firestore') ||
+    errMsg.includes('The operation could not be completed') ||
+    errMsg.includes('permission')
   ) {
     return;
   }

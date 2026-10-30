@@ -3661,13 +3661,30 @@ exit
       res.sendFile(path.join(distPath, 'index.html'));
     });
   } else {
-    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: isHmrDisabled ? false : { server },
+        hmr: false,
       },
       appType: 'spa',
+    });
+    // Intercept @vite/client to disable WebSocket runner transport in cloud preview iframe
+    app.get('/@vite/client', async (req: Request, res: Response, next) => {
+      try {
+        const mod = await vite.transformRequest('/@vite/client');
+        if (mod && mod.code) {
+          const patched = mod.code.replace(
+            /const createWebSocketModuleRunnerTransport\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?^};/m,
+            'const createWebSocketModuleRunnerTransport = () => ({ connect: async () => {}, disconnect: () => {}, send: () => {} });'
+          );
+          res.setHeader('Content-Type', 'application/javascript');
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+          return res.send(patched);
+        }
+      } catch {}
+      next();
     });
     app.use(vite.middlewares);
   }

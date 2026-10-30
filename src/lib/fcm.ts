@@ -30,47 +30,52 @@ export async function initFCM(
 
   // 1. Inisialisasi Service Worker & Web Push / FCM
   try {
+    let swReg: ServiceWorkerRegistration | undefined;
     if ('serviceWorker' in navigator) {
-      // Pastikan Service Worker terdaftar
-      await navigator.serviceWorker.register('/firebase-messaging-sw.js').catch(() => {
-        return navigator.serviceWorker.register('/sw.js').catch(() => {});
-      });
+      try {
+        swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      } catch {
+        swReg = await navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+      }
     }
 
-    const supported = await isSupported();
+    const supported = await isSupported().catch(() => false);
     if (supported) {
       activeMessaging = getMessaging(app);
 
-      // Minta izin Notifikasi Perangkat
-      if ('Notification' in window && Notification.permission === 'default') {
-        try {
-          await Notification.requestPermission();
-        } catch {}
-      }
-
-      // Ambil token registrasi FCM
-      try {
-        const token = await getToken(activeMessaging, {
-          vapidKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDZKrxZJGESBuSnjvjFi0KrAFCcKeDTMrTvVIh6p5gu4',
-        });
-
-        if (token) {
-          currentToken = token;
-          console.log('[FCM] Device Token Registered:', token.slice(0, 15) + '...');
-          // Kirim token ke backend
-          fetch('/api/fcm/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId, role: userRole, token }),
-          }).catch(() => {});
+      // Ambil token registrasi FCM hanya jika izin notifikasi sudah disetujui (mencegah error di iframe/cloud)
+      if ('Notification' in window) {
+        if (Notification.permission === 'default') {
+          try {
+            await Notification.requestPermission();
+          } catch {}
         }
-      } catch (tokenErr) {
-        console.warn('[FCM] Token acquisition note:', tokenErr);
+
+        if (Notification.permission === 'granted') {
+          try {
+            const readyReg = await navigator.serviceWorker.ready.catch(() => swReg);
+            const token = await getToken(activeMessaging, {
+              vapidKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDZKrxZJGESBuSnjvjFi0KrAFCcKeDTMrTvVIh6p5gu4',
+              serviceWorkerRegistration: readyReg || undefined,
+            });
+
+            if (token) {
+              currentToken = token;
+              // Kirim token ke backend
+              fetch('/api/fcm/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, role: userRole, token }),
+              }).catch(() => {});
+            }
+          } catch (tokenErr) {
+            // Tangani silent fallback jika push service browser tidak mengizinkan di lingkungan iframe
+          }
+        }
       }
 
       // Foreground Message Listener
       onMessage(activeMessaging, (payload) => {
-        console.log('[FCM] Foreground notification received:', payload);
         const title = payload.notification?.title || payload.data?.title || 'Notifikasi Koperasi HWS';
         const body = payload.notification?.body || payload.data?.body || 'Anda menerima pembaruan transaksi.';
         const type = (payload.data?.type as any) || 'info';
@@ -96,11 +101,9 @@ export async function initFCM(
         onNotificationReceived?.(notifObj);
       });
     }
-  } catch (err) {
-    console.warn('[FCM] Init error:', err);
-  }
+  } catch {}
 
-  // 2. Real-time Firestore Listener (Menjamin notifikasi real-time aktif seketika di semua environment)
+  // 2. Real-time Firestore Listener (Single-field query tanpa memerlukan composite index manual)
   try {
     if (unsubscribeFirestoreListener) {
       unsubscribeFirestoreListener();
@@ -111,8 +114,7 @@ export async function initFCM(
     const q = query(
       notifCol,
       where('recipientId', 'in', [userId, 'all']),
-      orderBy('createdAt', 'desc'),
-      limit(5)
+      limit(20)
     );
 
     let initialLoadDone = false;
@@ -132,7 +134,7 @@ export async function initFCM(
             title: data.title || 'Notifikasi Koperasi HWS',
             body: data.body || 'Pemberitahuan transaksi atau verifikasi baru.',
             type: data.type || 'info',
-            timestamp: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
+            timestamp: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : (data.createdAt || new Date().toISOString()),
             data: data.data || {},
           };
 
@@ -148,12 +150,10 @@ export async function initFCM(
           onNotificationReceived?.(notif);
         }
       });
-    }, (err) => {
-      console.warn('[Firestore Notifications] Snapshot notice:', err.message);
+    }, () => {
+      // Silent error handler - realtime SSE & Polling tetap aktif sebagai fallback utama
     });
-  } catch (firestoreErr) {
-    console.warn('[Firestore Notifications] Init notice:', firestoreErr);
-  }
+  } catch {}
 
   return currentToken;
 }

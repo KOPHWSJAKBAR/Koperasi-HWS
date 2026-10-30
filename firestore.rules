@@ -71,5 +71,11 @@ service cloud.firestore {
       allow get, list: if true;
       allow write: if isValidId(adminId);
     }
+
+    // 12. Notifications Collection: Realtime FCM & In-App push notifications
+    match /notifications/{notificationId} {
+      allow get, list: if true;
+      allow write: if isValidId(notificationId);
+    }
   }
 }

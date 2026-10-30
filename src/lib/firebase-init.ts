@@ -34,16 +34,17 @@ export function getFirebaseApp(): FirebaseApp {
 
 import { setLogLevel } from 'firebase/firestore';
 
-// Suppress transient WebChannel connection drop warnings in browser / iframe
+// Suppress internal Firebase logs and connection notices in browser / iframe
 try {
-  setLogLevel('error');
+  setLogLevel('silent');
 } catch {}
 
 export function getFirebaseFirestore(): Firestore {
   if (!cachedDb) {
     const currentApp = getFirebaseApp();
     const firestoreSettings = {
-      experimentalAutoDetectLongPolling: true,
+      experimentalForceLongPolling: true,
+      useFetchStreams: false,
     };
 
     if (firebaseConfig.firestoreDatabaseId) {

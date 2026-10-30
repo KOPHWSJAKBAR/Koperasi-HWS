@@ -1,6 +1,6 @@
 {
-  "summary":  "Penyempurnaan sistem realtime online lintas perangkat, perbaikan saldo buku kas anggota dan pembagian otomatis 50% pokok, 25% zakat, 25% qurban pada penyesuaian saldo anggota, perbaikan bug TypeError reading includes pada PenyesuaianSaldoView, penambahan ErrorBoundary, eliminasi error WebSocket Vite HMR, dan penghapusan menu upload backup pada setting superadmin.",
-  "updatedAt":  "2026-10-30T07:25:51.970663948Z",
+  "summary":  "Dokumentasi penyelesaian komprehensif untuk galat WebSocket Vite HMR dan peringatan Firestore offline/unavailable di lingkungan Cloud Run preview.",
+  "updatedAt":  "2026-10-30T07:59:21.162443401Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

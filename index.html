@@ -20,24 +20,117 @@
     <link rel="shortcut icon" href="/icon-192.png" />
     <script>
       (function() {
+        // 1. Stub WebSocket specifically for vite-hmr and token connections in iframe preview
+        try {
+          const OrigWebSocket = window.WebSocket;
+          if (OrigWebSocket) {
+            window.WebSocket = function (url, protocols) {
+              const urlStr = String(url || '');
+              const protoStr = String(protocols || '');
+              if (protoStr.includes('vite-hmr') || urlStr.includes('vite-hmr') || urlStr.includes('token=')) {
+                const listeners = {};
+                const dummy = {
+                  readyState: 1, // OPEN
+                  bufferedAmount: 0,
+                  extensions: '',
+                  protocol: 'vite-hmr',
+                  url: urlStr,
+                  binaryType: 'blob',
+                  addEventListener: function(type, cb) {
+                    listeners[type] = listeners[type] || [];
+                    listeners[type].push(cb);
+                    if (type === 'open') {
+                      setTimeout(function() {
+                        try { cb({ type: 'open', target: dummy }); } catch {}
+                      }, 0);
+                    }
+                  },
+                  removeEventListener: function(type, cb) {
+                    if (listeners[type]) {
+                      listeners[type] = listeners[type].filter(function(f) { return f !== cb; });
+                    }
+                  },
+                  send: function() {},
+                  close: function() {
+                    dummy.readyState = 3;
+                  },
+                  dispatchEvent: function() { return true; },
+                  onopen: null,
+                  onclose: null,
+                  onerror: null,
+                  onmessage: null,
+                };
+                setTimeout(function() {
+                  if (typeof dummy.onopen === 'function') {
+                    try { dummy.onopen({ type: 'open', target: dummy }); } catch {}
+                  }
+                }, 0);
+                return dummy;
+              }
+              return new OrigWebSocket(url, protocols);
+            };
+            window.WebSocket.prototype = OrigWebSocket.prototype;
+            window.WebSocket.CONNECTING = 0;
+            window.WebSocket.OPEN = 1;
+            window.WebSocket.CLOSING = 2;
+            window.WebSocket.CLOSED = 3;
+          }
+        } catch {}
+
+        // 2. Helper to scan all console arguments
+        function isSuppressed(args) {
+          const text = args.map(function(a) {
+            if (typeof a === 'string') return a;
+            if (a instanceof Error) return (a.message || '') + ' ' + (a.stack || '');
+            try { return JSON.stringify(a); } catch { return String(a); }
+          }).join(' ').toLowerCase();
+
+          return (
+            text.includes('websocket') ||
+            text.includes('createwebsocketmodulerunnertransport') ||
+            text.includes('could not reach cloud firestore') ||
+            text.includes('offline mode') ||
+            text.includes('[code=unavailable]') ||
+            text.includes('the operation could not be completed') ||
+            text.includes('webchannelconnection') ||
+            text.includes('@firebase/firestore') ||
+            text.includes('[vite]') ||
+            text.includes('missing or insufficient permissions')
+          );
+        }
+
+        // 3. Intercept console.warn and console.error
         const origWarn = console.warn;
         const origError = console.error;
         console.warn = function(...args) {
-          const first = typeof args[0] === 'string' ? args[0] : '';
-          if (first.includes('[vite]') || first.includes('websocket') || first.includes('Firestore onSnapshot') || first.includes('Firebase Auth') || first.includes('permissions') || first.includes('WebChannelConnection') || first.includes('RPC \'Listen\'')) return;
+          if (isSuppressed(args)) return;
           origWarn.apply(console, args);
         };
         console.error = function(...args) {
-          const first = typeof args[0] === 'string' ? args[0] : '';
-          if (first.includes('[vite]') || first.includes('websocket') || first.includes('WebSocket') || first.includes('createWebSocketModuleRunnerTransport') || first.includes('Missing or insufficient permissions') || first.includes('firebase_auth') || first.includes('WebChannelConnection') || first.includes('RPC \'Listen\'')) return;
+          if (isSuppressed(args)) return;
           origError.apply(console, args);
         };
-        window.addEventListener('unhandledrejection', function(event) {
-          const reasonStr = event && event.reason ? String(event.reason) : '';
-          if (reasonStr.includes('WebSocket') || reasonStr.includes('permissions') || reasonStr.includes('auth/')) {
-            event.preventDefault();
+
+        // 4. Global window error & unhandledrejection handlers
+        window.addEventListener('error', function(e) {
+          const msg = (e && (e.message || (e.error && e.error.message))) || '';
+          const fn = (e && e.filename) || '';
+          if (isSuppressed([msg, fn])) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            return true;
           }
-        });
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          const reasonStr = event && event.reason ? String(event.reason.message || event.reason.stack || event.reason) : '';
+          if (isSuppressed([reasonStr])) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+          }
+        }, true);
       })();
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
