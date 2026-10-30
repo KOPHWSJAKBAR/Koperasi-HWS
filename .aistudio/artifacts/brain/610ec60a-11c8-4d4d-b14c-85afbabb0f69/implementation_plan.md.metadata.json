@@ -1,6 +1,6 @@
 {
-  "summary":  "Perbaikan izin Firestore dan sinkronisasi lintas perangkat (Android, iOS, Web):\n1. Memperbaiki aturan keamanan Firestore (firestore.rules) untuk operasi list dan get pada seluruh koleksi (chats, members, kas, transactions, settings/admins, settings/general, setoran) agar tidak memicu error 'Missing or insufficient permissions'.\n2. Memvalidasi seluruh ID dokumen dan penulisan sharded untuk perlindungan data.\n3. Mengoptimalkan persistensi sesi di App.tsx agar selalu terjaga saat restart browser, peluncuran PWA, maupun aplikasi Android (APK).\n4. Berhasil mendeploy aturan rules terbaru ke proyek Firebase Firestore.",
-  "updatedAt":  "2026-10-28T10:17:15.397921846Z",
+  "summary":  "Penyempurnaan sistem realtime online lintas perangkat, perbaikan saldo buku kas anggota dan pembagian otomatis 50% pokok, 25% zakat, 25% qurban pada penyesuaian saldo anggota, perbaikan bug TypeError reading includes pada PenyesuaianSaldoView, penambahan ErrorBoundary, eliminasi error WebSocket Vite HMR, dan penghapusan menu upload backup pada setting superadmin.",
+  "updatedAt":  "2026-10-30T07:25:51.970663948Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

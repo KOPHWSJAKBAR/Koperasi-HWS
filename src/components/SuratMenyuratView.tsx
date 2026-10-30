@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppState,
   AdminUser,
   MemberUser,
   SuratResmi,
 } from '../types';
-import { createAuditLog } from '../lib/storage';
+import { createAuditLog, fetchStateFromServer } from '../lib/storage';
 import { printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { sendRealtimeNotification } from '../lib/fcm';
@@ -46,6 +46,21 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
   const [targetMemberId, setTargetMemberId] = useState('');
   const [isiSurat, setIsiSurat] = useState('');
   const [previewSurat, setPreviewSurat] = useState<SuratResmi | null>(null);
+
+  // Live Realtime Synchronization across all devices
+  useEffect(() => {
+    const handleNewSurat = () => {
+      fetchStateFromServer();
+    };
+    window.addEventListener('hws:new_surat', handleNewSurat);
+    window.addEventListener('hws:realtime_notification', handleNewSurat);
+    const interval = setInterval(fetchStateFromServer, 3000);
+    return () => {
+      window.removeEventListener('hws:new_surat', handleNewSurat);
+      window.removeEventListener('hws:realtime_notification', handleNewSurat);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Filter letters for member
   const displaySuratList = state.suratList.filter((s) => {

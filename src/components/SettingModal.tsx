@@ -2463,36 +2463,20 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     </div>
                   </div>
                   <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono font-bold border border-emerald-500/30">
-                    Backup & Restore
+                    Cadangan Data
                   </span>
                 </div>
-                <div className="flex gap-2 pt-1">
+                <div className="pt-1">
                   <button
                     type="button"
                     onClick={handleExportFirestoreJson}
                     disabled={isExportingJson}
-                    className="flex-1 py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs rounded-xl shadow flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
+                    className="w-full py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs rounded-xl shadow flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
                     title="Unduh seluruh database saat ini dalam format JSON untuk cadangan"
                   >
                     <Download className={`w-3.5 h-3.5 ${isExportingJson ? 'animate-bounce' : ''}`} />
                     <span>{isExportingJson ? 'Mengekspor...' : 'Ekspor Basis Data (.JSON)'}</span>
                   </button>
-                  <label
-                    className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 font-bold text-xs rounded-xl shadow flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                    title="Pulihkan basis data dari berkas backup JSON"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>{isImportingJson ? 'Memulihkan...' : 'Pulihkan JSON'}</span>
-                    <input
-                      type="file"
-                      accept=".json"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleImportFirestoreJson(file);
-                      }}
-                      className="hidden"
-                    />
-                  </label>
                 </div>
               </div>
 
@@ -2731,28 +2715,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                 </div>
                 <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-              </button>
-
-              {/* Req 8: Upload File Backup Database (Khusus Super Admin) */}
-              <button
-                type="button"
-                onClick={() => setSubModal('upload_backup')}
-                className="w-full p-3 bg-gradient-to-r from-amber-950/50 to-slate-900 hover:bg-slate-800 rounded-2xl border border-amber-500/50 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/40 shrink-0 group-hover:scale-105 transition-transform">
-                    <Upload className="w-4 h-4 text-amber-400" />
-                  </div>
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs group-hover:text-amber-300 transition-colors">
-                      Upload File Backup Database (.json / .bak)
-                    </div>
-                    <div className="text-[10px] text-amber-400/80 font-normal">
-                      Khusus Super Admin: Pulihkan seluruh data anggota, buku kas & mutasi
-                    </div>
-                  </div>
-                </div>
-                <span className="text-amber-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
               </button>
 
               {/* Req 1: Reset Total Aplikasi Mulai Dari 0 (Hapus Semua Transaksi & Sisakan Super Admin) */}
@@ -6112,132 +6074,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           </div>
         </div>
       )}
-      {/* ================= SUB-MODAL: UPLOAD FILE BACKUP DATABASE (REQ 8: SUPER ADMIN ONLY) ================= */}
-      {subModal === 'upload_backup' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-amber-500/60 w-full max-w-md rounded-3xl p-5 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-700">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
-                  <Upload className="w-5 h-5 text-amber-400" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-white text-sm">
-                    Upload File Backup Database
-                  </h3>
-                  <p className="text-[10px] text-amber-300">
-                    Otoritas Khusus Super Admin Koperasi HWS
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSubModal(null);
-                  setBackupFileContent(null);
-                  setBackupError('');
-                }}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            {backupError && (
-              <div className="p-3 bg-red-950/80 border border-red-500/60 text-red-200 rounded-xl text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                <span>{backupError}</span>
-              </div>
-            )}
-
-            <div className="space-y-3 text-xs">
-              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-amber-200 text-[11px] leading-relaxed">
-                Pilih file cadangan database Koperasi format <strong>.json</strong> atau <strong>.bak</strong> yang telah diunduh sebelumnya. Sistem akan memeriksa integritas data sebelum memulihkan.
-              </div>
-
-              {/* File Drop / Input Box */}
-              <label className="block p-5 border-2 border-dashed border-slate-700 hover:border-amber-400 rounded-2xl bg-slate-900/80 text-center cursor-pointer transition-colors group">
-                <Upload className="w-8 h-8 text-amber-400 mx-auto mb-2 group-hover:scale-110 transition-transform" />
-                <span className="font-bold text-white block text-xs">
-                  {backupFileName ? backupFileName : 'Klik untuk Pilih File Backup (.json / .bak)'}
-                </span>
-                <span className="text-[10px] text-slate-400 block mt-1">
-                  Format JSON Database Koperasi HWS
-                </span>
-                <input
-                  type="file"
-                  accept=".json,.bak,application/json"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleProcessBackupFile(f);
-                  }}
-                  className="hidden"
-                />
-              </label>
-
-              {/* Data Summary if loaded */}
-              {backupFileContent && (
-                <div className="p-3 bg-slate-800 rounded-2xl border border-slate-700 space-y-1.5 animate-in fade-in">
-                  <div className="font-bold text-emerald-400 text-xs flex items-center gap-1.5">
-                    <Check className="w-4 h-4" />
-                    <span>File Backup Valid & Terverifikasi:</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300 pt-1">
-                    <div className="bg-slate-900 p-2 rounded-lg">
-                      <span className="text-slate-400 block text-[10px]">Total Anggota:</span>
-                      <span className="font-mono font-bold text-amber-400">
-                        {(backupFileContent.members || []).length} Anggota
-                      </span>
-                    </div>
-                    <div className="bg-slate-900 p-2 rounded-lg">
-                      <span className="text-slate-400 block text-[10px]">Transaksi Kas:</span>
-                      <span className="font-mono font-bold text-emerald-400">
-                        {(backupFileContent.kasList || []).length} Transaksi
-                      </span>
-                    </div>
-                    <div className="bg-slate-900 p-2 rounded-lg">
-                      <span className="text-slate-400 block text-[10px]">Mutasi Rekening:</span>
-                      <span className="font-mono font-bold text-sky-400">
-                        {(backupFileContent.memberTransactions || []).length} Mutasi
-                      </span>
-                    </div>
-                    <div className="bg-slate-900 p-2 rounded-lg">
-                      <span className="text-slate-400 block text-[10px]">Nama Koperasi:</span>
-                      <span className="font-bold text-white truncate block">
-                        {backupFileContent.profile?.nama || 'Koperasi HWS'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="pt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSubModal(null);
-                    setBackupFileContent(null);
-                    setBackupError('');
-                  }}
-                  disabled={isRestoringBackup}
-                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-all"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  disabled={!backupFileContent || isRestoringBackup}
-                  onClick={handleConfirmRestoreBackup}
-                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>{isRestoringBackup ? 'Memulihkan Data...' : 'Pulihkan Database Ini'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ================= MODAL DIALOG: KONFIRMASI RESET TOTAL APLIKASI (REQ 1: SUPER ADMIN ONLY) ================= */}
       {showResetAppModal && isSuperAdmin && (

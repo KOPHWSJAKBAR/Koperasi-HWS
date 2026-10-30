@@ -1053,7 +1053,7 @@ async function startServer() {
     });
   });
 
-  // Send Chat message
+  // Send Chat message & Broadcast Push Notification
   app.post('/api/chat', (req: Request, res: Response) => {
     const { message } = req.body;
     if (!message || !message.memberId) {
@@ -1063,7 +1063,51 @@ async function startServer() {
     currentState.chatMessages.push(message);
     saveDatabase(currentState);
     broadcastEvent('NEW_CHAT_MESSAGE', message);
+
+    // Push notification ke penerima (Admin atau Anggota)
+    const isFromMember = message.senderType === 'member';
+    const notifRecipient = isFromMember ? 'admin' : message.memberId;
+    const notifTitle = isFromMember
+      ? `💬 Chat dari ${message.senderNama || 'Anggota'}`
+      : '💬 Pesan Baru dari Pengurus Koperasi HWS';
+    const notifBody = message.pesan ? (message.pesan.length > 80 ? message.pesan.slice(0, 77) + '...' : message.pesan) : 'Mengirim lampiran gambar';
+
+    broadcastEvent('MEMBER_NOTIFICATION', {
+      recipientId: notifRecipient,
+      title: notifTitle,
+      body: notifBody,
+      type: 'info',
+      data: { memberId: message.memberId, messageId: message.id },
+    });
+
     res.json({ success: true, message });
+  });
+
+  // Get Chat History with guaranteed at least 20-day retention
+  app.get('/api/chat/history', (req: Request, res: Response) => {
+    try {
+      const { memberId, days } = req.query;
+      const retentionDays = Number(days) || 20;
+      const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+
+      let messages = (currentState.chatMessages || []).filter((m: any) => {
+        const time = new Date(m.timestamp).getTime();
+        return !isNaN(time) ? time >= cutoffTime : true;
+      });
+
+      if (memberId && typeof memberId === 'string' && memberId !== 'all') {
+        messages = messages.filter((m: any) => m.memberId === memberId);
+      }
+
+      res.json({
+        success: true,
+        retentionDays,
+        total: messages.length,
+        messages,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mengambil riwayat chat: ' + err.message });
+    }
   });
 
   // Mark Chat messages as read (Req: Notifikasi chat hilang permanen saat dibuka)
@@ -1320,7 +1364,7 @@ async function startServer() {
             createdAt: now.toISOString(),
           });
 
-          // 2. Catat Tabungan Zakat di Buku Kas Anggota (Req 6: Pokok, Qurban & Zakat tercatat di kas anggota)
+          // 2. Catat Tabungan Zakat di Buku Kas Anggota (25%)
           currentState.kasList.unshift({
             id: `kas-ang-zakat-${Date.now() + 1}`,
             bukuKas: 'anggota',
@@ -1336,7 +1380,7 @@ async function startServer() {
             createdAt: now.toISOString(),
           });
 
-          // 3. Catat Tabungan Qurban di Buku Kas Anggota (Req 6: Pokok, Qurban & Zakat tercatat di kas anggota)
+          // 3. Catat Tabungan Qurban di Buku Kas Anggota (25%)
           currentState.kasList.unshift({
             id: `kas-ang-qurban-${Date.now() + 2}`,
             bukuKas: 'anggota',

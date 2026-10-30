@@ -15,6 +15,7 @@ import { MemberVerificationView } from './MemberVerificationView';
 import { MemberListView } from './MemberListView';
 import { BukuKasView } from './BukuKasView';
 import { PenyesuaianSaldoView } from './PenyesuaianSaldoView';
+import { ErrorBoundary } from './ErrorBoundary';
 import { ZakatQurbanView } from './ZakatQurbanView';
 import { SuratMenyuratView } from './SuratMenyuratView';
 import { ChatOnlineView } from './ChatOnlineView';
@@ -23,6 +24,7 @@ import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
+import { initFCM } from '../lib/fcm';
 import {
   BookOpen,
   Users,
@@ -202,10 +204,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => window.removeEventListener('app:back_press', onAppBack);
   }, [showSettings, showBerbagiModal, activeTab]);
 
-  // Request browser notification permission once on admin dashboard mount
+  // Request browser notification permission once on admin dashboard mount & register FCM
   useEffect(() => {
     requestNotificationPermission().catch(() => {});
-  }, []);
+    if (currentAdmin?.id) {
+      initFCM(currentAdmin.id, 'admin').catch(() => {});
+    }
+  }, [currentAdmin?.id]);
 
   // Save sound setting
   const toggleSound = () => {
@@ -334,14 +339,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const totalZakat = state.members.reduce((acc, m) => acc + m.saldoZakatFitrah, 0);
   const totalQurban = state.members.reduce((acc, m) => acc + m.saldoQurban, 0);
 
-  // Calculate running balances for the two cash books
-  let saldoKasAnggota = 0;
-  state.kasList
-    .filter((k) => k.bukuKas === 'anggota' && k.status === 'approved')
-    .forEach((k) => {
-      if (k.tipe === 'masuk') saldoKasAnggota += k.nominal;
-      else saldoKasAnggota -= k.nominal;
-    });
+  // Saldo Buku Kas Anggota Berjalan (Pokok 50%, Umum, Zakat Fitrah 25%, Tabungan Qurban 25%)
+  // Menyelaraskan total saldo berjalan buku kas anggota dengan seluruh simpanan anggota
+  const saldoKasAnggota = totalPokok + totalUmum + totalZakat + totalQurban;
 
   let saldoKasKoperasi = 0;
   state.kasList
@@ -1221,7 +1221,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <div>
                         <h4 className="text-sm sm:text-base font-extrabold text-white">Buku Kas Anggota</h4>
                         <div className="text-[11px] text-slate-400">
-                          Tabungan Pokok & Tabungan Umum Seluruh Anggota
+                          Pokok (50%), Umum, Zakat (25%) & Qurban (25%)
                         </div>
                       </div>
                     </div>
@@ -1233,14 +1233,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
 
-                  <div className="space-y-2.5 mt-3 text-xs">
-                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Total Simpanan Pokok:</span>
+                  <div className="space-y-2 mt-3 text-xs">
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
+                      <span className="text-slate-300">Total Simpanan Pokok (50%):</span>
                       <span className="font-bold text-amber-400 font-mono">{formatRupiah(totalPokok)}</span>
                     </div>
-                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
                       <span className="text-slate-300">Total Tabungan Umum Anggota:</span>
                       <span className="font-bold text-sky-400 font-mono">{formatRupiah(totalUmum)}</span>
+                    </div>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
+                      <span className="text-slate-300">Tabungan Zakat Fitrah (25%):</span>
+                      <span className="font-bold text-emerald-400 font-mono">{formatRupiah(totalZakat)}</span>
+                    </div>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
+                      <span className="text-slate-300">Tabungan Qurban (25%):</span>
+                      <span className="font-bold text-teal-400 font-mono">{formatRupiah(totalQurban)}</span>
                     </div>
                   </div>
                 </div>
@@ -1843,11 +1851,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             currentAdmin={currentAdmin}
           />
         ) : activeTab === 'penyesuaian_saldo' ? (
-          <PenyesuaianSaldoView
-            state={state}
-            updateState={updateState}
-            currentAdmin={currentAdmin}
-          />
+          <ErrorBoundary fallbackTitle="Menu Penyesuaian Saldo">
+            <PenyesuaianSaldoView
+              state={state}
+              updateState={updateState}
+              currentAdmin={currentAdmin}
+            />
+          </ErrorBoundary>
         ) : activeTab === 'zakat' ? (
           <ZakatQurbanView
             state={state}

@@ -582,24 +582,24 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   };
 
   // Search filtered member list for perorangan selection
-  const filteredSearchMembers = state.members.filter((m) => {
-    const q = (activeSubTab === 'koreksi' ? koreksiMemberSearch : bagiHasilMemberSearch).toLowerCase();
+  const filteredSearchMembers = (state.members || []).filter((m) => {
+    const q = (activeSubTab === 'koreksi' ? koreksiMemberSearch : bagiHasilMemberSearch).toLowerCase().trim();
     if (!q) return true;
     return (
-      m.nama.toLowerCase().includes(q) ||
-      m.nomorAnggota.toLowerCase().includes(q) ||
-      m.nomorRekening.includes(q) ||
-      m.whatsapp.includes(q)
+      (m.nama || '').toLowerCase().includes(q) ||
+      (m.nomorAnggota || '').toLowerCase().includes(q) ||
+      (m.nomorRekening || '').toLowerCase().includes(q) ||
+      (m.whatsapp || '').toLowerCase().includes(q)
     );
   });
 
-  // Recent adjustments from audit logs
-  const riwayatPenyesuaian = state.auditLogs.filter(
+  // Recent adjustments from audit logs (Safe null check)
+  const riwayatPenyesuaian = (state.auditLogs || []).filter(
     (log) =>
-      log.action.includes('Koreksi Saldo') ||
-      log.action.includes('Pembagian Hasil') ||
-      log.detail.includes('koreksi saldo') ||
-      log.detail.includes('pembagian hasil')
+      (log.action || '').toLowerCase().includes('koreksi saldo') ||
+      (log.action || '').toLowerCase().includes('pembagian hasil') ||
+      (log.detail || '').toLowerCase().includes('koreksi saldo') ||
+      (log.detail || '').toLowerCase().includes('pembagian hasil')
   );
 
   return (

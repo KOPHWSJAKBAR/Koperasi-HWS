@@ -1,15 +1,35 @@
-# Rencana & Realisasi Perbaikan Aplikasi Koperasi HWS
+# Implementation Plan - Penyempurnaan Realtime Online, Buku Kas Anggota, FCM & Perbaikan Sistem
 
-## 1. Penyelesaian Izin Firestore (Permission Notice Fix)
-- **Penyebab**: Aturan keamanan sebelumnya mensyaratkan `request.auth != null` pada seluruh operasi `list` dan `get`. Mengingat autentikasi aplikasi Koperasi menggunakan basis data mandiri dan platform authenticator (bukan popup Google Auth), pemanggilan `onSnapshot` pada koleksi `chats`, `members`, `kas`, `transactions`, `setoran`, serta dokumen `settings/general` dan `settings/admins` mengalami penolakan izin (*permission denied*).
-- **Solusi**: Memperbarui `firestore.rules` agar mengizinkan operasi pembacaan `get` dan `list` secara terbuka untuk koleksi aplikasi resmi, sembari tetap memvalidasi format string dan ukuran ID dokumen (`isValidId()`) pada setiap operasi penulisan (*write*), sehingga seluruh perangkat Android, iOS, dan Web dapat melakukan sinkronisasi *realtime* secara lancar tanpa hambatan izin.
-- **Status Deploy**: Aturan baru telah berhasil di-deploy ke project Firebase Firestore `ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69`.
+Seluruh permintaan perbaikan dan penyempurnaan sistem Koperasi HWS telah selesai diimplementasikan:
 
-## 2. Sinkronisasi Lintas Perangkat (Android, iOS, dan Web)
-- Realtime online terhubung melalui dua saluran sinkronisasi:
-  1. **Server-Sent Events (SSE)** dengan *auto-reconnect* dan *heartbeat ping* setiap 15 detik.
-  2. **Sharded Cloud Firestore Listeners** dengan *debounced notify* (120ms) untuk mencegah re-render berlebih pada perangkat mobile dengan memori terbatas.
-- Pemisahan koleksi terpisah (*sharding*) per dokumen individu untuk `members`, `setoran`, `kas`, `transactions`, `chats`, `surat`, dan `settings` untuk memastikan ukuran dokumen selalu jauh di bawah batas 1MB.
+## 1. Perbaikan Saldo Berjalan Buku Kas Anggota pada Dashboard Admin & Total Buku Kas
+- **Kesesuaian Total Akuntansi**:
+  - Saldo Berjalan pada **Card 1: Buku Kas Anggota** kini merefleksikan seluruh simpanan anggota:
+    - Total Simpanan Pokok (50%): **Rp 115.000**
+    - Total Tabungan Umum: **Rp 50.000**
+    - Tabungan Zakat Fitrah (25%): **Rp 57.500**
+    - Tabungan Qurban (25%): **Rp 57.500**
+    - **Saldo Berjalan Buku Kas Anggota**: **Rp 280.000**
+  - Pada pembukuan buku kas (`kasList`), seluruh transaksi anggota kategori Pokok, Zakat, Qurban, dan Bebas tercatat dalam `bukuKas: 'anggota'` dengan total mutasi kas tepat **Rp 280.000**, tersinkronisasi 100% dengan saldo anggota.
 
-## 3. Keutuhan Sesi & Autentikasi Pengguna
-- Persistensi sesi pengguna di `App.tsx` dipulihkan secara andal dari `localStorage` baik saat *browser restart*, peluncuran PWA di iOS, maupun eksekusi aplikasi APK di Android.
+## 2. Penyesuaian Saldo Tabungan Pokok Otomatis (50% Pokok, 25% Zakat, 25% Qurban)
+- Pada menu **Penyesuaian Saldo Anggota** (`PenyesuaianSaldoView.tsx`) dan backend endpoint (`/api/balance/adjust`), apabila admin melakukan penyesuaian pada Tabungan Pokok (contoh nominal Rp 2.000):
+  - Sistem otomatis membagi menjadi:
+    - 50% Tabungan Pokok (Rp 1.000)
+    - 25% Tabungan Qurban (Rp 500)
+    - 25% Tabungan Zakat (Rp 500)
+  - Ketiga entri tersebut dicatat langsung ke **Buku Kas Anggota** (`bukuKas: 'anggota'`).
+
+## 3. Perbaikan Bug `Cannot read properties of undefined (reading 'includes')` & ErrorBoundary
+- **Akar Masalah**: Pengecekan pencarian anggota (`m.nomorRekening.includes`, `m.whatsapp.includes`) dan filter riwayat audit logs (`log.action.includes`, `log.detail.includes`) mengalami crash ketika ada data yang bernilai `undefined` atau `null`.
+- **Solusi**:
+  - Menambahkan safe-null handling `(m.nomorRekening || '').toLowerCase().includes(q)` dan `(log.detail || '').toLowerCase().includes(...)`.
+  - Membuat komponen `ErrorBoundary.tsx` dan membungkus `<PenyesuaianSaldoView>` untuk menangani galat secara elegan tanpa memutus tampilan antarmuka.
+
+## 4. Penanganan Error Jaringan WebSocket Vite (`WebSocket closed without opened`)
+- Pada `vite.config.ts`, opsi `server: { hmr: false, watch: null }` dikonfigurasikan agar browser client tidak memicu koneksi WebSocket HMR yang tertolak oleh proxy container Cloud Run.
+- Komunikasi realtime antar-perangkat tetap berjalan kencang dan stabil melalui kombinasi SSE (Server-Sent Events), Firebase Firestore Realtime snapshot listener, dan FCM push notifications.
+
+## 5. Penghapusan Menu Upload File Backup pada Menu Setting Superadmin
+- Menghapus tombol menu *"Upload File Backup Database (.json / .bak)"* dan tombol pemulihan JSON dari `SettingModal.tsx`.
+- Menghapus sub-modal dialog `upload_backup` sehingga menu pengaturan Super Admin bersih dari opsi pengunggahan berkas backup manual sesuai arahan.

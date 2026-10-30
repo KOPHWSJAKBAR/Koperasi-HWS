@@ -22,6 +22,12 @@ import {
   Wifi,
   ArrowLeft,
   X,
+  Search,
+  FileSpreadsheet,
+  FileText,
+  Clock,
+  ChevronDown,
+  Sparkles,
 } from 'lucide-react';
 
 interface ChatOnlineViewProps {
@@ -44,9 +50,19 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   const [mobileChatOpen, setMobileChatOpen] = useState(isMember ? true : false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [inputPesan, setInputPesan] = useState('');
+  const [searchMemberQuery, setSearchMemberQuery] = useState('');
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [lampiranUrl, setLampiranUrl] = useState<string>('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Quick Questions for Members
+  const QUICK_PROMPTS = [
+    'Mohon bantu verifikasi setoran saya',
+    'Berapa nomor rekening resmi koperasi?',
+    'Bagaimana cara permohonan buka kunci simpanan pokok?',
+    'Apakah jam operasional layanan pengurus hari ini?',
+  ];
 
   // Auto select first member for admin if none selected
   useEffect(() => {
@@ -98,8 +114,20 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     return () => clearInterval(interval);
   }, []);
 
+  // Filter members based on search query
+  const filteredMembers = state.members.filter((mem) => {
+    if (!searchMemberQuery.trim()) return true;
+    const q = searchMemberQuery.toLowerCase();
+    return (
+      mem.nama.toLowerCase().includes(q) ||
+      (mem.nomorAnggota && mem.nomorAnggota.toLowerCase().includes(q)) ||
+      (mem.nomorRekening && mem.nomorRekening.toLowerCase().includes(q)) ||
+      (mem.whatsapp && mem.whatsapp.includes(q))
+    );
+  });
+
   // Group messages by member & track online status
-  const memberListWithLastMsg = state.members.map((mem) => {
+  const memberListWithLastMsg = filteredMembers.map((mem) => {
     const memMsgs = state.chatMessages.filter((m) => m.memberId === mem.id);
     const lastMsg = memMsgs[memMsgs.length - 1];
     const unreadCount = memMsgs.filter((m) => m.senderType === 'member' && !m.isReadByAdmin).length;
@@ -123,8 +151,15 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   // Active member object
   const activeMember = state.members.find((m) => m.id === selectedMemberId);
 
-  // Current active conversation messages
-  const activeMessages = state.chatMessages.filter((m) => m.memberId === selectedMemberId);
+  // Current active conversation messages (guaranteed at least 20 days retention)
+  const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const activeMessages = state.chatMessages.filter((m) => {
+    if (m.memberId !== selectedMemberId) return false;
+    const time = new Date(m.timestamp).getTime();
+    // Keep all messages within 20 days or retain if timestamp parsing isn't older
+    return !isNaN(time) ? now - time <= TWENTY_DAYS_MS || true : true;
+  });
 
   // Scroll to bottom on message change
   useEffect(() => {
@@ -169,40 +204,17 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     }
   }, [selectedMemberId, activeMessages.length, isMember]);
 
-  // Mark all chats as read (Bersihkan seluruh notifikasi chat)
-  const handleMarkAllChatRead = async () => {
-    try {
-      await fetch('/api/chat/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          markAll: true,
-          readBy: isMember ? 'member' : 'admin',
-        }),
-      });
-    } catch {}
-
-    await updateState((prev) => ({
-      ...prev,
-      chatMessages: prev.chatMessages.map((m) => ({
-        ...m,
-        isReadByAdmin: isMember ? m.isReadByAdmin : true,
-        isReadByMember: isMember ? true : m.isReadByMember,
-      })),
-    }));
-  };
-
   // Send message
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputPesan.trim() && !lampiranUrl) return;
+  const handleSendMessage = async (textToSend?: string) => {
+    const msgText = (textToSend || inputPesan).trim();
+    if (!msgText && !lampiranUrl) return;
 
     const newMsg: ChatMessage = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       memberId: selectedMemberId,
       senderType: isMember ? 'member' : 'admin',
       senderNama: isMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus',
-      pesan: inputPesan.trim() || (lampiranUrl ? '📷 [Lampiran Gambar]' : ''),
+      pesan: msgText || (lampiranUrl ? '📷 [Lampiran Gambar]' : ''),
       lampiranUrl: lampiranUrl || undefined,
       timestamp: new Date().toISOString(),
       isReadByAdmin: !isMember,
@@ -227,20 +239,82 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     }));
   };
 
-  // Download Chat Transcript
-  const handleDownloadTranscript = () => {
+  // Download Chat Transcript of Current Member
+  const handleDownloadCurrentTranscript = () => {
     if (!activeMember) return;
     const rows = activeMessages.map((m) => ({
       Waktu: m.timestamp.replace('T', ' ').slice(0, 19),
+      'ID Anggota': activeMember.id,
+      'Nama Anggota': activeMember.nama,
+      'No Rekening': activeMember.nomorRekening || '-',
       Pengirim: m.senderNama,
       Tipe: m.senderType.toUpperCase(),
       Pesan: m.pesan,
+      Lampiran: m.lampiranUrl ? 'Ada Foto' : 'Tidak Ada',
     }));
-    downloadExcelCsv(rows, `Transcript_Chat_${activeMember.nama.replace(/\s+/g, '_')}_${Date.now()}`);
+    downloadExcelCsv(rows, `Transcript_Chat_${activeMember.nama.replace(/\s+/g, '_')}_20Hari_${Date.now()}`);
+    setShowDownloadMenu(false);
+  };
+
+  // Download All Chat Messages across All Members (20 Days Retention Guarantee)
+  const handleDownloadAllChatHistory = () => {
+    const memberMap = new Map(state.members.map((m) => [m.id, m]));
+    const cutoff = Date.now() - TWENTY_DAYS_MS;
+    const allRecentMessages = state.chatMessages.filter((m) => {
+      const t = new Date(m.timestamp).getTime();
+      return !isNaN(t) ? t >= cutoff : true;
+    });
+
+    const rows = allRecentMessages.map((m) => {
+      const mem = memberMap.get(m.memberId);
+      return {
+        Waktu: m.timestamp.replace('T', ' ').slice(0, 19),
+        'ID Anggota': m.memberId,
+        'Nama Anggota': mem?.nama || m.senderNama || 'Anggota',
+        'No Rekening': mem?.nomorRekening || '-',
+        Wilayah: mem?.wilayah || '-',
+        Pengirim: m.senderNama,
+        'Tipe Pengirim': m.senderType.toUpperCase(),
+        Pesan: m.pesan,
+        Lampiran: m.lampiranUrl ? 'Ada Berkas Foto' : 'Tidak Ada',
+      };
+    });
+
+    downloadExcelCsv(rows, `Riwayat_Chat_Seluruh_Anggota_20Hari_${Date.now()}`);
+    setShowDownloadMenu(false);
+  };
+
+  // Download Raw JSON Archive of Chat History
+  const handleDownloadJsonArchive = () => {
+    const cutoff = Date.now() - TWENTY_DAYS_MS;
+    const recentMessages = state.chatMessages.filter((m) => {
+      const t = new Date(m.timestamp).getTime();
+      return !isNaN(t) ? t >= cutoff : true;
+    });
+
+    const exportPayload = {
+      title: 'Arsip Riwayat Chat Koperasi HWS (20 Hari)',
+      exportedAt: new Date().toISOString(),
+      exportedBy: currentAdmin?.nama || 'Super Admin',
+      totalMessages: recentMessages.length,
+      retentionPolicy: 'Minimal 20 Hari Kalender',
+      messages: recentMessages,
+    };
+
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Arsip_Chat_Koperasi_HWS_20Hari_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setShowDownloadMenu(false);
   };
 
   return (
-    <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[75vh] max-h-[700px]">
+    <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[78vh] max-h-[750px]">
       {/* ================= LEFT / TOP: CONVERSATION LIST (ADMIN ONLY) ================= */}
       {!isMember && (
         <div
@@ -248,21 +322,47 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             mobileChatOpen ? 'hidden md:flex' : 'flex'
           }`}
         >
-          <div className="p-3.5 border-b border-slate-700 flex justify-between items-center">
-            <span className="text-xs font-black text-white uppercase tracking-wider">
-              Chat Anggota (20 Hari)
-            </span>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                {memberListWithLastMsg.filter((m) => m.isOnline).length} Online
+          {/* Header */}
+          <div className="p-3.5 border-b border-slate-700/80 space-y-2.5">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
+                Chat Anggota (20 Hari)
               </span>
-              <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-full">
-                {state.members.length} Kontak
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {memberListWithLastMsg.filter((m) => m.isOnline).length} Online
+                </span>
+                <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-full">
+                  {state.members.length} Kontak
+                </span>
+              </div>
+            </div>
+
+            {/* Member Search Bar */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={searchMemberQuery}
+                onChange={(e) => setSearchMemberQuery(e.target.value)}
+                placeholder="Cari anggota / rekening / WA..."
+                className="w-full pl-8 pr-3 py-1.5 bg-slate-900/90 border border-slate-700/70 rounded-xl text-[11px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+              {searchMemberQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchMemberQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
           </div>
 
+          {/* Member List */}
           <div className="overflow-y-auto flex-1 divide-y divide-slate-800/60">
             {memberListWithLastMsg.map(({ member, lastMsg, unreadCount, isOnline }) => (
               <button
@@ -272,14 +372,14 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                   setSelectedMemberId(member.id);
                   setMobileChatOpen(true);
                 }}
-                className={`w-full p-3 text-left flex items-center gap-3 transition-colors ${
+                className={`w-full p-3 text-left flex items-center gap-3 transition-colors cursor-pointer ${
                   selectedMemberId === member.id
                     ? 'bg-slate-800/90 border-l-4 border-amber-500'
                     : 'hover:bg-slate-800/40'
                 }`}
               >
                 <div className="relative shrink-0">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold text-sm">
                     {member.nama.charAt(0).toUpperCase()}
                   </div>
                   {isOnline && (
@@ -319,7 +419,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
             {memberListWithLastMsg.length === 0 && (
               <div className="p-6 text-center text-xs text-slate-500">
-                Belum ada anggota terdaftar.
+                {searchMemberQuery ? 'Anggota tidak ditemukan.' : 'Belum ada anggota terdaftar.'}
               </div>
             )}
           </div>
@@ -335,12 +435,12 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         {/* Chat Header */}
         <div className="p-3.5 bg-[#162035] border-b border-slate-700/80 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Mobile Back Button to Member List (Req B.2) */}
+            {/* Mobile Back Button to Member List */}
             {!isMember && (
               <button
                 type="button"
                 onClick={() => setMobileChatOpen(false)}
-                className="md:hidden py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-xl text-xs font-bold flex items-center gap-1 border border-slate-700 shrink-0 shadow-sm"
+                className="md:hidden py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-xl text-xs font-bold flex items-center gap-1 border border-slate-700 shrink-0 shadow-sm cursor-pointer"
                 title="Kembali ke Daftar Anggota"
               >
                 <ArrowLeft className="w-3.5 h-3.5" />
@@ -348,7 +448,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
               </button>
             )}
 
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-300 p-0.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-amber-300 p-0.5 shrink-0">
               <div className="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center font-bold text-amber-400 text-xs">
                 {isMember ? 'HWS' : activeMember?.nama.charAt(0).toUpperCase() || 'A'}
               </div>
@@ -364,31 +464,87 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                   }`}
                 />
               </div>
-              <div className="text-[10px] text-slate-400">
-                {isMember
-                  ? 'Realtime Online • Siap Membantu Transaksi'
-                  : `Rek: ${activeMember?.nomorRekening || '-'} • WA: ${activeMember?.whatsapp || '-'}`}
+              <div className="text-[10px] text-slate-400 flex items-center gap-2">
+                {isMember ? (
+                  <span>Realtime Online • Siap Membantu Transaksi & Verifikasi</span>
+                ) : (
+                  <span>Rek: {activeMember?.nomorRekening || '-'} • WA: {activeMember?.whatsapp || '-'}</span>
+                )}
               </div>
             </div>
           </div>
 
+          {/* Admin Download Chat Transcript Menu */}
           {!isMember && (
-            <button
-              onClick={handleDownloadTranscript}
-              className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-emerald-500/20"
-              title="Unduh Riwayat Chat"
-            >
-              <Download className="w-3 h-3" />
-              Unduh Chat
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowDownloadMenu(!showDownloadMenu)}
+                className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-500/30 transition-all shadow-sm cursor-pointer active:scale-95"
+                title="Unduh Riwayat Chat"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Unduh Chat</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {showDownloadMenu && (
+                <div className="absolute right-0 top-full mt-2 w-64 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl p-2 z-30 space-y-1">
+                  <div className="px-2.5 py-1.5 border-b border-slate-800">
+                    <span className="text-[10px] uppercase font-black text-amber-400">
+                      Opsi Unduh Riwayat Chat (20 Hari)
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadCurrentTranscript}
+                    disabled={!activeMember}
+                    className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <div>
+                      <div className="font-semibold text-white">Chat Anggota Terpilih</div>
+                      <div className="text-[10px] text-slate-400">{activeMember?.nama || '-'} (Excel / CSV)</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadAllChatHistory}
+                    className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <div>
+                      <div className="font-semibold text-white">Seluruh Percakapan (20 Hari)</div>
+                      <div className="text-[10px] text-slate-400">Semua anggota koperasi (Excel / CSV)</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadJsonArchive}
+                    className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <div>
+                      <div className="font-semibold text-white">Cadangan Arsip JSON</div>
+                      <div className="text-[10px] text-slate-400">Penyimpanan audit & arsip 20 hari</div>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
         {/* Message Bubble List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* Guaranteed 20-Day Retention Notice */}
           <div className="text-center my-2">
-            <span className="text-[9px] bg-slate-800/80 text-slate-400 px-3 py-1 rounded-full border border-slate-700">
-              Pesan tersimpan otomatis 20 hari • Percakapan terenkripsi koperasi
+            <span className="text-[10px] bg-slate-800/80 text-slate-300 px-3.5 py-1.5 rounded-full border border-slate-700/80 inline-flex items-center gap-1.5 shadow-sm">
+              <Clock className="w-3 h-3 text-amber-400" />
+              <span>Riwayat percakapan tersimpan minimal <strong>20 hari kalender</strong> & dapat diunduh oleh Pengurus.</span>
             </span>
           </div>
 
@@ -436,7 +592,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           })}
 
           {activeMessages.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-500 text-xs">
+            <div className="h-full min-h-[160px] flex flex-col items-center justify-center text-slate-500 text-xs">
               <MessageSquare className="w-8 h-8 mb-2 opacity-40 text-amber-500" />
               <p>Belum ada percakapan. Mulai kirim pesan pertanyaan atau bantuan.</p>
             </div>
@@ -444,6 +600,25 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
           <div ref={chatBottomRef} />
         </div>
+
+        {/* Quick Suggestion Chips for Member */}
+        {isMember && (
+          <div className="px-3 py-1.5 bg-[#0f172a] border-t border-slate-800/80 flex items-center gap-1.5 overflow-x-auto text-[11px] scrollbar-none">
+            <span className="text-[10px] text-amber-400 font-bold shrink-0 flex items-center gap-1">
+              <Sparkles className="w-3 h-3" /> Cepat:
+            </span>
+            {QUICK_PROMPTS.map((prompt, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleSendMessage(prompt)}
+                className="px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 shrink-0 whitespace-nowrap transition-colors cursor-pointer text-[10px]"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Attachment preview banner */}
         {lampiranUrl && (
@@ -463,7 +638,13 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         )}
 
         {/* Message Input Box */}
-        <form onSubmit={handleSendMessage} className="p-3 bg-[#162035] border-t border-slate-700 flex items-center gap-2">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendMessage();
+          }}
+          className="p-3 bg-[#162035] border-t border-slate-700 flex items-center gap-2"
+        >
           <label
             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl cursor-pointer transition-colors flex items-center justify-center shrink-0 border border-slate-700"
             title="Kirim Foto / Lampiran"
@@ -483,7 +664,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             type="text"
             value={inputPesan}
             onChange={(e) => setInputPesan(e.target.value)}
-            placeholder="Ketik pesan Anda..."
+            placeholder={isMember ? 'Ketik pertanyaan untuk pengurus koperasi...' : `Ketik balasan untuk ${activeMember?.nama || 'anggota'}...`}
             className="flex-1 px-4 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
           />
           <button

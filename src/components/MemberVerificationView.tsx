@@ -706,12 +706,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
 
-          // 2. Catat Tabungan Zakat di Buku Kas Anggota (Req 6)
+          // 2. Catat Tabungan Zakat di Buku Kas Koperasi
           newKasList.push({
             id: `kas-ang-zakat-${Date.now() + 1}`,
-            bukuKas: 'anggota',
+            bukuKas: 'koperasi',
             tanggal: tgl,
-            kategori: 'Tabungan Zakat',
+            kategori: 'Iuran Tabungan Zakat & Qurban',
             keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
@@ -722,12 +722,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
 
-          // 3. Catat Tabungan Qurban di Buku Kas Anggota (Req 6)
+          // 3. Catat Tabungan Qurban di Buku Kas Koperasi
           newKasList.push({
             id: `kas-ang-qurban-${Date.now() + 2}`,
-            bukuKas: 'anggota',
+            bukuKas: 'koperasi',
             tanggal: tgl,
-            kategori: 'Tabungan Qurban',
+            kategori: 'Iuran Tabungan Zakat & Qurban',
             keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
@@ -860,6 +860,22 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           auditLogs: [audit, ...prev.auditLogs],
         };
       });
+
+      // Kirim FCM & Realtime Push Notifikasi ke Anggota (Fallback Mode)
+      sendRealtimeNotification({
+        recipientId: dep.memberId,
+        recipientNama: dep.memberNama,
+        title: '✅ Verifikasi Setoran Disetujui',
+        body: `Setoran ${
+          dep.jenis === 'kewajiban'
+            ? 'Kewajiban Pokok'
+            : dep.jenis === 'sedekah'
+            ? 'Sedekah / Berbagi'
+            : 'Tabungan Umum'
+        } sebesar ${formatRupiah(dep.nominal)} telah disetujui & diverifikasi oleh Admin.`,
+        type: 'setoran_verified',
+        data: { depositId: dep.id, nominal: dep.nominal },
+      }).catch(() => {});
     }
 
     alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui online realtime! Saldo telah terupdate tepat 1 kali.`);
