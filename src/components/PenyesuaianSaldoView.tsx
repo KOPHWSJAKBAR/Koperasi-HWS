@@ -50,7 +50,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   updateState,
   currentAdmin,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'koreksi' | 'pembagian_hasil' | 'riwayat'>('koreksi');
+  const [activeSubTab, setActiveSubTab] = useState<'koreksi' | 'pembagian_hasil'>('koreksi');
 
   // ================= STATE 1: KOREKSI SALDO =================
   const [koreksiTargetTipe, setKoreksiTargetTipe] = useState<'wilayah' | 'perorangan' | 'semua'>('wilayah');
@@ -672,19 +672,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
           <Percent className="w-4 h-4" />
           <span>2. Pembagian Hasil</span>
         </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveSubTab('riwayat')}
-          className={`py-2.5 px-4 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
-            activeSubTab === 'riwayat'
-              ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          <History className="w-4 h-4" />
-          <span>Riwayat ({riwayatPenyesuaian.length})</span>
-        </button>
       </div>
 
       {/* ========================================================================= */}
@@ -891,8 +878,8 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                     />
                     <span className="text-xs text-slate-300 font-semibold">Hari</span>
 
-                    <div className="flex gap-1.5 ml-auto">
-                      {[1, 7, 15, 30].map((presetHari) => (
+                    <div className="flex flex-wrap gap-1.5 ml-auto">
+                      {[1, 5, 10, 15, 30].map((presetHari) => (
                         <button
                           key={presetHari}
                           type="button"
@@ -903,7 +890,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                           }}
                           className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-amber-300 border border-amber-500/30 text-[11px] font-bold transition-all"
                         >
-                          {presetHari} Hari
+                          {presetHari} Hari ({presetHari * 2}rb)
                         </button>
                       ))}
                     </div>
@@ -1422,54 +1409,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 3. SUBMENU: RIWAYAT PENYESUAIAN SALDO                                     */}
-      {/* ========================================================================= */}
-      {activeSubTab === 'riwayat' && (
-        <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-700/80">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
-                <History className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-extrabold text-white">Riwayat Koreksi & Pembagian Hasil</h3>
-                <p className="text-[11px] text-slate-400">Catatan audit resmi setiap pemrosesan penyesuaian saldo anggota</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {riwayatPenyesuaian.map((log) => (
-              <div
-                key={log.id}
-                className="p-3.5 bg-slate-900/80 border border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-amber-400 text-xs">{log.action}</span>
-                    <span className="text-[10px] text-slate-500">•</span>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {new Date(log.timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB
-                    </span>
-                  </div>
-                  <p className="text-slate-300">{log.detail}</p>
-                </div>
-                <div className="shrink-0 text-[10px] text-slate-400 bg-slate-800 px-2.5 py-1 rounded-xl border border-slate-700 self-start sm:self-auto">
-                  Diproses oleh: <span className="font-bold text-white">{log.adminNama}</span>
-                </div>
-              </div>
-            ))}
-
-            {riwayatPenyesuaian.length === 0 && (
-              <div className="text-center py-10 text-slate-500 text-xs">
-                Belum ada riwayat koreksi saldo atau pembagian hasil yang diproses.
-              </div>
-            )}
           </div>
         </div>
       )}

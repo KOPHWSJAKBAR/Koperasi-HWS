@@ -1768,10 +1768,38 @@ async function startServer() {
       currentState.deletedKasIds.push(deletedEntry.id);
     }
 
-    if (deletedEntry.bukuKas === 'anggota') {
-      const cleanPenerima = String(deletedEntry.namaPenerima || '').trim().toLowerCase();
-      const cleanKet = String(deletedEntry.keterangan || '').trim().toLowerCase();
+    // Sinkronisasi deletedSetoranIds jika entri kas memiliki referensi setoran
+    if (deletedEntry.referensiId) {
+      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
+      if (!currentState.deletedSetoranIds.includes(deletedEntry.referensiId)) {
+        currentState.deletedSetoranIds.push(deletedEntry.referensiId);
+      }
+      currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== deletedEntry.referensiId);
+    }
 
+    const cleanPenerima = String(deletedEntry.namaPenerima || '').trim().toLowerCase();
+    const cleanKet = String(deletedEntry.keterangan || '').trim().toLowerCase();
+    const katLower = String(deletedEntry.kategori || '').toLowerCase();
+    const isSedekah = katLower.includes('sedekah') || cleanKet.includes('sedekah');
+
+    // Jika yang dihapus adalah transaksi sedekah (di kas anggota maupun kas koperasi)
+    if (isSedekah) {
+      let removedSdk = false;
+      currentState.sedekahList = (currentState.sedekahList || []).filter((sdk: any) => {
+        if (removedSdk) return true;
+        if (
+          (deletedEntry.referensiId && sdk.id === deletedEntry.referensiId) ||
+          sdk.id === deletedEntry.id ||
+          (cleanPenerima && String(sdk.donaturNama || '').toLowerCase() === cleanPenerima && sdk.nominal === deletedEntry.nominal)
+        ) {
+          removedSdk = true;
+          return false;
+        }
+        return true;
+      });
+    }
+
+    if (deletedEntry.bukuKas === 'anggota') {
       const matchedMembers = (currentState.members || []).filter((m: any) => {
         const mName = String(m.nama || '').trim().toLowerCase();
         if (!mName) return false;
@@ -1812,7 +1840,6 @@ async function startServer() {
       }
       currentState.memberTransactions = nextTransactions;
 
-      const katLower = String(deletedEntry.kategori || '').toLowerCase();
       currentState.members = (currentState.members || []).map((m: any) => {
         if (!matchedMemberIds.has(m.id)) return m;
 
@@ -1830,12 +1857,12 @@ async function startServer() {
           if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
           else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
           else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
-          else u = Math.max(0, u - perMemberNominal);
+          else if (!isSedekah) u = Math.max(0, u - perMemberNominal);
         } else {
           if (katLower.includes('pokok')) p += perMemberNominal;
           else if (katLower.includes('qurban')) q += perMemberNominal;
           else if (katLower.includes('zakat')) z += perMemberNominal;
-          else u += perMemberNominal;
+          else if (!isSedekah) u += perMemberNominal;
         }
 
         const mTxs = (currentState.memberTransactions || [])
@@ -1861,7 +1888,7 @@ async function startServer() {
     // Recompute running saldoKasSetelah pada buku kas
     const recomputeType = (type: string) => {
       const items = (currentState.kasList || [])
-        .filter((k: any) => k.bukuKas === type)
+        .filter((k: any) => k.bukuKas === type && !currentState.deletedKasIds.includes(k.id))
         .slice()
         .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
       let run = 0;
@@ -2374,6 +2401,10 @@ async function startServer() {
       // Entri penyeimbang di Buku Kas Anggota
       const kasId = `kas-adj-${Date.now()}`;
       currentState.kasList = currentState.kasList || [];
+      const singleMember = targetIds.length === 1 ? (currentState.members || []).find((m: any) => m.id === targetIds[0]) : null;
+      const targetLabel = singleMember ? singleMember.nama : `Koreksi Saldo Massal (${targetIds.length} Anggota)`;
+      const ketPrefix = singleMember ? `a/n ${singleMember.nama}` : `(${targetIds.length} Anggota)`;
+
       if (jenisTabungan === 'pokok') {
         const totalPokokKas = Math.floor(totalDana * 0.5);
         const totalQurbanKas = Math.floor(totalDana * 0.25);
@@ -2385,8 +2416,9 @@ async function startServer() {
             bukuKas: 'anggota',
             tanggal: tgl,
             kategori: 'Tabungan Pokok',
-            keterangan: `Koreksi Tabungan Pokok 50% (${targetIds.length} Anggota): ${keterangan || ''}`,
-            namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+            keterangan: `Koreksi Tabungan Pokok 50% ${ketPrefix}: ${keterangan || ''}`,
+            namaPenerima: targetLabel,
+            memberId: singleMember?.id,
             tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
             nominal: totalPokokKas,
             saldoKasSetelah: 0,
@@ -2399,8 +2431,9 @@ async function startServer() {
             bukuKas: 'anggota',
             tanggal: tgl,
             kategori: 'Tabungan Qurban',
-            keterangan: `Koreksi Tabungan Qurban 25% (${targetIds.length} Anggota): ${keterangan || ''}`,
-            namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+            keterangan: `Koreksi Tabungan Qurban 25% ${ketPrefix}: ${keterangan || ''}`,
+            namaPenerima: targetLabel,
+            memberId: singleMember?.id,
             tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
             nominal: totalQurbanKas,
             saldoKasSetelah: 0,
@@ -2413,8 +2446,9 @@ async function startServer() {
             bukuKas: 'anggota',
             tanggal: tgl,
             kategori: 'Tabungan Zakat',
-            keterangan: `Koreksi Tabungan Zakat 25% (${targetIds.length} Anggota): ${keterangan || ''}`,
-            namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+            keterangan: `Koreksi Tabungan Zakat 25% ${ketPrefix}: ${keterangan || ''}`,
+            namaPenerima: targetLabel,
+            memberId: singleMember?.id,
             tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
             nominal: totalZakatKas,
             saldoKasSetelah: 0,
@@ -2429,8 +2463,9 @@ async function startServer() {
           bukuKas: 'anggota',
           tanggal: tgl,
           kategori: 'Tabungan Bebas',
-          keterangan: `Koreksi Saldo ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} (${targetIds.length} Anggota): ${keterangan || ''}`,
-          namaPenerima: targetIds.length === 1 ? 'Anggota Koperasi' : `Koreksi Saldo Massal (${targetIds.length} Anggota)`,
+          keterangan: `Koreksi Saldo ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} ${ketPrefix}: ${keterangan || ''}`,
+          namaPenerima: targetLabel,
+          memberId: singleMember?.id,
           tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
           nominal: totalDana,
           saldoKasSetelah: 0,

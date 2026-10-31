@@ -52,10 +52,14 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const [filterEndDate, setFilterEndDate] = useState('');
   const [filterKategori, setFilterKategori] = useState('semua');
 
-  // Input Kas Koperasi Form State (Req 1: Tanggal, Jumlah, Keterangan, Nama Penerima)
+  // Input Kas Form State (Koperasi & Anggota)
   const [isInputModalOpen, setIsInputModalOpen] = useState(false);
-  const [formTipe, setFormTipe] = useState<'masuk' | 'keluar'>('keluar');
+  const [formBukuKas, setFormBukuKas] = useState<'koperasi' | 'anggota'>('koperasi');
+  const [formTipe, setFormTipe] = useState<'masuk' | 'keluar'>('masuk');
   const [formKategori, setFormKategori] = useState('');
+  const [formSubKategoriAnggota, setFormSubKategoriAnggota] = useState<'pokok' | 'umum' | 'sedekah'>('pokok');
+  const [formMemberId, setFormMemberId] = useState('');
+  const [formJumlahHari, setFormJumlahHari] = useState('1');
   const [formNominal, setFormNominal] = useState('');
   const [formNamaPenerima, setFormNamaPenerima] = useState('');
   const [formKeterangan, setFormKeterangan] = useState('');
@@ -129,14 +133,20 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // Can delete: Super Admin, Admin Write (dengan approval), atau Admin Approval
   const canDelete = isSuperAdmin || isWriter || isApproval || isPembukuan;
 
-  // Pending approval list for Buku Kas (Input, Edit, Hapus)
-  const pendingKasApprovals = state.kasList.filter((k) => k.status === 'pending_approval');
+  // Filter out deleted kas entries permanently (Jangan tampilkan transaksi yang telah dihapus per user instruction)
+  const deletedKasSet = new Set(state.deletedKasIds || []);
+  const activeKasList = (state.kasList || []).filter(
+    (k) => !deletedKasSet.has(k.id) && (k as any).status !== 'deleted'
+  );
 
-  // Calculate Running Saldo Buku Kas Anggota & build running balance map per transaction
+  // Pending approval list for Buku Kas (Input, Edit, Hapus)
+  const pendingKasApprovals = activeKasList.filter((k) => k.status === 'pending_approval');
+
+  // 1. Calculate Running Saldo Buku Kas Anggota = total transaksi dari setoran anggota yang telah diverifikasi
   const runningSaldoMap = new Map<string, number>();
 
   let saldoKasAnggota = 0;
-  const kasAnggotaList = state.kasList
+  const kasAnggotaList = activeKasList
     .filter((k) => k.bukuKas === 'anggota' && k.status === 'approved')
     .sort((a, b) => {
       const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
@@ -151,9 +161,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     runningSaldoMap.set(k.id, saldoKasAnggota);
   });
 
-  // Calculate Running Saldo Buku Kas Koperasi & build running balance map
+  // 2. Calculate Running Saldo Buku Kas Koperasi = total dari seluruh transaksi pada buku kas koperasi
   let saldoKasKoperasi = 0;
-  const kasKoperasiList = state.kasList
+  const kasKoperasiList = activeKasList
     .filter((k) => k.bukuKas === 'koperasi' && k.status === 'approved')
     .sort((a, b) => {
       const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
@@ -168,7 +178,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     runningSaldoMap.set(k.id, saldoKasKoperasi);
   });
 
-  // User Formula: Saldo kas berjalan = Total simpanan pokok + Total tabungan umum + Dana Zakat dan Qurban + Saldo Sedekah Koperasi
+  // 3. User Formula: Saldo kas berjalan = saldo dari total buku kas anggota dan buku kas koperasi
+  const saldoKasBerjalan = saldoKasAnggota + saldoKasKoperasi;
+
   const allSedekah = getUnifiedSedekahList(state);
   const totalSedekahMasuk = allSedekah
     .filter((e) => e.tipe === 'penerimaan' && e.status === 'approved')
@@ -184,10 +196,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     (acc, m) => acc + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0),
     0
   );
-  const saldoKasBerjalan = totalSimpananPokok + totalTabunganUmum + totalDanaZakatQurban + saldoSedekahKoperasi;
 
-  // Filter current displayed list with urutan kas yang terakhir masuk ada di atas sesuai penginputan
-  const currentList = state.kasList
+  // 4. Filter current displayed list (Hanya transaksi aktif, urutan kas terakhir masuk ada di atas)
+  const currentList = activeKasList
     .filter((k) => {
       if (activeKasTab !== 'neraca' && k.bukuKas !== activeKasTab) return false;
       if (filterStartDate && k.tanggal < filterStartDate) return false;
@@ -202,11 +213,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       return b.id.localeCompare(a.id);
     });
 
-  // Handle Input Transaksi Kas Koperasi (Req 1: Admin write dapat menulis, admin approval yang menyetujui)
+  // Handle Input Transaksi Kas (Buku Kas Anggota & Buku Kas Koperasi)
   const handleInputKasSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canInput) {
-      alert('Admin Approval / Admin Laporan tidak dapat menginput transaksi kas koperasi. Admin Write yang menulis dokumen, Admin Approval yang menyetujui.');
+      alert('Admin Approval / Admin Laporan tidak dapat menginput transaksi kas. Admin Write yang menulis dokumen, Admin Approval yang menyetujui.');
       return;
     }
 
@@ -216,6 +227,251 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       return;
     }
 
+    // Input Buku Kas Anggota (Pokok 50/25/25, Umum, Sedekah)
+    if (formBukuKas === 'anggota') {
+      const selectedMember = state.members.find((m) => m.id === formMemberId);
+      if (!selectedMember) {
+        alert('Pilih anggota koperasi terlebih dahulu.');
+        return;
+      }
+
+      const mName = selectedMember.nama;
+      const mId = selectedMember.id;
+      const now = new Date();
+      const jam = now.toTimeString().slice(0, 5);
+      const isApproved = isSuperAdmin || isApproval;
+      const statusTx = isApproved ? 'approved' : 'pending_approval';
+      const refId = `KAS-ANG-${Date.now()}`;
+
+      await updateState((prev) => {
+        let updatedPokok = Number(selectedMember.saldoPokok) || 0;
+        let updatedUmum = Number(selectedMember.saldoUmum) || 0;
+        let updatedZakat = Number(selectedMember.saldoZakatFitrah) || 0;
+        let updatedQurban = Number(selectedMember.saldoQurban) || 0;
+
+        const newKasEntries: KasEntry[] = [];
+        const newTransactions: MemberTransaction[] = [];
+        let updatedSedekahList = prev.sedekahList || [];
+
+        if (formSubKategoriAnggota === 'pokok') {
+          // Aturan kelipatan 2.000 / hari: 50% Pokok, 25% Qurban, 25% Zakat
+          const jlhHari = Math.max(1, Math.round(nominal / 2000));
+          const pNom = Math.floor(nominal * 0.5);
+          const qNom = Math.floor(nominal * 0.25);
+          const zNom = nominal - pNom - qNom;
+
+          if (formTipe === 'masuk') {
+            updatedPokok += pNom;
+            updatedQurban += qNom;
+            updatedZakat += zNom;
+          } else {
+            updatedPokok = Math.max(0, updatedPokok - pNom);
+            updatedQurban = Math.max(0, updatedQurban - qNom);
+            updatedZakat = Math.max(0, updatedZakat - zNom);
+          }
+
+          newKasEntries.push(
+            {
+              id: `kas-ang-p-${Date.now()}`,
+              bukuKas: 'anggota',
+              tanggal: formTanggal,
+              jam,
+              kategori: 'Tabungan Pokok',
+              keterangan: `${formTipe === 'masuk' ? 'Setoran' : 'Penarikan'} Tabungan Pokok 50% ${mName} (${jlhHari} Hari): ${formKeterangan || 'Transaksi Kas Anggota'}`,
+              namaPenerima: mName,
+              memberId: mId,
+              referensiId: refId,
+              tipe: formTipe,
+              nominal: pNom,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: statusTx,
+              createdAt: now.toISOString(),
+            },
+            {
+              id: `kas-ang-q-${Date.now() + 1}`,
+              bukuKas: 'anggota',
+              tanggal: formTanggal,
+              jam,
+              kategori: 'Tabungan Qurban',
+              keterangan: `${formTipe === 'masuk' ? 'Setoran' : 'Penarikan'} Tabungan Qurban 25% ${mName} (${jlhHari} Hari): ${formKeterangan || 'Transaksi Kas Anggota'}`,
+              namaPenerima: mName,
+              memberId: mId,
+              referensiId: refId,
+              tipe: formTipe,
+              nominal: qNom,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: statusTx,
+              createdAt: now.toISOString(),
+            },
+            {
+              id: `kas-ang-z-${Date.now() + 2}`,
+              bukuKas: 'anggota',
+              tanggal: formTanggal,
+              jam,
+              kategori: 'Tabungan Zakat',
+              keterangan: `${formTipe === 'masuk' ? 'Setoran' : 'Penarikan'} Tabungan Zakat 25% ${mName} (${jlhHari} Hari): ${formKeterangan || 'Transaksi Kas Anggota'}`,
+              namaPenerima: mName,
+              memberId: mId,
+              referensiId: refId,
+              tipe: formTipe,
+              nominal: zNom,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: statusTx,
+              createdAt: now.toISOString(),
+            }
+          );
+
+          newTransactions.push({
+            id: `tx-wajib-${Date.now()}`,
+            memberId: mId,
+            tanggal: formTanggal,
+            jam,
+            keterangan: `${formTipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TABUNGAN POKOK (${jlhHari} HARI • 50% POKOK, 25% QURBAN, 25% ZAKAT): ${formKeterangan || ''}`,
+            cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            tipe: formTipe,
+            nominal,
+            saldoSetelah: updatedPokok + updatedUmum,
+            kategori: 'pokok',
+            referensiId: refId,
+            jumlahHari: jlhHari,
+          });
+        } else if (formSubKategoriAnggota === 'umum') {
+          if (formTipe === 'masuk') {
+            updatedUmum += nominal;
+          } else {
+            updatedUmum = Math.max(0, updatedUmum - nominal);
+          }
+
+          newKasEntries.push({
+            id: `kas-ang-u-${Date.now()}`,
+            bukuKas: 'anggota',
+            tanggal: formTanggal,
+            jam,
+            kategori: 'Tabungan Bebas',
+            keterangan: `${formTipe === 'masuk' ? 'Setoran' : 'Penarikan'} Tunai Tabungan Bebas ${mName}: ${formKeterangan || ''}`,
+            namaPenerima: mName,
+            memberId: mId,
+            referensiId: refId,
+            tipe: formTipe,
+            nominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: statusTx,
+            createdAt: now.toISOString(),
+          });
+
+          newTransactions.push({
+            id: `tx-umum-${Date.now()}`,
+            memberId: mId,
+            tanggal: formTanggal,
+            jam,
+            keterangan: `${formTipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TUNAI TABUNGAN BEBAS: ${formKeterangan || ''}`,
+            cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            tipe: formTipe,
+            nominal,
+            saldoSetelah: updatedPokok + updatedUmum,
+            kategori: 'umum',
+            referensiId: refId,
+          });
+        } else if (formSubKategoriAnggota === 'sedekah') {
+          // Sedekah Anggota
+          newKasEntries.push({
+            id: `kas-ang-sdk-${Date.now()}`,
+            bukuKas: 'anggota',
+            tanggal: formTanggal,
+            jam,
+            kategori: formTipe === 'masuk' ? 'Penerimaan Sedekah' : 'Penyaluran Sedekah',
+            keterangan: `${formTipe === 'masuk' ? 'Penerimaan' : 'Penyaluran'} Sedekah Berbagi a/n ${mName}: ${formKeterangan || ''}`,
+            namaPenerima: mName,
+            memberId: mId,
+            referensiId: refId,
+            tipe: formTipe,
+            nominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            status: statusTx,
+            createdAt: now.toISOString(),
+          });
+
+          newTransactions.push({
+            id: `tx-sdk-${Date.now()}`,
+            memberId: mId,
+            tanggal: formTanggal,
+            jam,
+            keterangan: `DONASI BERBAGI: Sedekah Anggota ${mName} (${formKeterangan || 'Sedekah'})`,
+            cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            tipe: formTipe,
+            nominal,
+            saldoSetelah: updatedPokok + updatedUmum,
+            kategori: 'umum',
+            referensiId: refId,
+          });
+
+          updatedSedekahList = [
+            {
+              id: refId,
+              tanggal: formTanggal,
+              jam,
+              nominal,
+              tipe: formTipe === 'masuk' ? 'penerimaan' : 'penyaluran',
+              jenis: 'sedekah_umum',
+              donaturMemberId: mId,
+              donaturNama: mName,
+              keterangan: formKeterangan || 'Sedekah Anggota via Buku Kas',
+              status: isApproved ? 'approved' : 'pending',
+              inputBy: currentAdmin.nama,
+              verifiedAt: now.toISOString(),
+              verifiedBy: currentAdmin.nama,
+              createdAt: now.toISOString(),
+            },
+            ...updatedSedekahList,
+          ];
+        }
+
+        const totalSimpanan = updatedPokok + updatedUmum + updatedZakat + updatedQurban;
+        const updatedMembers = prev.members.map((m) =>
+          m.id === mId
+            ? {
+                ...m,
+                saldoPokok: updatedPokok,
+                saldoUmum: updatedUmum,
+                saldoZakatFitrah: updatedZakat,
+                saldoQurban: updatedQurban,
+                totalSimpanan,
+              }
+            : m
+        );
+
+        const audit = createAuditLog(
+          currentAdmin,
+          `Input Kas Anggota [${formSubKategoriAnggota.toUpperCase()}]`,
+          `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)} untuk ${mName} (${formKeterangan || formSubKategoriAnggota})`,
+          refId
+        );
+
+        return {
+          ...prev,
+          members: updatedMembers,
+          memberTransactions: [...newTransactions, ...(prev.memberTransactions || [])],
+          kasList: [...newKasEntries, ...prev.kasList],
+          sedekahList: updatedSedekahList,
+          auditLogs: [audit, ...prev.auditLogs],
+        };
+      });
+
+      setIsInputModalOpen(false);
+      setFormNominal('');
+      setFormMemberId('');
+      setFormNamaPenerima('');
+      setFormKeterangan('');
+      alert(`✓ Transaksi Buku Kas Anggota (${formatRupiah(nominal)}) berhasil dibukukan dan saldo anggota telah disinkronkan!`);
+      return;
+    }
+
+    // Input Buku Kas Koperasi
     // Check no-minus rule: requirement 47 "Kedua Buku kas tidak bisa minus"
     if (formTipe === 'keluar' && nominal > saldoKasKoperasi) {
       alert(`Transaksi ditolak: Saldo Kas Koperasi tidak mencukupi (Tersedia: ${formatRupiah(saldoKasKoperasi)})`);
@@ -258,7 +514,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     setFormKeterangan('');
     alert(
       (isSuperAdmin || isApproval)
-        ? '✓ Transaksi kas berhasil dicatat dan disetujui!'
+        ? '✓ Transaksi kas koperasi berhasil dicatat dan disetujui!'
         : '✓ Transaksi berhasil ditulis oleh Admin Write! Dokumen masuk status MENUNGGU PERSETUJUAN (Approval) oleh Admin Approval / Super Admin.'
     );
   };
@@ -534,16 +790,29 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       const nextDeletedKasIds = Array.from(new Set([...(prev.deletedKasIds || []), deletedEntry.id]));
 
       if (deletedEntry.bukuKas !== 'anggota') {
+        const isSdkKop =
+          (deletedEntry.kategori || '').toLowerCase().includes('sedekah') ||
+          (deletedEntry.keterangan || '').toLowerCase().includes('sedekah');
+        let nextSedekahList = prev.sedekahList || [];
+        let nextDeletedSetoran = prev.deletedSetoranIds || [];
+        if (isSdkKop && deletedEntry.referensiId) {
+          nextSedekahList = nextSedekahList.filter((s) => s.id !== deletedEntry.referensiId && s.id !== deletedEntry.id);
+          nextDeletedSetoran = Array.from(new Set([...nextDeletedSetoran, deletedEntry.referensiId]));
+        }
         return {
           ...prev,
           kasList: syncedKasList,
+          sedekahList: nextSedekahList,
           deletedKasIds: nextDeletedKasIds,
+          deletedSetoranIds: nextDeletedSetoran,
         };
       }
 
       // Cari anggota yang bersangkutan berdasarkan namaPenerima atau keterangan
       const cleanPenerima = (deletedEntry.namaPenerima || '').trim().toLowerCase();
       const cleanKet = (deletedEntry.keterangan || '').trim().toLowerCase();
+      const katLower = (deletedEntry.kategori || '').toLowerCase();
+      const isSedekah = katLower.includes('sedekah') || cleanKet.includes('sedekah');
 
       const matchedMembers = prev.members.filter((m) => {
         const mName = (m.nama || '').trim().toLowerCase();
@@ -583,8 +852,33 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         updatedTransactions.push(tx);
       }
 
+      // Sinkronisasi Sedekah List jika transaksi yang dihapus merupakan donasi sedekah anggota
+      let updatedSedekahList = prev.sedekahList || [];
+      if (isSedekah) {
+        let removedSdk = false;
+        updatedSedekahList = updatedSedekahList.filter((sdk) => {
+          if (removedSdk) return true;
+          if (
+            (deletedEntry.referensiId && sdk.id === deletedEntry.referensiId) ||
+            sdk.id === deletedEntry.id ||
+            ((sdk.donaturMemberId && matchedMemberIds.has(sdk.donaturMemberId)) && sdk.nominal === deletedEntry.nominal)
+          ) {
+            removedSdk = true;
+            return false;
+          }
+          return true;
+        });
+      }
+
+      // Sinkronisasi setoranList & deletedSetoranIds
+      const nextDeletedSetoranIds = deletedEntry.referensiId
+        ? Array.from(new Set([...(prev.deletedSetoranIds || []), deletedEntry.referensiId]))
+        : (prev.deletedSetoranIds || []);
+      const nextSetoranList = deletedEntry.referensiId
+        ? (prev.setoranList || []).filter((s) => s.id !== deletedEntry.referensiId)
+        : (prev.setoranList || []);
+
       // Koreksi langsung saldo simpanan anggota sesuai kategori buku kas yang dihapus
-      const katLower = (deletedEntry.kategori || '').toLowerCase();
       const updatedMembers = prev.members.map((m) => {
         if (!matchedMemberIds.has(m.id)) return m;
 
@@ -602,12 +896,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
           else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
           else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
-          else u = Math.max(0, u - perMemberNominal);
+          else if (!isSedekah) u = Math.max(0, u - perMemberNominal);
         } else {
           if (katLower.includes('pokok')) p += perMemberNominal;
           else if (katLower.includes('qurban')) q += perMemberNominal;
           else if (katLower.includes('zakat')) z += perMemberNominal;
-          else u += perMemberNominal;
+          else if (!isSedekah) u += perMemberNominal;
         }
 
         // Rekalkulasi running saldoSetelah pada mutasi anggota tersebut
@@ -635,7 +929,10 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         members: updatedMembers,
         memberTransactions: updatedTransactions,
         kasList: syncedKasList,
+        sedekahList: updatedSedekahList,
+        setoranList: nextSetoranList,
         deletedKasIds: nextDeletedKasIds,
+        deletedSetoranIds: nextDeletedSetoranIds,
         deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...newlyDeletedTxIds])),
       };
     };
@@ -859,13 +1156,13 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveKasTab('koperasi');
+                    setFormBukuKas(activeKasTab === 'anggota' ? 'anggota' : 'koperasi');
                     setIsInputModalOpen(true);
                   }}
                   className="py-2 px-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all cursor-pointer"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  + Input Kas Koperasi
+                  + Input Transaksi Kas
                 </button>
                 <button
                   type="button"
@@ -1645,114 +1942,284 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         </div>
       )}
 
-      {/* ================= MODAL INPUT KAS KOPERASI ================= */}
+      {/* ================= MODAL INPUT TRANSAKSI KAS (KOPERASI & ANGGOTA) ================= */}
       {isInputModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl">
-            <h3 className="text-sm font-extrabold text-white mb-3 pb-2 border-b border-slate-700">
-              Input Transaksi Buku Kas Koperasi
-            </h3>
-
-            <form onSubmit={handleInputKasSubmit} className="space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-5 shadow-2xl my-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700 mb-4">
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Jenis Transaksi</label>
+                <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
+                  <PlusCircle className="w-4 h-4 text-emerald-400" />
+                  Input Transaksi Buku Kas
+                </h3>
+                <p className="text-[11px] text-slate-400">Pilih buku kas tujuan dan lengkapi rincian transaksi</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsInputModalOpen(false)}
+                className="w-7 h-7 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Tab Pilihan: Kas Koperasi vs Kas Anggota */}
+            <div className="grid grid-cols-2 gap-2 mb-4 p-1 bg-slate-900 rounded-2xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setFormBukuKas('koperasi')}
+                className={`py-2 px-3 rounded-xl text-xs font-black transition-all ${
+                  formBukuKas === 'koperasi'
+                    ? 'bg-amber-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                🏢 Kas Koperasi
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormBukuKas('anggota')}
+                className={`py-2 px-3 rounded-xl text-xs font-black transition-all ${
+                  formBukuKas === 'anggota'
+                    ? 'bg-sky-500 text-slate-950 shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                👥 Kas Anggota
+              </button>
+            </div>
+
+            <form onSubmit={handleInputKasSubmit} className="space-y-3.5 text-xs">
+              {/* Tipe Transaksi */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">Jenis Mutasi Transaksi *</label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setFormTipe('masuk')}
-                    className={`py-2 rounded-xl text-xs font-bold border ${
+                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${
                       formTipe === 'masuk'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
                         : 'bg-slate-800 border-slate-700 text-slate-400'
                     }`}
                   >
-                    + Pemasukan (CR)
+                    + {formBukuKas === 'anggota' ? 'Setoran Masuk (CR)' : 'Pemasukan Kas (CR)'}
                   </button>
                   <button
                     type="button"
                     onClick={() => setFormTipe('keluar')}
-                    className={`py-2 rounded-xl text-xs font-bold border ${
+                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${
                       formTipe === 'keluar'
-                        ? 'bg-red-500/20 border-red-500 text-red-300'
+                        ? 'bg-rose-500/20 border-rose-500 text-rose-300 shadow-sm'
                         : 'bg-slate-800 border-slate-700 text-slate-400'
                     }`}
                   >
-                    - Pengeluaran (DB)
+                    - {formBukuKas === 'anggota' ? 'Penarikan Keluar (DB)' : 'Pengeluaran Kas (DB)'}
                   </button>
                 </div>
               </div>
 
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs font-bold text-slate-300">Kategori</label>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddCatModalOpen(true)}
-                    className="text-[10px] text-amber-400 hover:underline"
+              {/* Form Khusus Buku Kas Anggota */}
+              {formBukuKas === 'anggota' ? (
+                <>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Pilih Anggota *</label>
+                    <select
+                      required
+                      value={formMemberId}
+                      onChange={(e) => {
+                        const mId = e.target.value;
+                        setFormMemberId(mId);
+                        const mem = state.members.find((m) => m.id === mId);
+                        if (mem) setFormNamaPenerima(mem.nama);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
+                    >
+                      <option value="">-- Pilih Anggota Koperasi --</option>
+                      {state.members.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.nama} ({m.nomorRekening || m.nomorAnggota || m.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">Peruntukan Transaksi *</label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormSubKategoriAnggota('pokok');
+                          const nom = (Number(formJumlahHari) || 1) * 2000;
+                          setFormNominal(String(nom));
+                        }}
+                        className={`py-2 px-1 text-center rounded-xl text-[11px] font-bold border transition-all ${
+                          formSubKategoriAnggota === 'pokok'
+                            ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                            : 'bg-slate-800 border-slate-700 text-slate-400'
+                        }`}
+                      >
+                        Pokok (50/25/25)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormSubKategoriAnggota('umum')}
+                        className={`py-2 px-1 text-center rounded-xl text-[11px] font-bold border transition-all ${
+                          formSubKategoriAnggota === 'umum'
+                            ? 'bg-sky-500/20 border-sky-500 text-sky-300'
+                            : 'bg-slate-800 border-slate-700 text-slate-400'
+                        }`}
+                      >
+                        Tabungan Bebas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormSubKategoriAnggota('sedekah')}
+                        className={`py-2 px-1 text-center rounded-xl text-[11px] font-bold border transition-all ${
+                          formSubKategoriAnggota === 'sedekah'
+                            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                            : 'bg-slate-800 border-slate-700 text-slate-400'
+                        }`}
+                      >
+                        Sedekah Berbagi
+                      </button>
+                    </div>
+                  </div>
+
+                  {formSubKategoriAnggota === 'pokok' && (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-2">
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="font-bold text-amber-300">Kelipatan Hari (Rp 2.000 / hari):</span>
+                        <span className="font-mono text-amber-400 font-extrabold">{formJumlahHari} Hari</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[1, 5, 10, 15, 30].map((hari) => (
+                          <button
+                            key={hari}
+                            type="button"
+                            onClick={() => {
+                              setFormJumlahHari(String(hari));
+                              setFormNominal(String(hari * 2000));
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                              formJumlahHari === String(hari)
+                                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                                : 'bg-slate-800 text-slate-300 border-slate-700 hover:border-amber-500/50'
+                            }`}
+                          >
+                            {hari} Hari ({formatRupiah(hari * 2000)})
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Split Breakdown Preview */}
+                      <div className="pt-2 border-t border-amber-500/20 grid grid-cols-3 gap-1.5 text-[10px] text-center">
+                        <div className="p-1.5 rounded-xl bg-slate-900/90 border border-emerald-500/20">
+                          <div className="text-slate-400">50% Pokok</div>
+                          <div className="font-mono font-bold text-emerald-400 text-xs">
+                            {formatRupiah(Math.floor((Number(formNominal) || 0) * 0.5))}
+                          </div>
+                        </div>
+                        <div className="p-1.5 rounded-xl bg-slate-900/90 border border-amber-500/20">
+                          <div className="text-slate-400">25% Qurban</div>
+                          <div className="font-mono font-bold text-amber-400 text-xs">
+                            {formatRupiah(Math.floor((Number(formNominal) || 0) * 0.25))}
+                          </div>
+                        </div>
+                        <div className="p-1.5 rounded-xl bg-slate-900/90 border border-sky-500/20">
+                          <div className="text-slate-400">25% Zakat</div>
+                          <div className="font-mono font-bold text-sky-400 text-xs">
+                            {formatRupiah(
+                              (Number(formNominal) || 0) -
+                                Math.floor((Number(formNominal) || 0) * 0.5) -
+                                Math.floor((Number(formNominal) || 0) * 0.25)
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* Form Khusus Buku Kas Koperasi */
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[11px] font-bold text-slate-300">Kategori Kas Koperasi *</label>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddCatModalOpen(true)}
+                      className="text-[10px] text-amber-400 hover:underline cursor-pointer"
+                    >
+                      + Tambah Kategori
+                    </button>
+                  </div>
+                  <select
+                    value={formKategori}
+                    onChange={(e) => setFormKategori(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                   >
-                    + Tambah Kategori
-                  </button>
+                    <option value="">Pilih Kategori</option>
+                    {(formTipe === 'masuk'
+                      ? state.categoriesKasKoperasi.pemasukan
+                      : state.categoriesKasKoperasi.pengeluaran
+                    ).map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                 </div>
-                <select
-                  value={formKategori}
-                  onChange={(e) => setFormKategori(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
-                >
-                  <option value="">Pilih Kategori</option>
-                  {(formTipe === 'masuk'
-                    ? state.categoriesKasKoperasi.pemasukan
-                    : state.categoriesKasKoperasi.pengeluaran
-                  ).map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
+              )}
 
-              {/* Input Tanggal & Jumlah (Req 1) */}
+              {/* Tanggal & Nominal */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">Tanggal Transaksi *</label>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Tanggal Transaksi *</label>
                   <input
                     type="date"
                     required
                     value={formTanggal}
                     onChange={(e) => setFormTanggal(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    Jumlah / Nominal (Rp) *
-                  </label>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Nominal (Rp) *</label>
                   <input
                     type="number"
                     required
                     min={1}
                     value={formNominal}
-                    onChange={(e) => setFormNominal(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormNominal(val);
+                      if (formBukuKas === 'anggota' && formSubKategoriAnggota === 'pokok') {
+                        setFormJumlahHari(String(Math.max(1, Math.round((Number(val) || 0) / 2000))));
+                      }
+                    }}
                     placeholder="Nominal rupiah"
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white font-mono"
                   />
                 </div>
               </div>
 
-              {/* Input Nama Penerima / Penyetor (Req 1) */}
+              {/* Penerima / Penyetor */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Nama Penerima / Pihak Pembayar / Penyetor *
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Nama Penerima / Penyetor *
                 </label>
                 <input
                   type="text"
                   required
                   value={formNamaPenerima}
                   onChange={(e) => setFormNamaPenerima(e.target.value)}
-                  placeholder={formTipe === 'masuk' ? 'Nama pihak yang menyetor' : 'Nama pihak yang menerima kas'}
+                  placeholder={formTipe === 'masuk' ? 'Nama pihak penyetor' : 'Nama pihak penerima'}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                 />
               </div>
 
+              {/* Keterangan */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Keterangan Lengkap *</label>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">Keterangan Transaksi *</label>
                 <textarea
                   required
                   rows={2}
@@ -1767,15 +2234,15 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsInputModalOpen(false)}
-                  className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold"
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs"
+                  className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs shadow-lg transition-all cursor-pointer"
                 >
-                  Simpan Transaksi
+                  {formBukuKas === 'anggota' ? 'Simpan ke Kas Anggota' : 'Simpan Transaksi Kas'}
                 </button>
               </div>
             </form>

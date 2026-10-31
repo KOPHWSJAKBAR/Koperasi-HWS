@@ -31,8 +31,11 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
-  // Transactions for this member
-  const allMemberTxs = state.memberTransactions.filter((tx) => tx.memberId === member.id);
+  // Transactions for this member (exclude deleted transactions per user instruction)
+  const deletedTxSet = new Set(state.deletedTransactionIds || []);
+  const allMemberTxs = (state.memberTransactions || []).filter(
+    (tx) => tx.memberId === member.id && !deletedTxSet.has(tx.id) && (tx as any).status !== 'deleted'
+  );
 
   // Filter based on options
   let filtered = allMemberTxs.filter((tx) => {

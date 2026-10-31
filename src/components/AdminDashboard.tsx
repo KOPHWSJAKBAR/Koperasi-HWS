@@ -339,12 +339,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const totalZakat = state.members.reduce((acc, m) => acc + m.saldoZakatFitrah, 0);
   const totalQurban = state.members.reduce((acc, m) => acc + m.saldoQurban, 0);
 
-  // Saldo Buku Kas Anggota Berjalan (Pokok 50%, Umum, Zakat Fitrah 25%, Tabungan Qurban 25%)
-  // Menyelaraskan total saldo berjalan buku kas anggota dengan seluruh simpanan anggota
-  const saldoKasAnggota = totalPokok + totalUmum + totalZakat + totalQurban;
+  // Filter out deleted kas entries
+  const deletedKasSet = new Set(state.deletedKasIds || []);
+  const activeKasList = (state.kasList || []).filter(
+    (k) => !deletedKasSet.has(k.id) && (k as any).status !== 'deleted'
+  );
 
+  // 1. Saldo Buku Kas Anggota = total transaksi dari setoran anggota yang telah diverifikasi / aktif
+  let saldoKasAnggota = 0;
+  activeKasList
+    .filter((k) => k.bukuKas === 'anggota' && k.status === 'approved')
+    .forEach((k) => {
+      if (k.tipe === 'masuk') saldoKasAnggota += k.nominal;
+      else saldoKasAnggota -= k.nominal;
+    });
+  // Sinkronisasi dengan akumulasi simpanan anggota jika kas list sedang diinisialisasi
+  if (saldoKasAnggota === 0 && (totalPokok + totalUmum + totalZakat + totalQurban > 0)) {
+    saldoKasAnggota = totalPokok + totalUmum + totalZakat + totalQurban;
+  }
+
+  // 2. Saldo Buku Kas Koperasi = total dari seluruh transaksi pada buku kas koperasi
   let saldoKasKoperasi = 0;
-  state.kasList
+  activeKasList
     .filter((k) => k.bukuKas === 'koperasi' && k.status === 'approved')
     .forEach((k) => {
       if (k.tipe === 'masuk') saldoKasKoperasi += k.nominal;
@@ -366,9 +382,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const umumSaldo = Math.max(0, allSedekah.filter((e) => e.jenis === 'sedekah_umum' && e.tipe === 'penerimaan' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0)
     - allSedekah.filter((e) => e.jenis === 'sedekah_umum' && e.tipe === 'penyaluran' && e.status === 'approved').reduce((s, e) => s + e.nominal, 0));
 
-  // User Formula: Saldo kas berjalan = Total simpanan pokok + Total tabungan umum + Dana Zakat dan Qurban + Saldo Sedekah Koperasi
+  // 3. User Formula: Saldo kas berjalan = saldo dari total buku kas anggota dan buku kas koperasi
   const totalDanaZakatQurban = totalZakat + totalQurban;
-  const saldoKasBerjalan = totalPokok + totalUmum + totalDanaZakatQurban + saldoSedekahTersedia;
+  const saldoKasBerjalan = saldoKasAnggota + saldoKasKoperasi;
 
   // Pending deposits count
   const pendingDepositsCount = state.setoranList.filter((s) => s.status === 'pending').length;
@@ -1179,9 +1195,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
                 <div
                   className="text-[10px] text-slate-400 mt-1 truncate"
-                  title={`Simpanan Pokok: ${formatRupiah(totalPokok)} + Tabungan Umum: ${formatRupiah(totalUmum)} + Zakat & Qurban: ${formatRupiah(totalDanaZakatQurban)} + Sedekah: ${formatRupiah(saldoSedekahTersedia)}`}
+                  title={`Buku Kas Anggota: ${formatRupiah(saldoKasAnggota)} + Buku Kas Koperasi: ${formatRupiah(saldoKasKoperasi)}`}
                 >
-                  Pokok + Umum + Zakat/Qurban + Sedekah
+                  Kas Anggota ({formatRupiah(saldoKasAnggota)}) + Kas Koperasi ({formatRupiah(saldoKasKoperasi)})
                 </div>
               </div>
 
