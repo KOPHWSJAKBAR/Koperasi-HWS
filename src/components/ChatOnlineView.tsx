@@ -239,6 +239,30 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     }));
   };
 
+  // Mark all chat messages as read (Req: Hilangkan notifikasi chat setelah dibaca)
+  const handleMarkAllChatRead = async () => {
+    try {
+      await fetch('/api/chat/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          markAll: true,
+          readBy: isMember ? 'member' : 'admin',
+          memberId: isMember ? currentMember.id : undefined,
+        }),
+      });
+    } catch {}
+
+    await updateState((prev) => ({
+      ...prev,
+      chatMessages: prev.chatMessages.map((m) => ({
+        ...m,
+        isReadByAdmin: isMember ? m.isReadByAdmin : true,
+        isReadByMember: isMember ? (m.memberId === currentMember.id ? true : m.isReadByMember) : m.isReadByMember,
+      })),
+    }));
+  };
+
   // Download Chat Transcript of Current Member
   const handleDownloadCurrentTranscript = () => {
     if (!activeMember) return;
@@ -474,12 +498,23 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             </div>
           </div>
 
-          {/* Admin Download Chat Transcript Menu */}
-          {!isMember && (
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowDownloadMenu(!showDownloadMenu)}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleMarkAllChatRead}
+              className="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-sky-300 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-700 transition-all shadow-sm cursor-pointer"
+              title="Tandai semua pesan chat sudah dibaca (hilangkan notifikasi)"
+            >
+              <CheckCheck className="w-3.5 h-3.5 text-sky-400" />
+              <span className="hidden sm:inline">Tandai Dibaca</span>
+            </button>
+
+            {/* Admin Download Chat Transcript Menu */}
+            {!isMember && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowDownloadMenu(!showDownloadMenu)}
                 className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-500/30 transition-all shadow-sm cursor-pointer active:scale-95"
                 title="Unduh Riwayat Chat"
               >
@@ -537,6 +572,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             </div>
           )}
         </div>
+      </div>
 
         {/* Message Bubble List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">

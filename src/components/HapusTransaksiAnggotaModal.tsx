@@ -47,7 +47,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
 
   const [selectedWilayah, setSelectedWilayah] = useState<WilayahKoperasi | 'semua'>(initialWilayah);
   const [selectedMemberId, setSelectedMemberId] = useState<string>(initialMemberId);
-  const [resetBalance, setResetBalance] = useState<boolean>(true);
+  const [resetBalance, setResetBalance] = useState<boolean>(() => (initialTxId ? false : true));
   const [adminPassword, setAdminPassword] = useState<string>('');
   const [alasan, setAlasan] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
@@ -363,10 +363,14 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
         }));
 
+        const nextDeletedSetoranIds = Array.from(deletedRefIds);
+        const remainingSetoran = (prev.setoranList || []).filter((s) => !deletedRefIds.has(s.id) && !targetIdsSet.has(s.id));
+        const remainingSedekah = (prev.sedekahList || []).filter((s) => !deletedRefIds.has(s.id) && !targetIdsSet.has(s.id));
+
         const audit = createAuditLog(
           currentAdmin,
           'Hapus Transaksi Anggota',
-          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan, mutasi & Buku Kas Anggota berhasil disinkronkan.`
+          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan, mutasi, Buku Kas Anggota & setoran berhasil disinkronkan.`
         );
 
         return {
@@ -374,8 +378,11 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           members: updatedMembers,
           memberTransactions: remainingTx,
           kasList: remainingKas,
+          setoranList: remainingSetoran,
+          sedekahList: remainingSedekah,
           deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...activeSelectedIds])),
           deletedKasIds: Array.from(new Set([...(prev.deletedKasIds || []), ...nextDeletedKasIds])),
+          deletedSetoranIds: Array.from(new Set([...(prev.deletedSetoranIds || []), ...nextDeletedSetoranIds])),
           auditLogs: [audit, ...prev.auditLogs],
         };
       });

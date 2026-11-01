@@ -1140,57 +1140,72 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
 
             {/* Top 5 Stat Cards Grid: Simpanan Pokok, Tabungan Umum, Zakat & Qurban, Kas Berjalan, dan Saldo Sedekah Koperasi */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
               {/* 1. Total Simpanan Pokok */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 shadow-xl">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block">
+              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block truncate">
                   TOTAL SIMPANAN POKOK
                 </span>
-                <div className="text-2xl sm:text-3xl font-black text-[#f59e0b] mt-1.5">
+                <div
+                  className="text-base sm:text-xl lg:text-sm xl:text-base 2xl:text-xl font-black text-[#f59e0b] mt-1.5 truncate tracking-tight"
+                  title={formatRupiah(totalPokok)}
+                >
                   {formatRupiah(totalPokok)}
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1">
+                <div className="text-[10px] text-slate-400 mt-1 truncate" title="Rp1.000 / hari • Terkunci oleh Admin">
                   Rp1.000 / hari • Terkunci oleh Admin
                 </div>
               </div>
 
               {/* 2. Total Tabungan Umum */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 shadow-xl">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block">
+              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block truncate">
                   TOTAL TABUNGAN UMUM
                 </span>
-                <div className="text-2xl sm:text-3xl font-black text-sky-400 mt-1.5">
+                <div
+                  className="text-base sm:text-xl lg:text-sm xl:text-base 2xl:text-xl font-black text-sky-400 mt-1.5 truncate tracking-tight"
+                  title={formatRupiah(totalUmum)}
+                >
                   {formatRupiah(totalUmum)}
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1">
+                <div className="text-[10px] text-slate-400 mt-1 truncate" title="Bisa setor & tarik kapan saja">
                   Bisa setor & tarik kapan saja
                 </div>
               </div>
 
               {/* 3. Dana Zakat & Qurban */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 shadow-xl">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block">
+              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block truncate">
                   DANA ZAKAT & QURBAN
                 </span>
-                <div className="text-2xl sm:text-3xl font-black text-emerald-400 mt-1.5">
+                <div
+                  className="text-base sm:text-xl lg:text-sm xl:text-base 2xl:text-xl font-black text-emerald-400 mt-1.5 truncate tracking-tight"
+                  title={formatRupiah(totalZakat + totalQurban)}
+                >
                   {formatRupiah(totalZakat + totalQurban)}
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1">
+                <div
+                  className="text-[10px] text-slate-400 mt-1 truncate"
+                  title={`Fitrah: ${formatRupiah(totalZakat)} • Qurban: ${formatRupiah(totalQurban)}`}
+                >
                   Fitrah: {formatRupiah(totalZakat)} • Qurban: {formatRupiah(totalQurban)}
                 </div>
               </div>
 
               {/* 4. Saldo Kas Berjalan (User Req: Total simpanan pokok + Total tabungan umum + Dana Zakat dan Qurban + Saldo Sedekah Koperasi) */}
-              <div className="bg-[#0d1424] border border-emerald-500/40 rounded-3xl p-5 shadow-xl">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] sm:text-xs text-emerald-400 font-bold uppercase tracking-wider block">
+              <div className="bg-[#0d1424] border border-emerald-500/40 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] sm:text-xs text-emerald-400 font-bold uppercase tracking-wider block truncate">
                     SALDO KAS BERJALAN
                   </span>
-                  <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full border border-emerald-500/30">
+                  <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.5 rounded-full border border-emerald-500/30 shrink-0">
                     Konsolidasi
                   </span>
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-white mt-1.5 font-mono">
+                <div
+                  className="text-base sm:text-xl lg:text-sm xl:text-base 2xl:text-xl font-black text-white mt-1.5 font-mono truncate tracking-tight"
+                  title={formatRupiah(saldoKasBerjalan)}
+                >
                   {formatRupiah(saldoKasBerjalan)}
                 </div>
                 <div
@@ -1207,21 +1222,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setBerbagiInitialTab('laporan');
                   setShowBerbagiModal(true);
                 }}
-                className="bg-gradient-to-br from-[#0d1424] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-3xl p-5 shadow-xl cursor-pointer transition-all hover:scale-[1.02] group"
+                className="bg-gradient-to-br from-[#0d1424] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-3xl p-4 sm:p-5 shadow-xl cursor-pointer transition-all hover:scale-[1.02] group min-w-0 overflow-hidden flex flex-col justify-between"
                 title="Buka Menu Berbagi / Penyaluran Sedekah Koperasi"
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] sm:text-xs text-rose-300 font-bold uppercase tracking-wider block">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] sm:text-xs text-rose-300 font-bold uppercase tracking-wider block truncate">
                     SALDO SEDEKAH KOPERASI
                   </span>
-                  <Heart className="w-4 h-4 text-rose-400 fill-rose-400/20 group-hover:scale-110 transition-transform" />
+                  <Heart className="w-4 h-4 text-rose-400 fill-rose-400/20 group-hover:scale-110 transition-transform shrink-0" />
                 </div>
-                <div className="text-2xl sm:text-3xl font-black text-rose-400 mt-1.5 font-mono">
+                <div
+                  className="text-base sm:text-xl lg:text-sm xl:text-base 2xl:text-xl font-black text-rose-400 mt-1.5 font-mono truncate tracking-tight"
+                  title={formatRupiah(saldoSedekahTersedia)}
+                >
                   {formatRupiah(saldoSedekahTersedia)}
                 </div>
-                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-between">
-                  <span>Masuk: {formatRupiah(totalSedekahMasuk)}</span>
-                  <span className="text-rose-400 font-bold underline group-hover:text-rose-300">Kelola ›</span>
+                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-between gap-1 truncate">
+                  <span className="truncate">Masuk: {formatRupiah(totalSedekahMasuk)}</span>
+                  <span className="text-rose-400 font-bold underline group-hover:text-rose-300 shrink-0">Kelola ›</span>
                 </div>
               </div>
             </div>

@@ -1,10 +1,22 @@
-export type WilayahKoperasi = 'Cengkareng' | 'Kalideres' | 'Kembangan' | 'Kebon Jeruk';
+export type WilayahKoperasi =
+  | 'Cengkareng'
+  | 'Kalideres'
+  | 'Kembangan'
+  | 'Kebon Jeruk'
+  | 'Grogol Petamburan'
+  | 'Palmerah'
+  | 'Taman Sari'
+  | 'Tambora';
 
 export const WILAYAH_CODE_MAP: Record<WilayahKoperasi, string> = {
-  Kalideres: '76',
   Cengkareng: '77',
+  Kalideres: '76',
   Kembangan: '78',
   'Kebon Jeruk': '79',
+  'Grogol Petamburan': '75',
+  Palmerah: '74',
+  'Taman Sari': '73',
+  Tambora: '72',
 };
 
 export const WILAYAH_ABBR_MAP: Record<WilayahKoperasi, string> = {
@@ -12,6 +24,10 @@ export const WILAYAH_ABBR_MAP: Record<WilayahKoperasi, string> = {
   Kalideres: 'KLD',
   Kembangan: 'KMB',
   'Kebon Jeruk': 'KBJ',
+  'Grogol Petamburan': 'GPT',
+  Palmerah: 'PLM',
+  'Taman Sari': 'TMS',
+  Tambora: 'TMB',
 };
 
 export interface BankAccount {
@@ -382,6 +398,7 @@ export interface AppState {
   deletedAdminIds?: string[];
   deletedKasIds?: string[];
   deletedSetoranIds?: string[];
+  usedAccountNumbers?: string[]; // Rekening yang pernah dipakai tidak dapat digunakan kembali
 }
 
 

@@ -104,6 +104,12 @@ const getInitialState = () => ({
     },
   ],
   members: [],
+  deletedAdminIds: [],
+  deletedMemberIds: [],
+  deletedTransactionIds: [],
+  deletedKasIds: [],
+  deletedSetoranIds: [],
+  usedAccountNumbers: [],
   setoranList: [],
   memberTransactions: [],
   kasList: [],
@@ -489,6 +495,12 @@ function mergeServerState(current: any, incoming: any): any {
       : current.pengaturanBerbagi?.qrisImageUrl,
   };
 
+  const allUsedAccountNumbers = new Set<string>([
+    ...(current.usedAccountNumbers || []),
+    ...(incoming.usedAccountNumbers || []),
+    ...mergedMembers.map((m: any) => m.nomorRekening).filter(Boolean),
+  ]);
+
   return {
     ...current,
     ...incoming,
@@ -500,6 +512,7 @@ function mergeServerState(current: any, incoming: any): any {
     deletedTransactionIds: mergedDeletedTxIds,
     deletedKasIds: mergedDeletedKasIds,
     deletedSetoranIds: mergedDeletedSetoranIds,
+    usedAccountNumbers: Array.from(allUsedAccountNumbers),
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
@@ -2035,6 +2048,14 @@ async function startServer() {
       const targetMem = (currentState.members || []).find((m: any) => m.id === id);
       currentState.members = (currentState.members || []).filter((m: any) => m.id !== id);
 
+      // Permanently retain deleted member account number in usedAccountNumbers to ensure anti-reuse rule
+      if (targetMem?.nomorRekening) {
+        currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
+        if (!currentState.usedAccountNumbers.includes(targetMem.nomorRekening)) {
+          currentState.usedAccountNumbers.push(targetMem.nomorRekening);
+        }
+      }
+
       // Record in deletedMemberIds so deleted members are never accidentally resurrected by incoming sync
       currentState.deletedMemberIds = currentState.deletedMemberIds || [];
       if (!currentState.deletedMemberIds.includes(id)) {
@@ -2096,6 +2117,14 @@ async function startServer() {
         };
       } else {
         currentState.members.push(member);
+      }
+
+      // Record nomorRekening in usedAccountNumbers to prevent reuse
+      if (member.nomorRekening) {
+        currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
+        if (!currentState.usedAccountNumbers.includes(member.nomorRekening)) {
+          currentState.usedAccountNumbers.push(member.nomorRekening);
+        }
       }
 
       if (nextRunningNumber) {
@@ -2629,13 +2658,17 @@ async function startServer() {
       let removedCount = 0;
       const affectedMemberIdSet = new Set<string>();
       currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
+      currentState.deletedKasIds = currentState.deletedKasIds || [];
+      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
       const newlyDeletedIds: string[] = [];
+      const deletedTxs: any[] = [];
 
       if (Array.isArray(transactionIds) && transactionIds.length > 0) {
         const idSet = new Set(transactionIds);
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (idSet.has(tx.id)) {
             removedCount++;
+            deletedTxs.push(tx);
             newlyDeletedIds.push(tx.id);
             if (tx.memberId) affectedMemberIdSet.add(tx.memberId);
             return false;
@@ -2647,6 +2680,7 @@ async function startServer() {
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (tx.memberId === memberId) {
             removedCount++;
+            deletedTxs.push(tx);
             newlyDeletedIds.push(tx.id);
             return false;
           }
@@ -2660,6 +2694,7 @@ async function startServer() {
         currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
           if (memberIdsInWilayah.has(tx.memberId)) {
             removedCount++;
+            deletedTxs.push(tx);
             newlyDeletedIds.push(tx.id);
             return false;
           }
@@ -2667,6 +2702,7 @@ async function startServer() {
         });
       } else {
         removedCount = (currentState.memberTransactions || []).length;
+        deletedTxs.push(...(currentState.memberTransactions || []));
         (currentState.memberTransactions || []).forEach((tx: any) => newlyDeletedIds.push(tx.id));
         (currentState.members || []).forEach((m: any) => affectedMemberIdSet.add(m.id));
         currentState.memberTransactions = [];
@@ -2677,6 +2713,100 @@ async function startServer() {
           currentState.deletedTransactionIds.push(id);
         }
       });
+
+      // 1. SINKRONISASI BUKU KAS & SETORAN PADA PENGHAPUSAN TRANSAKSI
+      const deletedRefIds = new Set<string>();
+      const deletedTxIdSet = new Set<string>(newlyDeletedIds);
+      const deletedTsTokens = new Set<string>();
+
+      deletedTxs.forEach((tx: any) => {
+        if (tx.referensiId) {
+          deletedRefIds.add(tx.referensiId);
+          if (!currentState.deletedSetoranIds.includes(tx.referensiId)) {
+            currentState.deletedSetoranIds.push(tx.referensiId);
+          }
+          const depTxId = `tx-dep-${tx.referensiId}`;
+          if (!currentState.deletedTransactionIds.includes(depTxId)) {
+            currentState.deletedTransactionIds.push(depTxId);
+          }
+        }
+        const tsMatch = String(tx.id).match(/(\d{10,})/);
+        if (tsMatch) {
+          deletedTsTokens.add(tsMatch[1]);
+        }
+      });
+
+      // Hapus setoran terkait agar tidak membangkitkan transaksi kembali
+      if (deletedRefIds.size > 0 || deletedTxIdSet.size > 0) {
+        currentState.setoranList = (currentState.setoranList || []).filter((s: any) => {
+          if (deletedRefIds.has(s.id) || deletedTxIdSet.has(s.id)) {
+            if (!currentState.deletedSetoranIds.includes(s.id)) {
+              currentState.deletedSetoranIds.push(s.id);
+            }
+            return false;
+          }
+          return true;
+        });
+      }
+
+      // Hapus sedekah terkait jika ada
+      currentState.sedekahList = (currentState.sedekahList || []).filter((sdk: any) => {
+        if (deletedRefIds.has(sdk.id) || deletedTxIdSet.has(sdk.id)) {
+          return false;
+        }
+        return true;
+      });
+
+      // Hapus transaksi pada Buku Kas Anggota dan Buku Kas Koperasi yang berkorespondensi
+      const newlyDeletedKasIds: string[] = [];
+      currentState.kasList = (currentState.kasList || []).filter((k: any) => {
+        if (deletedTxIdSet.has(k.id)) {
+          newlyDeletedKasIds.push(k.id);
+          return false;
+        }
+        if (k.referensiId && (deletedRefIds.has(k.referensiId) || deletedTxIdSet.has(k.referensiId))) {
+          newlyDeletedKasIds.push(k.id);
+          return false;
+        }
+        const kTsMatch = String(k.id).match(/(\d{10,})/);
+        if (kTsMatch && deletedTsTokens.has(kTsMatch[1])) {
+          newlyDeletedKasIds.push(k.id);
+          return false;
+        }
+        return true;
+      });
+
+      newlyDeletedKasIds.forEach((id) => {
+        if (!currentState.deletedKasIds.includes(id)) {
+          currentState.deletedKasIds.push(id);
+        }
+      });
+
+      // Recompute running saldoKasSetelah pada buku kas anggota & koperasi
+      const recomputeKas = (type: string) => {
+        const items = (currentState.kasList || [])
+          .filter((k: any) => k.bukuKas === type && !currentState.deletedKasIds.includes(k.id))
+          .slice()
+          .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+        let run = 0;
+        const map = new Map<string, number>();
+        items.forEach((it: any) => {
+          if (it.status === 'approved') {
+            run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+          }
+          map.set(it.id, run);
+        });
+        return map;
+      };
+      const mapAng = recomputeKas('anggota');
+      const mapKop = recomputeKas('koperasi');
+      currentState.kasList = (currentState.kasList || []).map((k: any) => ({
+        ...k,
+        saldoKasSetelah:
+          k.bukuKas === 'anggota'
+            ? (mapAng.get(k.id) ?? k.saldoKasSetelah)
+            : (mapKop.get(k.id) ?? k.saldoKasSetelah),
+      }));
 
       // Helper untuk rekalkulasi saldo dan running balance mutasi anggota
       const syncMemberBalancesAndRunningHistory = (affectedMemberIds: string[], forceZero: boolean) => {
@@ -2699,20 +2829,46 @@ async function startServer() {
             let p = 0, u = 0, z = 0, q = 0, run = 0;
             mTx.forEach((tx: any) => {
               const nom = tx.nominal || 0;
+              const isKewajibanSplit =
+                tx.kategori === 'pokok' ||
+                String(tx.id).startsWith('tx-wajib-') ||
+                String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+                String(tx.keterangan || '').includes('50% Pokok');
+
               if (tx.tipe === 'masuk') {
+                if (isKewajibanSplit) {
+                  const pPart = Math.floor(nom * 0.5);
+                  const qPart = Math.floor(nom * 0.25);
+                  const zPart = nom - pPart - qPart;
+                  p += pPart;
+                  q += qPart;
+                  z += zPart;
+                } else if (tx.kategori === 'qurban') {
+                  q += nom;
+                } else if (tx.kategori === 'zakat') {
+                  z += nom;
+                } else {
+                  u += nom;
+                }
                 run += nom;
-                if (tx.kategori === 'pokok') p += nom;
-                else if (tx.kategori === 'qurban') q += nom;
-                else if (tx.kategori === 'zakat') z += nom;
-                else u += nom;
               } else {
+                if (isKewajibanSplit) {
+                  const pPart = Math.floor(nom * 0.5);
+                  const qPart = Math.floor(nom * 0.25);
+                  const zPart = nom - pPart - qPart;
+                  p = Math.max(0, p - pPart);
+                  q = Math.max(0, q - qPart);
+                  z = Math.max(0, z - zPart);
+                } else if (tx.kategori === 'qurban') {
+                  q = Math.max(0, q - nom);
+                } else if (tx.kategori === 'zakat') {
+                  z = Math.max(0, z - nom);
+                } else {
+                  u = Math.max(0, u - nom);
+                }
                 run = Math.max(0, run - nom);
-                if (tx.kategori === 'pokok') p = Math.max(0, p - nom);
-                else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
-                else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
-                else u = Math.max(0, u - nom);
               }
-              tx.saldoSetelah = run;
+              tx.saldoSetelah = p + u;
             });
 
             mem.saldoPokok = p;
@@ -2746,10 +2902,11 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Hapus Transaksi Anggota',
-        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Alasan: "${alasan || 'Koreksi transaksi mutasi'}". Saldo & mutasi rekening disinkronkan otomatis.`,
+        detail: `Super Admin menyetujui penghapusan ${removedCount} transaksi anggota (Wilayah: ${wilayah || 'Semua'}, Anggota: ${memberId || 'Semua'}). Alasan: "${alasan || 'Koreksi transaksi mutasi'}". Saldo & mutasi rekening serta Buku Kas Anggota disinkronkan otomatis.`,
       });
 
       saveDatabase(currentState);
+      broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: newlyDeletedIds, affectedMemberIds: affectedIds });
       broadcastEvent('STATE_UPDATED', currentState);
       res.json({ success: true, removedCount, state: currentState });
     } catch (err: any) {
@@ -2797,6 +2954,68 @@ async function startServer() {
         currentState.deletedTransactionIds.push(deletedTx.id);
       }
 
+      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
+      currentState.deletedKasIds = currentState.deletedKasIds || [];
+
+      // If tx had referensiId, also remove deposit and any derived tx id
+      if (deletedTx.referensiId) {
+        if (!currentState.deletedSetoranIds.includes(deletedTx.referensiId)) {
+          currentState.deletedSetoranIds.push(deletedTx.referensiId);
+        }
+        currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== deletedTx.referensiId);
+        currentState.sedekahList = (currentState.sedekahList || []).filter((sdk: any) => sdk.id !== deletedTx.referensiId);
+        const depTxId = `tx-dep-${deletedTx.referensiId}`;
+        if (!currentState.deletedTransactionIds.includes(depTxId)) {
+          currentState.deletedTransactionIds.push(depTxId);
+        }
+      }
+
+      // Remove corresponding Buku Kas entry
+      const tsMatch = String(deletedTx.id).match(/(\d{10,})/);
+      const tsToken = tsMatch ? tsMatch[1] : '';
+
+      currentState.kasList = (currentState.kasList || []).filter((k: any) => {
+        if (k.id === deletedTx.id) {
+          if (!currentState.deletedKasIds.includes(k.id)) currentState.deletedKasIds.push(k.id);
+          return false;
+        }
+        if (deletedTx.referensiId && (k.referensiId === deletedTx.referensiId || k.id === deletedTx.referensiId)) {
+          if (!currentState.deletedKasIds.includes(k.id)) currentState.deletedKasIds.push(k.id);
+          return false;
+        }
+        if (tsToken && String(k.id).includes(tsToken)) {
+          if (!currentState.deletedKasIds.includes(k.id)) currentState.deletedKasIds.push(k.id);
+          return false;
+        }
+        return true;
+      });
+
+      // Recompute running saldoKasSetelah pada buku kas
+      const recomputeKas = (type: string) => {
+        const items = (currentState.kasList || [])
+          .filter((k: any) => k.bukuKas === type && !currentState.deletedKasIds.includes(k.id))
+          .slice()
+          .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+        let run = 0;
+        const map = new Map<string, number>();
+        items.forEach((it: any) => {
+          if (it.status === 'approved') {
+            run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+          }
+          map.set(it.id, run);
+        });
+        return map;
+      };
+      const mapAng = recomputeKas('anggota');
+      const mapKop = recomputeKas('koperasi');
+      currentState.kasList = (currentState.kasList || []).map((k: any) => ({
+        ...k,
+        saldoKasSetelah:
+          k.bukuKas === 'anggota'
+            ? (mapAng.get(k.id) ?? k.saldoKasSetelah)
+            : (mapKop.get(k.id) ?? k.saldoKasSetelah),
+      }));
+
       // Hitung dan sesuaikan kembali saldo simpanan & running history anggota terkait
       const member = (currentState.members || []).find((m: any) => m.id === targetMemberId);
       if (member) {
@@ -2807,20 +3026,46 @@ async function startServer() {
         let p = 0, u = 0, z = 0, q = 0, run = 0;
         mTx.forEach((tx: any) => {
           const nom = tx.nominal || 0;
+          const isKewajibanSplit =
+            tx.kategori === 'pokok' ||
+            String(tx.id).startsWith('tx-wajib-') ||
+            String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+            String(tx.keterangan || '').includes('50% Pokok');
+
           if (tx.tipe === 'masuk') {
+            if (isKewajibanSplit) {
+              const pPart = Math.floor(nom * 0.5);
+              const qPart = Math.floor(nom * 0.25);
+              const zPart = nom - pPart - qPart;
+              p += pPart;
+              q += qPart;
+              z += zPart;
+            } else if (tx.kategori === 'qurban') {
+              q += nom;
+            } else if (tx.kategori === 'zakat') {
+              z += nom;
+            } else {
+              u += nom;
+            }
             run += nom;
-            if (tx.kategori === 'pokok') p += nom;
-            else if (tx.kategori === 'qurban') q += nom;
-            else if (tx.kategori === 'zakat') z += nom;
-            else u += nom;
           } else {
+            if (isKewajibanSplit) {
+              const pPart = Math.floor(nom * 0.5);
+              const qPart = Math.floor(nom * 0.25);
+              const zPart = nom - pPart - qPart;
+              p = Math.max(0, p - pPart);
+              q = Math.max(0, q - qPart);
+              z = Math.max(0, z - zPart);
+            } else if (tx.kategori === 'qurban') {
+              q = Math.max(0, q - nom);
+            } else if (tx.kategori === 'zakat') {
+              z = Math.max(0, z - nom);
+            } else {
+              u = Math.max(0, u - nom);
+            }
             run = Math.max(0, run - nom);
-            if (tx.kategori === 'pokok') p = Math.max(0, p - nom);
-            else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
-            else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
-            else u = Math.max(0, u - nom);
           }
-          tx.saldoSetelah = run;
+          tx.saldoSetelah = p + u;
         });
 
         member.saldoPokok = p;
@@ -2838,10 +3083,11 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Hapus Mutasi Anggota',
-        detail: `Super Admin menghapus 1 mutasi transaksi [${deletedTx.tanggal} ${deletedTx.keterangan || ''} - Rp ${deletedTx.nominal}] untuk anggota ${member?.nama || deletedTx.memberId}.`,
+        detail: `Super Admin menghapus 1 mutasi transaksi [${deletedTx.tanggal} ${deletedTx.keterangan || ''} - Rp ${deletedTx.nominal}] untuk anggota ${member?.nama || deletedTx.memberId}. Buku Kas Anggota & saldo tersinkronisasi.`,
       });
 
       saveDatabase(currentState);
+      broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: [deletedTx.id], affectedMemberIds: [targetMemberId] });
       broadcastEvent('STATE_UPDATED', currentState);
       res.json({ success: true, deletedTx, state: currentState });
     } catch (err: any) {

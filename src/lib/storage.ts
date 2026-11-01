@@ -165,6 +165,7 @@ const defaultInitialState: AppState = {
     namaPemilikRekening: 'Koperasi Berbagi Mandiri HWS',
     qrisImageUrl: '',
   },
+  usedAccountNumbers: [],
 };
 
 let globalState: AppState = (() => {
@@ -386,7 +387,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  // 3. Chat Messages (Preserve all messages & attachments - PERMANENT)
+  // 3. Chat Messages (Preserve all messages & attachments - PERMANENT, read status monotonic)
   const chatMap = new Map<string, ChatMessage>();
   (base.chatMessages || []).forEach((c) => chatMap.set(c.id, { ...c }));
   (incoming.chatMessages || []).forEach((c) => {
@@ -398,6 +399,8 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         ...existing,
         ...c,
         lampiranUrl: c.lampiranUrl || existing.lampiranUrl,
+        isReadByAdmin: Boolean(existing.isReadByAdmin || c.isReadByAdmin),
+        isReadByMember: Boolean(existing.isReadByMember || c.isReadByMember),
       });
     }
   });
@@ -647,6 +650,14 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     deletedKasIds: Array.from(allDeletedKasIds),
     deletedSetoranIds: Array.from(allDeletedSetoranIds),
     deletedAdminIds: Array.from(allDeletedAdminIds),
+    usedAccountNumbers: Array.from(
+      new Set([
+        ...(base.usedAccountNumbers || []),
+        ...(incoming.usedAccountNumbers || []),
+        ...(base.members || []).map((m) => m?.nomorRekening).filter(Boolean),
+        ...(incoming.members || []).map((m) => m?.nomorRekening).filter(Boolean),
+      ])
+    ),
     serverSyncStatus: {
       online: true,
       lastSynced: new Date().toISOString(),
@@ -1612,6 +1623,30 @@ export function useKoperasiState() {
               const s = data.payload?.surat;
               triggerBrowserNotification('📬 Surat Baru Koperasi HWS', s?.perihal || 'Ada surat masuk baru');
               window.dispatchEvent(new CustomEvent('hws:new_surat', { detail: data.payload }));
+            } else if (data.type === 'CHAT_READ') {
+              const p = data.payload;
+              if (p) {
+                globalState = {
+                  ...globalState,
+                  chatMessages: globalState.chatMessages.map((m) => {
+                    const matches = p.markAll ? true : p.memberId ? m.memberId === p.memberId : false;
+                    if (matches) {
+                      return {
+                        ...m,
+                        isReadByAdmin: p.readBy === 'admin' ? true : m.isReadByAdmin,
+                        isReadByMember: p.readBy === 'member' ? true : m.isReadByMember,
+                      };
+                    }
+                    return m;
+                  }),
+                };
+                try {
+                  localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+                } catch {}
+                notifyListeners();
+              }
+            } else if (data.type === 'SURAT_READ' || data.type === 'TRANSACTIONS_DELETED' || data.type === 'KAS_DELETED') {
+              fetchStateFromServer();
             }
           } catch (e) {
             console.error('Error handling SSE event', e);
@@ -1961,20 +1996,47 @@ export function formatRupiah(amount: number): string {
   }).format(amount || 0);
 }
 
-// Helper: Generate 10-digit Account Number
-// 2 digit wilayah + 3 digit belakang no hp + 5 digit running number dimulai dari 66666
+// Helper: Generate 10-digit Account Number sesuai ketentuan wilayah & anti-reuse
+// 2 digit kode wilayah + 3 digit belakang no hp + 5 digit running number unik
+// Nomor rekening yang sudah dipergunakan tidak dapat dipergunakan kembali
 export function generateNomorRekening(
   wilayah: WilayahKoperasi,
   noHp: string,
-  lastRunningNumber: number
-): { nomorRekening: string; nextRunningNumber: number } {
+  lastRunningNumber: number,
+  usedAccountNumbers?: string[] | Set<string>,
+  existingMembers?: MemberUser[]
+): { nomorRekening: string; nextRunningNumber: number; usedAccountNumbers: string[] } {
   const kodeWilayah = WILAYAH_CODE_MAP[wilayah] || '77';
   const cleanHp = (noHp || '').replace(/\D/g, '');
   const hp3 = cleanHp.slice(-3).padStart(3, '0');
-  const running = (lastRunningNumber || 66666) + 1;
-  const running5 = String(running).slice(-5).padStart(5, '6');
-  const nomorRekening = `${kodeWilayah}${hp3}${running5}`;
-  return { nomorRekening, nextRunningNumber: running };
+
+  // Kumpulkan seluruh nomor rekening yang pernah dipergunakan (anti-reuse)
+  const usedSet = new Set<string>();
+  if (Array.isArray(usedAccountNumbers)) {
+    usedAccountNumbers.forEach((r) => r && usedSet.add(String(r).trim()));
+  } else if (usedAccountNumbers instanceof Set) {
+    usedAccountNumbers.forEach((r) => r && usedSet.add(String(r).trim()));
+  }
+  (globalState.usedAccountNumbers || []).forEach((r) => r && usedSet.add(String(r).trim()));
+  (globalState.members || []).forEach((m) => m?.nomorRekening && usedSet.add(String(m.nomorRekening).trim()));
+  if (Array.isArray(existingMembers)) {
+    existingMembers.forEach((m) => m?.nomorRekening && usedSet.add(String(m.nomorRekening).trim()));
+  }
+
+  let running = (lastRunningNumber || 66666) + 1;
+  let candidate = `${kodeWilayah}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
+
+  // Loop hingga kandidat rekening benar-benar belum pernah dipergunakan
+  while (usedSet.has(candidate)) {
+    running++;
+    candidate = `${kodeWilayah}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
+  }
+
+  usedSet.add(candidate);
+  const updatedUsedList = Array.from(usedSet);
+  globalState.usedAccountNumbers = updatedUsedList;
+
+  return { nomorRekening: candidate, nextRunningNumber: running, usedAccountNumbers: updatedUsedList };
 }
 
 // Helper: Generate Official Member Number (e.g. HWS-CKR-2026-001)
