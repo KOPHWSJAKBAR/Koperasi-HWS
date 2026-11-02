@@ -178,6 +178,21 @@ let globalState: AppState = (() => {
 
 const listeners = new Set<(state: AppState) => void>();
 let debounceNotifyTimer: any = null;
+let serverPushTimer: any = null;
+
+function scheduleDebouncedServerPush(delay = 1500) {
+  if (typeof window === 'undefined') return;
+  if (serverPushTimer) clearTimeout(serverPushTimer);
+  serverPushTimer = setTimeout(() => {
+    try {
+      fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(globalState),
+      }).catch(() => {});
+    } catch {}
+  }, delay);
+}
 
 function notifyListeners() {
   if (debounceNotifyTimer) {
@@ -189,7 +204,7 @@ function notifyListeners() {
   }
 }
 
-export function scheduleDebouncedNotify(delay = 120) {
+export function scheduleDebouncedNotify(delay = 120, pushToServer = true) {
   if (debounceNotifyTimer) {
     clearTimeout(debounceNotifyTimer);
   }
@@ -200,6 +215,9 @@ export function scheduleDebouncedNotify(delay = 120) {
     } catch {}
     for (const listener of listeners) {
       listener({ ...globalState });
+    }
+    if (pushToServer) {
+      scheduleDebouncedServerPush(1500);
     }
   }, delay);
 }
@@ -643,6 +661,10 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
     pengaturanBerbagi,
+    categoriesKasKoperasi: incoming.categoriesKasKoperasi && Object.keys(incoming.categoriesKasKoperasi).length > 0
+      ? incoming.categoriesKasKoperasi
+      : (base.categoriesKasKoperasi || {}),
+    maintenanceLock: incoming.maintenanceLock || base.maintenanceLock || { isLocked: false },
     auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     lastRunningNumber: Math.max(base.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
     deletedMemberIds: Array.from(allDeletedMemIds),
@@ -937,16 +959,42 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     if (!acc) return;
 
     const nom = Number(tx.nominal) || 0;
+    const isKewajibanSplit =
+      tx.kategori === 'pokok' ||
+      String(tx.id).startsWith('tx-wajib-') ||
+      String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+      String(tx.keterangan || '').includes('50% Pokok');
+
     if (tx.tipe === 'masuk') {
-      if (tx.kategori === 'pokok') acc.pokok += nom;
-      else if (tx.kategori === 'qurban') acc.qurban += nom;
-      else if (tx.kategori === 'zakat') acc.zakat += nom;
-      else acc.umum += nom;
+      if (isKewajibanSplit) {
+        const pPart = Math.floor(nom * 0.5);
+        const qPart = Math.floor(nom * 0.25);
+        const zPart = nom - pPart - qPart;
+        acc.pokok += pPart;
+        acc.qurban += qPart;
+        acc.zakat += zPart;
+      } else if (tx.kategori === 'qurban') {
+        acc.qurban += nom;
+      } else if (tx.kategori === 'zakat') {
+        acc.zakat += nom;
+      } else {
+        acc.umum += nom;
+      }
     } else if (tx.tipe === 'keluar') {
-      if (tx.kategori === 'pokok') acc.pokok = Math.max(0, acc.pokok - nom);
-      else if (tx.kategori === 'qurban') acc.qurban = Math.max(0, acc.qurban - nom);
-      else if (tx.kategori === 'zakat') acc.zakat = Math.max(0, acc.zakat - nom);
-      else acc.umum = Math.max(0, acc.umum - nom);
+      if (isKewajibanSplit) {
+        const pPart = Math.floor(nom * 0.5);
+        const qPart = Math.floor(nom * 0.25);
+        const zPart = nom - pPart - qPart;
+        acc.pokok = Math.max(0, acc.pokok - pPart);
+        acc.qurban = Math.max(0, acc.qurban - qPart);
+        acc.zakat = Math.max(0, acc.zakat - zPart);
+      } else if (tx.kategori === 'qurban') {
+        acc.qurban = Math.max(0, acc.qurban - nom);
+      } else if (tx.kategori === 'zakat') {
+        acc.zakat = Math.max(0, acc.zakat - nom);
+      } else {
+        acc.umum = Math.max(0, acc.umum - nom);
+      }
     }
   });
 
@@ -1851,6 +1899,19 @@ export function useKoperasiState() {
             );
             firestoreUnsubscribers.push(unsubLogs);
           }).catch(() => {});
+
+          // J. Realtime Surat Menyurat Collection (Req 1 & 5: Surat menyurat realtime online across all devices)
+          const unsubSurat = onSnapshot(
+            collection(db, 'surat'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteSurat = snapshot.docs.map((d) => d.data() as SuratResmi);
+              globalState = mergeStates(globalState, { ...globalState, suratList: remoteSurat });
+              scheduleDebouncedNotify();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'surat')
+          );
+          firestoreUnsubscribers.push(unsubSurat);
         });
       });
     } catch {}

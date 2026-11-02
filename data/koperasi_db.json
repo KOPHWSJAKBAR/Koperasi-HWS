@@ -788,7 +788,8 @@
       "verifiedAt": "2026-10-31T07:58:19.525Z",
       "verifiedBy": "Tezar Basith Hidayat",
       "alasanTolak": "Bukti transfer tidak valid/dana belum masuk",
-      "catatanAdmin": "Bukti transfer tidak valid/dana belum masuk"
+      "catatanAdmin": "Bukti transfer tidak valid/dana belum masuk",
+      "memberNomorAnggota": "HWS-CKR-2026-015"
     },
     {
       "memberId": "mem-1792745131133",
@@ -810,7 +811,8 @@
       "nominal": 10000,
       "memberWilayah": "Cengkareng",
       "updatedAt": "2026-10-31T06:11:50.233Z",
-      "jumlahHari": 5
+      "jumlahHari": 5,
+      "memberNomorAnggota": "HWS-CKR-2026-015"
     },
     {
       "memberId": "mem-1792741207586",
@@ -832,7 +834,8 @@
       "verifiedAt": "2026-10-30T07:36:51.742Z",
       "verifiedBy": "Tezar Basith Hidayat",
       "alasanTolak": "test",
-      "catatanAdmin": "test"
+      "catatanAdmin": "test",
+      "memberNomorAnggota": "HWS-CKR-2026-001"
     },
     {
       "rekeningTujuan": "QRIS Resmi Koperasi HWS",
@@ -854,7 +857,8 @@
       "verifiedAt": "2026-10-30T07:31:41.394Z",
       "verifiedBy": "Almaydha Arya Budiman",
       "alasanTolak": "test",
-      "catatanAdmin": "test"
+      "catatanAdmin": "test",
+      "memberNomorAnggota": "HWS-CKR-2026-001"
     },
     {
       "verifiedBy": "Tezar Basith Hidayat",
@@ -876,7 +880,8 @@
       "id": "dep-1793323231427",
       "metode": "qris",
       "verifiedAt": "2026-10-30T03:13:14.640Z",
-      "status": "ditolak"
+      "status": "ditolak",
+      "memberNomorAnggota": "HWS-CKR-2026-015"
     },
     {
       "memberId": "mem-1792744119364",
@@ -1348,23 +1353,10 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 210000,
+      "saldoSetelah": 125000,
       "kategori": "pokok",
       "referensiId": "dep-1793265507835",
       "jumlahHari": 5
-    },
-    {
-      "id": "tx-sdk-sdk-1793143761016",
-      "memberId": "mem-1792744119364",
-      "tanggal": "2026-10-28",
-      "jam": "03:12",
-      "keterangan": "DONASI BERBAGI: Sedekah Anggota Sri Parawati",
-      "cbg": "KCP CENGKARENG",
-      "tipe": "masuk",
-      "nominal": 10000,
-      "saldoSetelah": 200000,
-      "kategori": "umum",
-      "referensiId": "sdk-1793143761016"
     },
     {
       "id": "tx-wajib-dep-1793147593764",
@@ -1375,7 +1367,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 190000,
+      "saldoSetelah": 120000,
       "kategori": "pokok",
       "referensiId": "dep-1793147593764",
       "jumlahHari": 5
@@ -1389,7 +1381,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 16000,
+      "saldoSetelah": 8000,
       "kategori": "pokok",
       "referensiId": "dep-1793103811158",
       "jumlahHari": 5
@@ -1403,7 +1395,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 20000,
+      "saldoSetelah": 10000,
       "kategori": "pokok",
       "referensiId": "dep-1793102398905",
       "jumlahHari": 5
@@ -1417,7 +1409,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 30000,
+      "saldoSetelah": 15000,
       "kategori": "pokok",
       "referensiId": "dep-1793102419718",
       "jumlahHari": 5
@@ -1431,7 +1423,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 10000,
+      "saldoSetelah": 5000,
       "kategori": "pokok",
       "referensiId": "dep-1793102369954",
       "jumlahHari": 5
@@ -1445,7 +1437,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 14000,
-      "saldoSetelah": 14000,
+      "saldoSetelah": 7000,
       "kategori": "pokok",
       "referensiId": "dep-1793102375463",
       "jumlahHari": 7
@@ -1459,7 +1451,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 30000,
+      "saldoSetelah": 15000,
       "kategori": "pokok",
       "referensiId": "dep-1793102260740",
       "jumlahHari": 5
@@ -1473,7 +1465,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 20000,
+      "saldoSetelah": 10000,
       "kategori": "pokok",
       "referensiId": "dep-1793102207827",
       "jumlahHari": 5
@@ -1487,7 +1479,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 150000,
+      "saldoSetelah": 100000,
       "kategori": "pokok",
       "referensiId": "dep-1793102059491",
       "jumlahHari": 5
@@ -1501,7 +1493,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 160000,
+      "saldoSetelah": 105000,
       "kategori": "pokok",
       "referensiId": "dep-1793102076708",
       "jumlahHari": 5
@@ -1515,7 +1507,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 170000,
+      "saldoSetelah": 110000,
       "kategori": "pokok",
       "referensiId": "dep-1793102089709",
       "jumlahHari": 5
@@ -1529,7 +1521,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 180000,
+      "saldoSetelah": 115000,
       "kategori": "pokok",
       "referensiId": "dep-1793102112321",
       "jumlahHari": 5
@@ -1543,7 +1535,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 10000,
+      "saldoSetelah": 5000,
       "kategori": "pokok",
       "referensiId": "dep-1793102116896",
       "jumlahHari": 5
@@ -1557,7 +1549,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 140000,
+      "saldoSetelah": 95000,
       "kategori": "pokok",
       "referensiId": "dep-1793102042875",
       "jumlahHari": 5
@@ -1571,7 +1563,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 30000,
+      "saldoSetelah": 15000,
       "kategori": "pokok",
       "referensiId": "dep-1793101981500",
       "jumlahHari": 5
@@ -1585,7 +1577,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 50000,
-      "saldoSetelah": 80000,
+      "saldoSetelah": 40000,
       "kategori": "pokok",
       "referensiId": "dep-1793102003463",
       "jumlahHari": 25
@@ -1599,7 +1591,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 50000,
-      "saldoSetelah": 130000,
+      "saldoSetelah": 90000,
       "kategori": "umum",
       "referensiId": "dep-1793102024053"
     },
@@ -1612,7 +1604,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 10000,
+      "saldoSetelah": 5000,
       "kategori": "pokok",
       "referensiId": "dep-1793101806625",
       "jumlahHari": 5
@@ -1626,7 +1618,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoSetelah": 20000,
+      "saldoSetelah": 10000,
       "kategori": "pokok",
       "referensiId": "dep-1793101838924",
       "jumlahHari": 5
@@ -1640,7 +1632,7 @@
       "cbg": "KCP CENGKARENG",
       "tipe": "masuk",
       "nominal": 6000,
-      "saldoSetelah": 6000,
+      "saldoSetelah": 3000,
       "kategori": "pokok",
       "referensiId": "dep-1793101530120",
       "jumlahHari": 3
@@ -1659,7 +1651,7 @@
       "referensiId": "dep-1793265507835",
       "tipe": "masuk",
       "nominal": 5000,
-      "saldoKasSetelah": 295000,
+      "saldoKasSetelah": 285000,
       "inputBy": "Tezar Basith Hidayat",
       "status": "approved",
       "createdAt": "2026-10-29T09:18:27.835Z"
@@ -1676,7 +1668,7 @@
       "referensiId": "dep-1793265507835",
       "tipe": "masuk",
       "nominal": 2500,
-      "saldoKasSetelah": 297500,
+      "saldoKasSetelah": 287500,
       "inputBy": "Tezar Basith Hidayat",
       "status": "approved",
       "createdAt": "2026-10-29T09:18:27.835Z"
@@ -1693,7 +1685,7 @@
       "referensiId": "dep-1793265507835",
       "tipe": "masuk",
       "nominal": 2500,
-      "saldoKasSetelah": 300000,
+      "saldoKasSetelah": 290000,
       "inputBy": "Tezar Basith Hidayat",
       "status": "approved",
       "createdAt": "2026-10-29T09:18:27.835Z"
@@ -1710,7 +1702,7 @@
       "referensiId": "dep-1793147593764",
       "tipe": "masuk",
       "nominal": 5000,
-      "saldoKasSetelah": 285000,
+      "saldoKasSetelah": 275000,
       "inputBy": "Tezar Basith Hidayat",
       "status": "approved",
       "createdAt": "2026-10-28T00:33:13.764Z"
@@ -1727,7 +1719,7 @@
       "referensiId": "dep-1793147593764",
       "tipe": "masuk",
       "nominal": 2500,
-      "saldoKasSetelah": 287500,
+      "saldoKasSetelah": 277500,
       "inputBy": "Tezar Basith Hidayat",
       "status": "approved",
       "createdAt": "2026-10-28T00:33:13.764Z"
@@ -1744,14 +1736,14 @@
       "referensiId": "dep-1793147593764",
       "tipe": "masuk",
       "nominal": 2500,
-      "saldoKasSetelah": 290000,
+      "saldoKasSetelah": 280000,
       "inputBy": "Tezar Basith Hidayat",
       "status": "approved",
       "createdAt": "2026-10-28T00:33:13.764Z"
     },
     {
       "id": "kas-ang-sdk-sdk-1793143761016",
-      "bukuKas": "anggota",
+      "bukuKas": "koperasi",
       "tanggal": "2026-10-28",
       "jam": "03:12",
       "kategori": "Penerimaan Sedekah",
@@ -1761,7 +1753,7 @@
       "referensiId": "sdk-1793143761016",
       "tipe": "masuk",
       "nominal": 10000,
-      "saldoKasSetelah": 280000,
+      "saldoKasSetelah": 10000,
       "inputBy": "Almaydha Arya Budiman",
       "status": "approved",
       "createdAt": "2026-10-27T23:29:21.016Z"
@@ -6948,7 +6940,7 @@
   "lastRunningNumber": 66741,
   "serverSyncStatus": {
     "online": true,
-    "lastSynced": "2026-10-31T07:58:43.948Z",
+    "lastSynced": "2026-11-02T09:03:55.034Z",
     "googleCloudBackup": true,
     "firestoreActive": true,
     "filesProtected": true,

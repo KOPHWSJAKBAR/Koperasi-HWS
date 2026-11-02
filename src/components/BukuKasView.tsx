@@ -379,8 +379,8 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         } else if (formSubKategoriAnggota === 'sedekah') {
           // Sedekah Anggota
           newKasEntries.push({
-            id: `kas-ang-sdk-${Date.now()}`,
-            bukuKas: 'anggota',
+            id: `kas-kop-sdk-${Date.now()}`,
+            bukuKas: 'koperasi',
             tanggal: formTanggal,
             jam,
             kategori: formTipe === 'masuk' ? 'Penerimaan Sedekah' : 'Penyaluran Sedekah',

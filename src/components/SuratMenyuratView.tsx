@@ -64,8 +64,13 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
 
   // Filter letters for member
   const displaySuratList = state.suratList.filter((s) => {
-    if (isMember) {
-      return s.tujuanTipe === 'semua' || s.targetMemberId === currentMember.id;
+    if (isMember && currentMember) {
+      return (
+        s.tujuanTipe === 'semua' ||
+        s.targetMemberId === currentMember.id ||
+        (s.diterbitkanOleh && s.diterbitkanOleh.includes(currentMember.nama)) ||
+        (s as any).senderId === currentMember.id
+      );
     }
     return true;
   });
@@ -159,34 +164,64 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
 
   const handleCreateSurat = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentAdmin) return;
+    if (!currentAdmin && !currentMember) return;
+
+    const senderNama = isMember
+      ? `${currentMember!.nama} (Anggota ${currentMember!.nomorAnggota || ''})`
+      : (currentAdmin?.nama || 'Pengurus');
+
+    const nomorSurat = isMember
+      ? `HWS/MEMBER/${currentMember!.nomorAnggota || currentMember!.id.slice(-4)}/${new Date().getFullYear()}/${String(state.suratList.length + 1).padStart(3, '0')}`
+      : `HWS/DIR/${new Date().getFullYear()}/${String(state.suratList.length + 1).padStart(3, '0')}`;
 
     const targetMember = state.members.find((m) => m.id === targetMemberId);
-    const nomorSurat = `HWS/DIR/${new Date().getFullYear()}/${String(state.suratList.length + 1).padStart(3, '0')}`;
 
     const newSurat: SuratResmi = {
       id: `srt-${Date.now()}`,
       nomorSurat,
       perihal,
       tanggal: new Date().toISOString().split('T')[0],
-      tujuanTipe,
-      targetMemberId: tujuanTipe === 'perorangan' ? targetMemberId : undefined,
-      targetMemberNama: tujuanTipe === 'perorangan' ? targetMember?.nama : 'Seluruh Anggota Koperasi HWS',
+      tujuanTipe: isMember ? 'perorangan' : tujuanTipe,
+      targetMemberId: isMember ? undefined : (tujuanTipe === 'perorangan' ? targetMemberId : undefined),
+      targetMemberNama: isMember
+        ? 'Pengurus Koperasi HWS'
+        : (tujuanTipe === 'perorangan' ? (targetMember?.nama || 'Anggota') : 'Seluruh Anggota Koperasi HWS'),
       isiSurat,
-      diterbitkanOleh: currentAdmin.nama,
+      diterbitkanOleh: senderNama,
       statusTerkirimWa: true,
       statusTerkirimEmail: true,
-      readByAdminIds: [currentAdmin.id],
-      readByMemberIds: [],
+      readByAdminIds: isMember ? [] : (currentAdmin ? [currentAdmin.id] : []),
+      readByMemberIds: isMember ? [currentMember!.id] : [],
       createdAt: new Date().toISOString(),
     };
 
-    const audit = createAuditLog(
-      currentAdmin,
-      'Penerbitan Surat Resmi',
-      `Menerbitkan surat "${perihal}" nomor ${nomorSurat} ke ${newSurat.targetMemberNama}`,
-      newSurat.id
-    );
+    // 1. Direct Firestore write for immediate cross-device sync
+    try {
+      const { db } = await import('../lib/firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(doc(db, 'surat', newSurat.id), newSurat);
+    } catch (e) {
+      console.warn('Direct Firestore surat write error:', e);
+    }
+
+    // 2. Audit log
+    const audit = currentAdmin
+      ? createAuditLog(
+          currentAdmin,
+          'Penerbitan Surat Resmi',
+          `Menerbitkan surat "${perihal}" nomor ${nomorSurat} ke ${newSurat.targetMemberNama}`,
+          newSurat.id
+        )
+      : {
+          id: `log-srt-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          adminId: currentMember!.id,
+          adminNama: currentMember!.nama,
+          adminRole: 'member' as any,
+          action: 'Pengiriman Surat Permohonan Anggota',
+          detail: `Anggota ${currentMember!.nama} mengirim surat permohonan "${perihal}" ke Pengurus Koperasi`,
+          targetId: newSurat.id,
+        };
 
     await updateState((prev) => ({
       ...prev,
@@ -194,12 +229,12 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
       auditLogs: [audit, ...prev.auditLogs],
     }));
 
-    // Trigger Realtime Notifications (Req 5 & 1)
+    // 3. Trigger Realtime Notifications (Req 5 & 1)
     sendRealtimeNotification({
-      recipientId: tujuanTipe === 'perorangan' ? (targetMemberId || 'all') : 'all',
+      recipientId: isMember ? 'admin' : (tujuanTipe === 'perorangan' ? (targetMemberId || 'all') : 'all'),
       recipientNama: newSurat.targetMemberNama,
-      title: '📬 Surat Resmi Baru Koperasi HWS',
-      body: `Perihal: "${perihal}". Nomor: ${nomorSurat}. Ketuk untuk membaca edaran resmi koperasi.`,
+      title: isMember ? '📬 Surat Permohonan Baru dari Anggota' : '📬 Surat Resmi Baru Koperasi HWS',
+      body: `Perihal: "${perihal}". Nomor: ${nomorSurat}. Dari: ${senderNama}`,
       type: 'surat_baru',
       data: { suratId: newSurat.id },
     }).catch(() => {});
@@ -208,14 +243,14 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
       fetch('/api/surat/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ surat: newSurat, adminName: currentAdmin.nama }),
+        body: JSON.stringify({ surat: newSurat, adminName: senderNama }),
       }).catch(() => {});
     } catch {}
 
     setShowComposeModal(false);
     setPerihal('');
     setIsiSurat('');
-    alert('✓ Surat resmi berhasil diterbitkan & notifikasi realtime dikirim ke anggota!');
+    alert(isMember ? '✓ Surat permohonan berhasil dikirimkan ke Pengurus Koperasi!' : '✓ Surat resmi berhasil diterbitkan & notifikasi realtime dikirim ke anggota!');
   };
 
   const handlePrintSurat = (surat: SuratResmi) => {
@@ -345,8 +380,18 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
               </button>
             )}
 
-            {!isMember && (
+            {isMember ? (
               <button
+                type="button"
+                onClick={() => setShowComposeModal(true)}
+                className="py-2 px-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>+ Kirim Surat Permohonan</span>
+              </button>
+            ) : (
+              <button
+                type="button"
                 onClick={() => setShowComposeModal(true)}
                 className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
               >
@@ -522,7 +567,9 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-lg rounded-3xl p-5 shadow-2xl">
             <h3 className="text-sm font-extrabold text-white mb-3 pb-2 border-b border-slate-700">
-              Penerbitan Surat Resmi Koperasi HWS
+              {isMember
+                ? 'Surat Permohonan / Pengajuan ke Pengurus Koperasi'
+                : 'Penerbitan Surat Resmi Koperasi HWS'}
             </h3>
 
             <form onSubmit={handleCreateSurat} className="space-y-3 text-xs">
@@ -531,54 +578,62 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
                 <input
                   type="text"
                   required
+                  placeholder={isMember ? 'Contoh: Permohonan Buka Kunci Pokok / Aspirasi' : 'Contoh: Undangan Rapat Anggota Tahunan'}
                   value={perihal}
                   onChange={(e) => setPerihal(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Target Penerima</label>
-                <div className="grid grid-cols-2 gap-2 mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setTujuanTipe('semua')}
-                    className={`py-2 rounded-xl border font-bold ${
-                      tujuanTipe === 'semua'
-                        ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    Broadcast Seluruh Anggota
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTujuanTipe('perorangan')}
-                    className={`py-2 rounded-xl border font-bold ${
-                      tujuanTipe === 'perorangan'
-                        ? 'bg-sky-500/20 border-sky-500 text-sky-300'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    Anggota Perorangan
-                  </button>
-                </div>
+              {!isMember ? (
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Target Penerima</label>
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setTujuanTipe('semua')}
+                      className={`py-2 rounded-xl border font-bold ${
+                        tujuanTipe === 'semua'
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                          : 'bg-slate-800 border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      Broadcast Seluruh Anggota
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTujuanTipe('perorangan')}
+                      className={`py-2 rounded-xl border font-bold ${
+                        tujuanTipe === 'perorangan'
+                          ? 'bg-sky-500/20 border-sky-500 text-sky-300'
+                          : 'bg-slate-800 border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      Anggota Perorangan
+                    </button>
+                  </div>
 
-                {tujuanTipe === 'perorangan' && (
-                  <select
-                    value={targetMemberId}
-                    onChange={(e) => setTargetMemberId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                  >
-                    <option value="">Pilih Anggota</option>
-                    {state.members.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.nama} ({m.nomorAnggota} - WA: {m.whatsapp})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
+                  {tujuanTipe === 'perorangan' && (
+                    <select
+                      value={targetMemberId}
+                      onChange={(e) => setTargetMemberId(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    >
+                      <option value="">Pilih Anggota</option>
+                      {state.members.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.nama} ({m.nomorAnggota} - WA: {m.whatsapp})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-300">
+                  <div className="text-[11px] text-slate-400 font-medium">Tujuan Penerima:</div>
+                  <div className="text-xs font-bold text-white mt-0.5">Pengurus Koperasi Himpunan Wirausaha Sejahtera</div>
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-slate-300 mb-1">Isi Lengkap Surat *</label>
@@ -587,7 +642,7 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
                   rows={5}
                   value={isiSurat}
                   onChange={(e) => setIsiSurat(e.target.value)}
-                  placeholder="Tuliskan isi surat resmi secara terperinci..."
+                  placeholder={isMember ? 'Tuliskan maksud permohonan atau pengajuan Anda kepada pengurus koperasi...' : 'Tuliskan isi surat resmi secara terperinci...'}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 />
               </div>
@@ -602,9 +657,13 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-amber-500 text-slate-950 font-black rounded-xl"
+                  className={`flex-1 py-2 font-black rounded-xl ${
+                    isMember
+                      ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                  }`}
                 >
-                  Terbitkan & Kirim Notifikasi
+                  {isMember ? 'Kirim Surat ke Pengurus' : 'Terbitkan & Kirim Notifikasi'}
                 </button>
               </div>
             </form>

@@ -1259,30 +1259,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right min-w-0">
                       <span className="text-[9px] text-slate-400">Saldo Berjalan</span>
-                      <div className="text-sm font-black text-emerald-400 font-mono">
+                      <div className="text-sm font-black text-emerald-400 font-mono truncate" title={formatRupiah(saldoKasAnggota)}>
                         {formatRupiah(saldoKasAnggota)}
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-2 mt-3 text-xs">
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Total Simpanan Pokok (50%):</span>
-                      <span className="font-bold text-amber-400 font-mono">{formatRupiah(totalPokok)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">Total Simpanan Pokok (50%):</span>
+                      <span className="font-bold text-amber-400 font-mono shrink-0">{formatRupiah(totalPokok)}</span>
                     </div>
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Total Tabungan Umum Anggota:</span>
-                      <span className="font-bold text-sky-400 font-mono">{formatRupiah(totalUmum)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">Total Tabungan Umum Anggota:</span>
+                      <span className="font-bold text-sky-400 font-mono shrink-0">{formatRupiah(totalUmum)}</span>
                     </div>
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Tabungan Zakat Fitrah (25%):</span>
-                      <span className="font-bold text-emerald-400 font-mono">{formatRupiah(totalZakat)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">Tabungan Zakat Fitrah (25%):</span>
+                      <span className="font-bold text-emerald-400 font-mono shrink-0">{formatRupiah(totalZakat)}</span>
                     </div>
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Tabungan Qurban (25%):</span>
-                      <span className="font-bold text-teal-400 font-mono">{formatRupiah(totalQurban)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">Tabungan Qurban (25%):</span>
+                      <span className="font-bold text-teal-400 font-mono shrink-0">{formatRupiah(totalQurban)}</span>
                     </div>
                   </div>
                 </div>
@@ -1333,22 +1333,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right min-w-0">
                       <span className="text-[9px] text-slate-400">Saldo Berjalan</span>
-                      <div className="text-sm font-black text-sky-400 font-mono">
+                      <div className="text-sm font-black text-sky-400 font-mono truncate" title={formatRupiah(saldoKasKoperasi)}>
                         {formatRupiah(saldoKasKoperasi)}
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-2.5 mt-3 text-xs">
-                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Total Zakat Fitrah Tersedia:</span>
-                      <span className="font-bold text-emerald-400 font-mono">{formatRupiah(totalZakat)}</span>
+                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">Total Zakat Fitrah Tersedia:</span>
+                      <span className="font-bold text-emerald-400 font-mono shrink-0">{formatRupiah(totalZakat)}</span>
                     </div>
-                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">Total Tabungan Qurban Tersedia:</span>
-                      <span className="font-bold text-emerald-400 font-mono">{formatRupiah(totalQurban)}</span>
+                    <div className="p-2.5 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">Total Tabungan Qurban Tersedia:</span>
+                      <span className="font-bold text-emerald-400 font-mono shrink-0">{formatRupiah(totalQurban)}</span>
                     </div>
                   </div>
                 </div>
@@ -1384,30 +1384,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right min-w-0">
                       <span className="text-[9px] text-slate-400">Saldo Siap Disalurkan</span>
-                      <div className="text-sm font-black text-rose-400 font-mono">
+                      <div className="text-sm font-black text-rose-400 font-mono truncate" title={formatRupiah(saldoSedekahTersedia)}>
                         {formatRupiah(saldoSedekahTersedia)}
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-2 mt-3 text-xs">
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">{namaSubuh}:</span>
-                      <span className="font-bold text-amber-300 font-mono">{formatRupiah(subuhSaldo)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">{namaSubuh}:</span>
+                      <span className="font-bold text-amber-300 font-mono shrink-0">{formatRupiah(subuhSaldo)}</span>
                     </div>
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">{namaJumat}:</span>
-                      <span className="font-bold text-emerald-400 font-mono">{formatRupiah(jumatSaldo)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">{namaJumat}:</span>
+                      <span className="font-bold text-emerald-400 font-mono shrink-0">{formatRupiah(jumatSaldo)}</span>
                     </div>
-                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center">
-                      <span className="text-slate-300">{namaUmum}:</span>
-                      <span className="font-bold text-sky-400 font-mono">{formatRupiah(umumSaldo)}</span>
+                    <div className="p-2 bg-[#162035] rounded-xl flex justify-between items-center gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">{namaUmum}:</span>
+                      <span className="font-bold text-sky-400 font-mono shrink-0">{formatRupiah(umumSaldo)}</span>
                     </div>
-                    <div className="text-[10px] text-slate-400 flex justify-between pt-1 px-1">
-                      <span>Masuk: {formatRupiah(totalSedekahMasuk)}</span>
-                      <span>Disalurkan: {formatRupiah(totalSedekahSalur)}</span>
+                    <div className="text-[10px] text-slate-400 flex justify-between items-center gap-2 pt-1 px-1 min-w-0">
+                      <span className="truncate">Masuk: {formatRupiah(totalSedekahMasuk)}</span>
+                      <span className="truncate shrink-0">Disalurkan: {formatRupiah(totalSedekahSalur)}</span>
                     </div>
                   </div>
                 </div>

@@ -47,6 +47,12 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   const [selectedMemberId, setSelectedMemberId] = useState<string>(
     isMember ? currentMember.id : state.members[0]?.id || ''
   );
+
+  useEffect(() => {
+    if (isMember && currentMember?.id) {
+      setSelectedMemberId(currentMember.id);
+    }
+  }, [isMember, currentMember?.id]);
   const [mobileChatOpen, setMobileChatOpen] = useState(isMember ? true : false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [inputPesan, setInputPesan] = useState('');
@@ -149,13 +155,14 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   });
 
   // Active member object
-  const activeMember = state.members.find((m) => m.id === selectedMemberId);
+  const targetMemberId = isMember ? (currentMember?.id || selectedMemberId) : selectedMemberId;
+  const activeMember = isMember ? (currentMember || state.members.find((m) => m.id === targetMemberId)) : state.members.find((m) => m.id === targetMemberId);
 
   // Current active conversation messages (guaranteed at least 20 days retention)
   const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const activeMessages = state.chatMessages.filter((m) => {
-    if (m.memberId !== selectedMemberId) return false;
+    if (m.memberId !== targetMemberId) return false;
     const time = new Date(m.timestamp).getTime();
     // Keep all messages within 20 days or retain if timestamp parsing isn't older
     return !isNaN(time) ? now - time <= TWENTY_DAYS_MS || true : true;
@@ -168,7 +175,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
   // Mark as read when active conversation is opened
   useEffect(() => {
-    if (!selectedMemberId) return;
+    if (!targetMemberId) return;
 
     const hasUnread = isMember
       ? activeMessages.some((m) => m.senderType === 'admin' && !m.isReadByMember)
@@ -181,17 +188,36 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            memberId: selectedMemberId,
+            memberId: targetMemberId,
             readBy: isMember ? 'member' : 'admin',
           }),
         }).catch(() => {});
       } catch {}
 
-      // 2. Local State Update
+      // 2. Direct Firestore update for read status
+      try {
+        import('../lib/firebase').then(({ db }) => {
+          import('firebase/firestore').then(({ doc, updateDoc }) => {
+            activeMessages.forEach((m) => {
+              const shouldUpdate = isMember
+                ? m.senderType === 'admin' && !m.isReadByMember
+                : m.senderType === 'member' && !m.isReadByAdmin;
+              if (shouldUpdate && m.id) {
+                updateDoc(doc(db, 'chats', m.id), {
+                  isReadByAdmin: isMember ? m.isReadByAdmin : true,
+                  isReadByMember: isMember ? true : m.isReadByMember,
+                }).catch(() => {});
+              }
+            });
+          });
+        });
+      } catch {}
+
+      // 3. Local State Update
       updateState((prev) => ({
         ...prev,
         chatMessages: prev.chatMessages.map((m) => {
-          if (m.memberId === selectedMemberId) {
+          if (m.memberId === targetMemberId) {
             return {
               ...m,
               isReadByAdmin: isMember ? m.isReadByAdmin : true,
@@ -202,16 +228,19 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         }),
       }));
     }
-  }, [selectedMemberId, activeMessages.length, isMember]);
+  }, [targetMemberId, activeMessages.length, isMember]);
 
   // Send message
   const handleSendMessage = async (textToSend?: string) => {
     const msgText = (textToSend || inputPesan).trim();
     if (!msgText && !lampiranUrl) return;
 
+    const convMemberId = isMember ? (currentMember?.id || selectedMemberId) : selectedMemberId;
+    if (!convMemberId) return;
+
     const newMsg: ChatMessage = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      memberId: selectedMemberId,
+      memberId: convMemberId,
       senderType: isMember ? 'member' : 'admin',
       senderNama: isMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus',
       pesan: msgText || (lampiranUrl ? '📷 [Lampiran Gambar]' : ''),
@@ -224,15 +253,25 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     setInputPesan('');
     setLampiranUrl('');
 
-    // Also notify server endpoint
+    // 1. Direct Firestore setDoc for immediate zero-delay cross-device sync
+    try {
+      const { db } = await import('../lib/firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      await setDoc(doc(db, 'chats', newMsg.id), newMsg);
+    } catch (e) {
+      console.warn('Direct Firestore chat error:', e);
+    }
+
+    // 2. Also notify server endpoint
     try {
       fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: newMsg }),
-      });
+      }).catch(() => {});
     } catch {}
 
+    // 3. Local State Update
     await updateState((prev) => ({
       ...prev,
       chatMessages: [...prev.chatMessages, newMsg],

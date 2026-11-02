@@ -2586,11 +2586,21 @@ async function startServer() {
       currentState.chatMessages = [];
       currentState.suratList = [];
 
-      // 2. Kosongkan seluruh data anggota
-      currentState.members = [];
+      // 2. Reset saldo simpanan seluruh anggota menjadi 0 (atau kosongkan jika diinginkan, namun pertahankan akun)
+      if (Array.isArray(currentState.members)) {
+        currentState.members = currentState.members.map((m: any) => ({
+          ...m,
+          saldoPokok: 0,
+          saldoZakatFitrah: 0,
+          saldoQurban: 0,
+          saldoUmum: 0,
+          totalSimpanan: 0,
+        }));
+      }
 
-      // 3. Sisakan HANYA Super Admin (Hapus admin test/non-super)
-      currentState.admins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
+      // 3. JANGAN menghapus akun admin (Req 7: Reset total transaksi jangan menghapus admin dan setingan yang telah dirubah)
+      // Seluruh akun admin yang telah didaftarkan tetap dipertahankan utuh
+      currentState.admins = currentState.admins || [];
       if (currentState.admins.length === 0) {
         currentState.admins = [
           {
@@ -2618,15 +2628,15 @@ async function startServer() {
         adminId: 'super_admin',
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
-        action: 'Reset Aplikasi Mulai Dari 0',
-        detail: 'Super Admin mereset seluruh transaksi anggota ke Rp 0, mengosongkan riwayat mutasi, dan menyisakan hanya Super Admin.',
+        action: 'Reset Transaksi Aplikasi Mulai Dari 0',
+        detail: 'Super Admin mereset seluruh mutasi transaksi dan saldo ke Rp 0. Seluruh akun admin dan setingan koperasi tetap dipertahankan.',
       });
 
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
       res.json({
         success: true,
-        message: 'Aplikasi berhasil di-reset mulai dari 0. Semua transaksi telah dihapus dan hanya menyisakan Super Admin.',
+        message: 'Seluruh transaksi berhasil di-reset mulai dari 0. Seluruh akun admin dan konfigurasi setingan tetap aman dipertahankan.',
         state: currentState,
       });
     } catch (err: any) {

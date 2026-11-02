@@ -2011,27 +2011,78 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       let updatedKasList = [...prev.kasList];
       let newTxs = [...prev.memberTransactions];
 
-      // Entri ke BUKU KAS (Req 5: Terinput di kas anggota & Req 14: Pilihan buku kas)
+      // Entri ke BUKU KAS (Req 4: Tabungan pokok terbagi 50% pokok, 25% zakat, 25% qurban semua tercatat pada buku kas anggota)
+      const pokokPortion = Math.floor(amount * 0.5);
+      const qurbanPortion = Math.floor(amount * 0.25);
+      const zakatPortion = amount - pokokPortion - qurbanPortion;
+
       if (adjBukuKasTarget === 'anggota' || adjBukuKasTarget === 'keduanya') {
-        updatedKasList.unshift({
-          id: `kas-adj-ang-${Date.now()}`,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          kategori: `Penyesuaian ${labelKategori}`,
-          keterangan: ketEntry,
-          namaPenerima: targetMember.nama,
-          tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-          nominal: amount,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin?.nama || 'Admin Koperasi',
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
+        if (adjKategoriTabungan === 'pokok') {
+          updatedKasList.unshift(
+            {
+              id: `kas-adj-p-${Date.now()}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Pokok',
+              keterangan: `Penyesuaian Tabungan Pokok 50% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+              namaPenerima: targetMember.nama,
+              tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+              nominal: pokokPortion,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            },
+            {
+              id: `kas-adj-z-${Date.now() + 1}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Zakat',
+              keterangan: `Penyesuaian Tabungan Zakat 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+              namaPenerima: targetMember.nama,
+              tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+              nominal: zakatPortion,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            },
+            {
+              id: `kas-adj-q-${Date.now() + 2}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Qurban',
+              keterangan: `Penyesuaian Tabungan Qurban 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+              namaPenerima: targetMember.nama,
+              tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+              nominal: qurbanPortion,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            }
+          );
+        } else {
+          updatedKasList.unshift({
+            id: `kas-adj-ang-${Date.now()}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: `Penyesuaian ${labelKategori}`,
+            keterangan: ketEntry,
+            namaPenerima: targetMember.nama,
+            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+            nominal: amount,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin?.nama || 'Admin Koperasi',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+        }
       }
 
       if (adjBukuKasTarget === 'koperasi' || adjBukuKasTarget === 'keduanya') {
         updatedKasList.unshift({
-          id: `kas-adj-kop-${Date.now() + 1}`,
+          id: `kas-adj-kop-${Date.now() + 3}`,
           bukuKas: 'koperasi',
           tanggal: tgl,
           kategori: `Penyesuaian ${labelKategori}`,
@@ -2055,7 +2106,9 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           let sUmum = Number(m.saldoUmum) || 0;
 
           if (adjKategoriTabungan === 'pokok') {
-            sPokok = adjTipe === 'tambah' ? sPokok + amount : Math.max(0, sPokok - amount);
+            sPokok = adjTipe === 'tambah' ? sPokok + pokokPortion : Math.max(0, sPokok - pokokPortion);
+            sZakat = adjTipe === 'tambah' ? sZakat + zakatPortion : Math.max(0, sZakat - zakatPortion);
+            sQurban = adjTipe === 'tambah' ? sQurban + qurbanPortion : Math.max(0, sQurban - qurbanPortion);
           } else if (adjKategoriTabungan === 'zakat') {
             sZakat = adjTipe === 'tambah' ? sZakat + amount : Math.max(0, sZakat - amount);
           } else if (adjKategoriTabungan === 'qurban') {
@@ -2070,6 +2123,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             saldoZakatFitrah: sZakat,
             saldoQurban: sQurban,
             saldoUmum: sUmum,
+            totalSimpanan: sPokok + sZakat + sQurban + sUmum,
           };
         }
         return m;
