@@ -461,6 +461,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok'>('umum');
   const [adjBukuKasTarget, setAdjBukuKasTarget] = useState<'anggota' | 'koperasi' | 'keduanya'>('anggota');
   const [adjTipe, setAdjTipe] = useState<'tambah' | 'tarik'>('tambah');
+  const [adjJumlahHari, setAdjJumlahHari] = useState('');
   const [adjNominal, setAdjNominal] = useState('');
   const [adjKeterangan, setAdjKeterangan] = useState('');
 
@@ -2190,6 +2191,53 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           jumlahHariPokok: Math.floor(sPokok / 1000),
           updatedAt: new Date().toISOString(),
         }).catch(() => {});
+
+        // Direct Firestore write for the 3 separate Buku Kas Anggota entries (Pokok, Zakat, Qurban)
+        if (adjKategoriTabungan === 'pokok') {
+          const ts = Date.now();
+          const { setDoc } = await import('firebase/firestore');
+          await setDoc(doc(db, 'kas', `kas-adj-p-${ts}`), {
+            id: `kas-adj-p-${ts}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Pokok',
+            keterangan: `Penyesuaian Tabungan Pokok 50% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+            namaPenerima: targetMember.nama,
+            memberId: targetMember.id,
+            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+            nominal: pokokPortion,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          }).catch(() => {});
+
+          await setDoc(doc(db, 'kas', `kas-adj-z-${ts + 1}`), {
+            id: `kas-adj-z-${ts + 1}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Zakat',
+            keterangan: `Penyesuaian Tabungan Zakat 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+            namaPenerima: targetMember.nama,
+            memberId: targetMember.id,
+            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+            nominal: zakatPortion,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          }).catch(() => {});
+
+          await setDoc(doc(db, 'kas', `kas-adj-q-${ts + 2}`), {
+            id: `kas-adj-q-${ts + 2}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Qurban',
+            keterangan: `Penyesuaian Tabungan Qurban 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+            namaPenerima: targetMember.nama,
+            memberId: targetMember.id,
+            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+            nominal: qurbanPortion,
+            status: 'approved',
+            createdAt: now.toISOString(),
+          }).catch(() => {});
+        }
       }
     } catch {}
 
@@ -5164,47 +5212,44 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
               {/* Pilihan Buku Kas Pencatatan (Req 5 & Req 14) */}
               <div>
-                <label className="block font-bold text-slate-300 mb-1">
-                  Pencatatan Buku Kas (Pilih Buku Kas Tujuan) *
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAdjBukuKasTarget('anggota')}
-                    className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
-                      adjBukuKasTarget === 'anggota'
-                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div>Kas Anggota</div>
-                    <div className="text-[9px] text-slate-400 font-normal">Default Rekomendasi</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdjBukuKasTarget('koperasi')}
-                    className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
-                      adjBukuKasTarget === 'koperasi'
-                        ? 'bg-sky-500/20 border-sky-500 text-sky-300 ring-1 ring-sky-500'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div>Kas Koperasi</div>
-                    <div className="text-[9px] text-slate-400 font-normal">Buku Kas Operasional</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdjBukuKasTarget('keduanya')}
-                    className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
-                      adjBukuKasTarget === 'keduanya'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div>Keduanya</div>
-                    <div className="text-[9px] text-slate-400 font-normal">Anggota & Koperasi</div>
-                  </button>
-                </div>
+                {adjKategoriTabungan === 'pokok' ? (
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs">
+                    <span className="text-slate-300 font-bold">Pencatatan Buku Kas:</span>
+                    <span className="font-bold text-amber-300">✓ Buku Kas Anggota (50% Pokok, 25% Zakat, 25% Qurban)</span>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">
+                      Pencatatan Buku Kas (Pilih Buku Kas Tujuan) *
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAdjBukuKasTarget('anggota')}
+                        className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
+                          adjBukuKasTarget === 'anggota'
+                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500'
+                            : 'bg-slate-800 border-slate-700 text-slate-400'
+                        }`}
+                      >
+                        <div>Kas Anggota</div>
+                        <div className="text-[9px] text-slate-400 font-normal">Default Rekomendasi</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdjBukuKasTarget('koperasi')}
+                        className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
+                          adjBukuKasTarget === 'koperasi'
+                            ? 'bg-sky-500/20 border-sky-500 text-sky-300 ring-1 ring-sky-500'
+                            : 'bg-slate-800 border-slate-700 text-slate-400'
+                        }`}
+                      >
+                        <div>Kas Koperasi</div>
+                        <div className="text-[9px] text-slate-400 font-normal">Buku Kas Operasional</div>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -5219,7 +5264,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                         : 'bg-slate-800 border-slate-700 text-slate-400'
                     }`}
                   >
-                    + Tambah ke Anggota (Keluar Kas Koperasi)
+                    + Tambah Saldo (Kredit)
                   </button>
                   <button
                     type="button"
@@ -5230,23 +5275,64 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                         : 'bg-slate-800 border-slate-700 text-slate-400'
                     }`}
                   >
-                    - Tarik dari Anggota (Masuk Kas Koperasi)
+                    - Kurangi Saldo (Debit)
                   </button>
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">Nominal (Rp)</label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  value={adjNominal}
-                  onChange={(e) => setAdjNominal(e.target.value)}
-                  placeholder="Ketik nominal rupiah"
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
-                />
-              </div>
+              {adjKategoriTabungan === 'pokok' ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block font-bold text-amber-300 mb-1">Jumlah Hari (Rp 2.000/hr) *</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={adjJumlahHari}
+                      onChange={(e) => {
+                        const h = e.target.value.replace(/\D/g, '');
+                        setAdjJumlahHari(h);
+                        const hNum = parseInt(h, 10) || 0;
+                        setAdjNominal(hNum > 0 ? String(hNum * 2000) : '');
+                        if (!adjKeterangan && hNum > 0) {
+                          setAdjKeterangan(`Penyesuaian Tabungan Pokok ${hNum} Hari`);
+                        }
+                      }}
+                      placeholder="Contoh: 10 hari"
+                      className="w-full px-3 py-2 bg-slate-800 border border-amber-500/40 rounded-xl text-amber-300 font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">Total Nominal (Rp) *</label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      value={adjNominal}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, '');
+                        setAdjNominal(val);
+                        const valNum = parseInt(val, 10) || 0;
+                        setAdjJumlahHari(valNum > 0 ? String(Math.round(valNum / 2000)) : '');
+                      }}
+                      placeholder="Kelipatan 2000"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono font-bold"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">Nominal (Rp) *</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    value={adjNominal}
+                    onChange={(e) => setAdjNominal(e.target.value)}
+                    placeholder="Ketik nominal rupiah"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-slate-300 mb-1">Keterangan / Alasan</label>

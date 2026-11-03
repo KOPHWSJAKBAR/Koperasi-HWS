@@ -831,6 +831,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
       saldoZakatFitrah: z,
       saldoQurban: q,
       totalSimpanan: p + u + z + q,
+      jumlahHariPokok: Math.floor(p / (state.profile?.pembagianPokokHarian || 1000)),
     };
   });
 
@@ -1002,6 +1003,15 @@ let currentState = loadDatabase();
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
+// Enforce 5-day chat retention on startup
+const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+const chatCutoff = Date.now() - FIVE_DAYS_MS;
+if (Array.isArray(currentState.chatMessages)) {
+  currentState.chatMessages = currentState.chatMessages.filter((m: any) => {
+    const t = new Date(m.timestamp).getTime();
+    return !isNaN(t) && t >= chatCutoff;
+  });
+}
 // Archive any files in current database on startup
 archiveAllUploadedFiles(currentState);
 saveDatabase(currentState);
@@ -1066,7 +1076,19 @@ async function startServer() {
     });
   });
 
-  // Send Chat message & Broadcast Push Notification
+  // 5-Day Chat Retention Helper: Otomatis hapus pesan chat lebih dari 5 hari
+  const purgeOldChatMessages = (state: any) => {
+    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - FIVE_DAYS_MS;
+    if (Array.isArray(state.chatMessages)) {
+      state.chatMessages = state.chatMessages.filter((m: any) => {
+        const t = new Date(m.timestamp).getTime();
+        return !isNaN(t) && t >= cutoff;
+      });
+    }
+  };
+
+  // Send Chat message & Broadcast Push Notification (Tersimpan 5 Hari)
   app.post('/api/chat', (req: Request, res: Response) => {
     const { message } = req.body;
     if (!message || !message.memberId) {
@@ -1074,6 +1096,7 @@ async function startServer() {
     }
     currentState.chatMessages = currentState.chatMessages || [];
     currentState.chatMessages.push(message);
+    purgeOldChatMessages(currentState);
     saveDatabase(currentState);
     broadcastEvent('NEW_CHAT_MESSAGE', message);
 
@@ -1096,12 +1119,14 @@ async function startServer() {
     res.json({ success: true, message });
   });
 
-  // Get Chat History with guaranteed at least 20-day retention
+  // Get Chat History with strictly 5-day retention (Req: chating realtime hanya tersimpan 5 hari)
   app.get('/api/chat/history', (req: Request, res: Response) => {
     try {
       const { memberId, days } = req.query;
-      const retentionDays = Number(days) || 20;
+      const retentionDays = Math.min(5, Number(days) || 5);
       const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+
+      purgeOldChatMessages(currentState);
 
       let messages = (currentState.chatMessages || []).filter((m: any) => {
         const time = new Date(m.timestamp).getTime();
@@ -2887,6 +2912,7 @@ async function startServer() {
             mem.saldoZakatFitrah = z;
             mem.saldoQurban = q;
             mem.totalSimpanan = p + u + z + q;
+            mem.jumlahHariPokok = Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000));
           }
         });
       };
@@ -3084,6 +3110,7 @@ async function startServer() {
         member.saldoZakatFitrah = z;
         member.saldoQurban = q;
         member.totalSimpanan = p + u + z + q;
+        member.jumlahHariPokok = Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000));
       }
 
       currentState.auditLogs = currentState.auditLogs || [];

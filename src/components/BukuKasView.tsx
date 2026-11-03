@@ -441,6 +441,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 saldoZakatFitrah: updatedZakat,
                 saldoQurban: updatedQurban,
                 totalSimpanan,
+                jumlahHariPokok: Math.floor(updatedPokok / (prev.profile?.pembagianPokokHarian || 1000)),
               }
             : m
         );

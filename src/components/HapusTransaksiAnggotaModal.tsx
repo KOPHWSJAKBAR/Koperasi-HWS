@@ -282,6 +282,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               saldoQurban: 0,
               saldoUmum: 0,
               totalSimpanan: 0,
+              jumlahHariPokok: 0,
             };
           }
 
@@ -293,20 +294,39 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           let p = 0, u = 0, z = 0, q = 0, run = 0;
           mTx.forEach((tx) => {
             const nom = tx.nominal || 0;
+            const isKewajibanSplit =
+              tx.kategori === 'pokok' ||
+              String(tx.id).startsWith('tx-wajib-') ||
+              String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+              String(tx.keterangan || '').toUpperCase().includes('POKOK') ||
+              String(tx.keterangan || '').includes('50% Pokok');
+
             if (tx.tipe === 'masuk') {
               run += nom;
-              if (tx.kategori === 'pokok') p += nom;
-              else if (tx.kategori === 'qurban') q += nom;
+              if (isKewajibanSplit) {
+                const pPart = Math.floor(nom * 0.5);
+                const qPart = Math.floor(nom * 0.25);
+                const zPart = nom - pPart - qPart;
+                p += pPart;
+                q += qPart;
+                z += zPart;
+              } else if (tx.kategori === 'qurban') q += nom;
               else if (tx.kategori === 'zakat') z += nom;
               else u += nom;
             } else {
               run = Math.max(0, run - nom);
-              if (tx.kategori === 'pokok') p = Math.max(0, p - nom);
-              else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
+              if (isKewajibanSplit) {
+                const pPart = Math.floor(nom * 0.5);
+                const qPart = Math.floor(nom * 0.25);
+                const zPart = nom - pPart - qPart;
+                p = Math.max(0, p - pPart);
+                q = Math.max(0, q - qPart);
+                z = Math.max(0, z - zPart);
+              } else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
               else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
               else u = Math.max(0, u - nom);
             }
-            tx.saldoSetelah = run;
+            tx.saldoSetelah = p + u;
           });
 
           return {
@@ -316,6 +336,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
             saldoZakatFitrah: z,
             saldoQurban: q,
             totalSimpanan: p + u + z + q,
+            jumlahHariPokok: Math.floor(p / 1000),
           };
         });
 

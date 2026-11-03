@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana implementasi dan dokumentasi perbaikan buku kas, penyesuaian saldo, aturan kelipatan 2000, penghapusan data, dan sinkronisasi realtime dashboard admin & anggota.",
-  "updatedAt":  "2026-10-31T08:24:05.733938061Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Implementasi pembagian 50% Pokok, 25% Zakat Fitrah, 25% Qurban pada input Tabungan Pokok 2000/hari, pencatatan otomatis di Buku Kas Anggota, sinkronisasi realtime pada data anggota, dashboard admin, dashboard anggota, dan dashboard zakat & qurban, pembersihan saldo Budiawan ke Rp 0, serta pemisahan kas Zakat/Qurban di Kas Anggota dan Sedekah di Kas Koperasi.",
+  "updatedAt": "2026-11-03T08:29:14.244556043Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

@@ -812,6 +812,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                     saldoQurban: updatedSaldoQurban,
                     saldoUmum: updatedSaldoUmum,
                     totalSimpanan: updatedSaldoPokok + updatedSaldoUmum + updatedSaldoZakat + updatedSaldoQurban,
+                    jumlahHariPokok: Math.floor(updatedSaldoPokok / (prev.profile?.pembagianPokokHarian || 1000)),
                   }
                 : m
             )
