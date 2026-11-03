@@ -319,18 +319,27 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           };
         });
 
-        // Sinkronkan juga penghapusan catatan terkait pada Buku Kas Anggota
+        // Sinkronkan juga penghapusan catatan terkait pada Buku Kas Anggota & Buku Kas Koperasi
         const deletedTxs = prev.memberTransactions.filter((tx) => targetIdsSet.has(tx.id));
         const deletedRefIds = new Set(deletedTxs.map((t) => t.referensiId || t.id));
+        const deletedTsTokens = new Set<string>();
+        deletedTxs.forEach((tx) => {
+          const tsM = String(tx.id).match(/(\d{10,})/);
+          if (tsM) deletedTsTokens.add(tsM[1]);
+        });
         const nextDeletedKasIds: string[] = [];
 
         let remainingKas = (prev.kasList || []).filter((k) => {
-          if (k.bukuKas !== 'anggota') return true;
-          if (k.referensiId && deletedRefIds.has(k.referensiId)) {
+          if (targetIdsSet.has(k.id)) {
             nextDeletedKasIds.push(k.id);
             return false;
           }
-          if (targetIdsSet.has(k.id)) {
+          if (k.referensiId && (deletedRefIds.has(k.referensiId) || targetIdsSet.has(k.referensiId))) {
+            nextDeletedKasIds.push(k.id);
+            return false;
+          }
+          const km = String(k.id).match(/(\d{10,})/);
+          if (km && deletedTsTokens.has(km[1])) {
             nextDeletedKasIds.push(k.id);
             return false;
           }

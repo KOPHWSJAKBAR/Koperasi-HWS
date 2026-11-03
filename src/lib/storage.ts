@@ -1799,7 +1799,7 @@ export function useKoperasiState() {
               if (snapshot.empty) return;
               const remoteChats = snapshot.docs.map((d) => d.data() as ChatMessage);
               globalState = mergeStates(globalState, { ...globalState, chatMessages: remoteChats });
-              scheduleDebouncedNotify();
+              notifyListeners();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
           );

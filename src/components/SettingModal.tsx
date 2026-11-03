@@ -458,7 +458,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
   // Penyesuaian Saldo State (Req 5: Penyesuaian saldo anggota terinput di kas anggota & Req 14: Pilihan buku kas)
   const [adjMemberId, setAdjMemberId] = useState(state.members[0]?.id || '');
-  const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok' | 'zakat' | 'qurban'>('umum');
+  const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok'>('umum');
   const [adjBukuKasTarget, setAdjBukuKasTarget] = useState<'anggota' | 'koperasi' | 'keduanya'>('anggota');
   const [adjTipe, setAdjTipe] = useState<'tambah' | 'tarik'>('tambah');
   const [adjNominal, setAdjNominal] = useState('');
@@ -1996,25 +1996,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     const tgl = now.toISOString().split('T')[0];
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
 
-    const labelKategori =
-      adjKategoriTabungan === 'pokok'
-        ? 'Tabungan Pokok'
-        : adjKategoriTabungan === 'zakat'
-        ? 'Zakat Fitrah'
-        : adjKategoriTabungan === 'qurban'
-        ? 'Tabungan Qurban'
-        : 'Tabungan Umum';
-
+    const labelKategori = adjKategoriTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Umum';
     const ketEntry = `Penyesuaian ${labelKategori} ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim();
+
+    const pokokPortion = Math.floor(amount * 0.5);
+    const qurbanPortion = Math.floor(amount * 0.25);
+    const zakatPortion = amount - pokokPortion - qurbanPortion;
 
     await updateState((prev) => {
       let updatedKasList = [...prev.kasList];
       let newTxs = [...prev.memberTransactions];
-
-      // Entri ke BUKU KAS (Req 4: Tabungan pokok terbagi 50% pokok, 25% zakat, 25% qurban semua tercatat pada buku kas anggota)
-      const pokokPortion = Math.floor(amount * 0.5);
-      const qurbanPortion = Math.floor(amount * 0.25);
-      const zakatPortion = amount - pokokPortion - qurbanPortion;
 
       if (adjBukuKasTarget === 'anggota' || adjBukuKasTarget === 'keduanya') {
         if (adjKategoriTabungan === 'pokok') {
@@ -2109,10 +2100,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             sPokok = adjTipe === 'tambah' ? sPokok + pokokPortion : Math.max(0, sPokok - pokokPortion);
             sZakat = adjTipe === 'tambah' ? sZakat + zakatPortion : Math.max(0, sZakat - zakatPortion);
             sQurban = adjTipe === 'tambah' ? sQurban + qurbanPortion : Math.max(0, sQurban - qurbanPortion);
-          } else if (adjKategoriTabungan === 'zakat') {
-            sZakat = adjTipe === 'tambah' ? sZakat + amount : Math.max(0, sZakat - amount);
-          } else if (adjKategoriTabungan === 'qurban') {
-            sQurban = adjTipe === 'tambah' ? sQurban + amount : Math.max(0, sQurban - amount);
           } else {
             sUmum = adjTipe === 'tambah' ? sUmum + amount : Math.max(0, sUmum - amount);
           }
@@ -2124,6 +2111,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             saldoQurban: sQurban,
             saldoUmum: sUmum,
             totalSimpanan: sPokok + sZakat + sQurban + sUmum,
+            jumlahHariPokok: Math.floor(sPokok / (prev.profile?.pembagianPokokHarian || 1000)),
           };
         }
         return m;
@@ -2134,10 +2122,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       const saldoAkhir =
         adjKategoriTabungan === 'pokok'
           ? (targetAfter?.saldoPokok || 0)
-          : adjKategoriTabungan === 'zakat'
-          ? (targetAfter?.saldoZakatFitrah || 0)
-          : adjKategoriTabungan === 'qurban'
-          ? (targetAfter?.saldoQurban || 0)
           : (targetAfter?.saldoUmum || 0);
 
       newTxs.unshift({
@@ -2169,6 +2153,45 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         auditLogs: [audit, ...prev.auditLogs],
       };
     });
+
+    // 1. Authoritative Backend Sync
+    try {
+      fetch('/api/balance/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetIds: [targetMember.id],
+          nominal: amount,
+          tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+          jenisTabungan: adjKategoriTabungan,
+          keterangan: adjKeterangan || ketEntry,
+          adminName: currentAdmin?.nama || 'Admin Koperasi',
+        }),
+      }).catch(() => {});
+    } catch {}
+
+    // 2. Direct Firestore Sync
+    try {
+      const { db } = await import('../lib/firebase');
+      const { doc, updateDoc } = await import('firebase/firestore');
+      const updatedMem = state.members.find((m) => m.id === targetMember.id);
+      if (updatedMem) {
+        const sPokok = adjTipe === 'tambah' ? (updatedMem.saldoPokok || 0) + pokokPortion : Math.max(0, (updatedMem.saldoPokok || 0) - pokokPortion);
+        const sZakat = adjTipe === 'tambah' ? (updatedMem.saldoZakatFitrah || 0) + zakatPortion : Math.max(0, (updatedMem.saldoZakatFitrah || 0) - zakatPortion);
+        const sQurban = adjTipe === 'tambah' ? (updatedMem.saldoQurban || 0) + qurbanPortion : Math.max(0, (updatedMem.saldoQurban || 0) - qurbanPortion);
+        const sUmum = adjKategoriTabungan === 'umum' ? (adjTipe === 'tambah' ? (updatedMem.saldoUmum || 0) + amount : Math.max(0, (updatedMem.saldoUmum || 0) - amount)) : (updatedMem.saldoUmum || 0);
+
+        await updateDoc(doc(db, 'members', targetMember.id), {
+          saldoPokok: adjKategoriTabungan === 'pokok' ? sPokok : updatedMem.saldoPokok,
+          saldoZakatFitrah: adjKategoriTabungan === 'pokok' ? sZakat : updatedMem.saldoZakatFitrah,
+          saldoQurban: adjKategoriTabungan === 'pokok' ? sQurban : updatedMem.saldoQurban,
+          saldoUmum: sUmum,
+          totalSimpanan: (adjKategoriTabungan === 'pokok' ? sPokok + sZakat + sQurban : (updatedMem.saldoPokok || 0) + (updatedMem.saldoZakatFitrah || 0) + (updatedMem.saldoQurban || 0)) + sUmum,
+          jumlahHariPokok: Math.floor(sPokok / 1000),
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
+    } catch {}
 
     alert(`✓ Penyesuaian saldo ${labelKategori} a/n ${targetMember.nama} senilai ${formatRupiah(amount)} berhasil disimpan & otomatis terinput di Kas Anggota.`);
     setSubModal(null);
@@ -5067,52 +5090,76 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setAdjKategoriTabungan('umum')}
-                    className={`p-2 rounded-xl text-left border text-xs font-bold transition-all ${
+                    className={`p-2.5 rounded-xl text-left border text-xs font-bold transition-all ${
                       adjKategoriTabungan === 'umum'
                         ? 'bg-sky-500/20 border-sky-500 text-sky-300 ring-1 ring-sky-500'
                         : 'bg-slate-800 border-slate-700 text-slate-400'
                     }`}
                   >
                     <div>Tabungan Umum Bebas</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Bebas setor / tarik</div>
+                    <div className="text-[10px] text-slate-400 font-normal">Bebas setor / tarik kapan saja</div>
                   </button>
                   <button
                     type="button"
                     onClick={() => setAdjKategoriTabungan('pokok')}
-                    className={`p-2 rounded-xl text-left border text-xs font-bold transition-all ${
+                    className={`p-2.5 rounded-xl text-left border text-xs font-bold transition-all ${
                       adjKategoriTabungan === 'pokok'
                         ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500'
                         : 'bg-slate-800 border-slate-700 text-slate-400'
                     }`}
                   >
-                    <div>Tabungan Pokok</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Simpanan Pokok Wajib</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdjKategoriTabungan('zakat')}
-                    className={`p-2 rounded-xl text-left border text-xs font-bold transition-all ${
-                      adjKategoriTabungan === 'zakat'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div>Zakat Fitrah</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Penyaluran Zakat</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdjKategoriTabungan('qurban')}
-                    className={`p-2 rounded-xl text-left border text-xs font-bold transition-all ${
-                      adjKategoriTabungan === 'qurban'
-                        ? 'bg-purple-500/20 border-purple-500 text-purple-300 ring-1 ring-purple-500'
-                        : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}
-                  >
-                    <div>Tabungan Qurban</div>
-                    <div className="text-[10px] text-slate-400 font-normal">Penyaluran Qurban</div>
+                    <div>Tabungan Pokok (Kelipatan Rp 2.000/hari)</div>
+                    <div className="text-[10px] text-slate-400 font-normal">Otomatis 50% Pokok, 25% Zakat, 25% Qurban</div>
                   </button>
                 </div>
+
+                {adjKategoriTabungan === 'pokok' && (
+                  <div className="mt-2.5 p-3 bg-amber-950/30 border border-amber-500/30 rounded-xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-amber-300">Preset Hari Simpanan Pokok:</span>
+                      <span className="text-[10px] text-amber-400/80">Rp 2.000 per Hari</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 5, 10, 15, 30].map((hari) => (
+                        <button
+                          key={hari}
+                          type="button"
+                          onClick={() => {
+                            setAdjNominal(String(hari * 2000));
+                            if (!adjKeterangan) {
+                              setAdjKeterangan(`Penyesuaian Tabungan Pokok ${hari} Hari`);
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-amber-300 border border-amber-500/30 rounded-lg text-[11px] font-bold transition-all"
+                        >
+                          {hari} Hari (Rp {(hari * 2000).toLocaleString('id-ID')})
+                        </button>
+                      ))}
+                    </div>
+                    {Number(adjNominal) > 0 && (
+                      <div className="grid grid-cols-3 gap-1.5 pt-1 text-[10px] text-center">
+                        <div className="p-1.5 bg-slate-900/80 rounded-lg border border-amber-500/20">
+                          <div className="text-slate-400">50% Pokok</div>
+                          <div className="font-mono font-bold text-amber-300">
+                            Rp {Math.floor(Number(adjNominal) * 0.5).toLocaleString('id-ID')}
+                          </div>
+                        </div>
+                        <div className="p-1.5 bg-slate-900/80 rounded-lg border border-emerald-500/20">
+                          <div className="text-slate-400">25% Zakat Fitrah</div>
+                          <div className="font-mono font-bold text-emerald-300">
+                            Rp {Math.floor(Number(adjNominal) * 0.25).toLocaleString('id-ID')}
+                          </div>
+                        </div>
+                        <div className="p-1.5 bg-slate-900/80 rounded-lg border border-purple-500/20">
+                          <div className="text-slate-400">25% Qurban</div>
+                          <div className="font-mono font-bold text-purple-300">
+                            Rp {(Number(adjNominal) - Math.floor(Number(adjNominal) * 0.5) - Math.floor(Number(adjNominal) * 0.25)).toLocaleString('id-ID')}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Pilihan Buku Kas Pencatatan (Req 5 & Req 14) */}

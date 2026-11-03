@@ -706,12 +706,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
 
-          // 2. Catat Tabungan Zakat di Buku Kas Koperasi
+          // 2. Catat Tabungan Zakat di Buku Kas Anggota
           newKasList.push({
             id: `kas-ang-zakat-${Date.now() + 1}`,
-            bukuKas: 'koperasi',
+            bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: 'Iuran Tabungan Zakat & Qurban',
+            kategori: 'Tabungan Zakat',
             keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',
@@ -722,12 +722,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
 
-          // 3. Catat Tabungan Qurban di Buku Kas Koperasi
+          // 3. Catat Tabungan Qurban di Buku Kas Anggota
           newKasList.push({
             id: `kas-ang-qurban-${Date.now() + 2}`,
-            bukuKas: 'koperasi',
+            bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: 'Iuran Tabungan Zakat & Qurban',
+            kategori: 'Tabungan Qurban',
             keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
             namaPenerima: targetMember.nama,
             tipe: 'masuk',

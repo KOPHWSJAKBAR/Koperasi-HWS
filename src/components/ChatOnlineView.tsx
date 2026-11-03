@@ -112,13 +112,79 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Realtime Polling Fallback (ensures live chat across all devices & mobile)
+  // Dedicated Direct Firestore Realtime Online Chat Listener (Zero Delay Sync)
   useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let active = true;
+
+    import('../lib/firebase').then(({ db }) => {
+      if (!active) return;
+      import('firebase/firestore').then(({ collection, onSnapshot, query, limit }) => {
+        if (!active) return;
+        try {
+          const q = query(collection(db, 'chats'), limit(500));
+          unsubscribe = onSnapshot(
+            q,
+            (snapshot) => {
+              if (snapshot.empty && snapshot.metadata.hasPendingWrites === false) return;
+              const incoming: ChatMessage[] = [];
+              snapshot.forEach((docSnap) => {
+                const data = docSnap.data() as ChatMessage;
+                if (data && data.id && data.memberId) {
+                  incoming.push(data);
+                }
+              });
+
+              if (incoming.length > 0) {
+                updateState((prev) => {
+                  const existingMap = new Map<string, ChatMessage>();
+                  (prev.chatMessages || []).forEach((m) => existingMap.set(m.id, m));
+                  let hasChanges = false;
+                  incoming.forEach((inMsg) => {
+                    const ex = existingMap.get(inMsg.id);
+                    if (!ex) {
+                      existingMap.set(inMsg.id, inMsg);
+                      hasChanges = true;
+                    } else if (
+                      ex.isReadByAdmin !== inMsg.isReadByAdmin ||
+                      ex.isReadByMember !== inMsg.isReadByMember ||
+                      ex.pesan !== inMsg.pesan
+                    ) {
+                      existingMap.set(inMsg.id, { ...ex, ...inMsg });
+                      hasChanges = true;
+                    }
+                  });
+
+                  if (!hasChanges) return prev;
+                  return {
+                    ...prev,
+                    chatMessages: Array.from(existingMap.values()).sort(
+                      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                    ),
+                  };
+                });
+              }
+            },
+            (err) => {
+              console.warn('Realtime chat onSnapshot notice:', err.message);
+            }
+          );
+        } catch (e) {
+          console.warn('Failed to attach realtime chat onSnapshot:', e);
+        }
+      });
+    });
+
     const interval = setInterval(() => {
       fetchStateFromServer();
-    }, 2500);
-    return () => clearInterval(interval);
-  }, []);
+    }, 2000);
+
+    return () => {
+      active = false;
+      if (unsubscribe) unsubscribe();
+      clearInterval(interval);
+    };
+  }, [updateState]);
 
   // Filter members based on search query
   const filteredMembers = state.members.filter((mem) => {

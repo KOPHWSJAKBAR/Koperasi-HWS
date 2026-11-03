@@ -2422,6 +2422,7 @@ async function startServer() {
           saldoZakatFitrah: z,
           saldoQurban: q,
           totalSimpanan,
+          jumlahHariPokok: Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000)),
         };
       });
 
