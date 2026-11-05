@@ -712,7 +712,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       )}
 
       {/* ================= MAIN BODY CONTAINER (Anti Melebar Kesamping di Mobile) ================= */}
-      <main className="w-full max-w-md md:max-w-4xl lg:max-w-5xl mx-auto p-3 sm:p-6 space-y-5 sm:space-y-6 flex-1 overflow-x-hidden">
+      <main className={`w-full max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex-1 overflow-x-hidden ${activeMenu === 'chat' ? 'p-2 sm:p-4 flex flex-col min-h-0' : 'p-3 sm:p-6 space-y-5 sm:space-y-6'}`}>
         {activeMenu === 'dashboard' ? (
           <>
             {/* Top Balance Card (Matching Anggota PC Dashboard.png & Mobile) */}

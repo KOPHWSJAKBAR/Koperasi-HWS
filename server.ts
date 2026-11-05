@@ -2073,6 +2073,90 @@ async function startServer() {
       const targetMem = (currentState.members || []).find((m: any) => m.id === id);
       currentState.members = (currentState.members || []).filter((m: any) => m.id !== id);
 
+      // Calculate remaining balance to transfer to cash books
+      const totalSaldo =
+        (Number(targetMem?.saldoPokok) || 0) +
+        (Number(targetMem?.saldoUmum) || 0) +
+        (Number(targetMem?.saldoZakatFitrah) || 0) +
+        (Number(targetMem?.saldoQurban) || 0);
+
+      const now = new Date();
+      const tgl = now.toISOString().split('T')[0];
+
+      if (totalSaldo > 0) {
+        currentState.kasList = currentState.kasList || [];
+        // Keluar dari Buku Kas Anggota
+        currentState.kasList.unshift({
+          id: `kas-del-ang-${Date.now()}`,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          kategori: 'Pindah Kas Hapus Akun',
+          keterangan: `pindah kas hapus account ${targetMem?.nama || id}`,
+          tipe: 'keluar',
+          nominal: totalSaldo,
+          saldoKasSetelah: 0,
+          inputBy: adminName || 'Super Admin',
+          status: 'approved',
+          createdAt: now.toISOString(),
+        });
+
+        // Masuk ke Buku Kas Koperasi
+        currentState.kasList.unshift({
+          id: `kas-del-kop-${Date.now() + 1}`,
+          bukuKas: 'koperasi',
+          tanggal: tgl,
+          kategori: 'Pindah Kas Tutup Akun',
+          keterangan: `Tutup acoount ${targetMem?.nama || id} dan sisa saldo Rp ${totalSaldo}`,
+          tipe: 'masuk',
+          nominal: totalSaldo,
+          saldoKasSetelah: 0,
+          inputBy: adminName || 'Super Admin',
+          status: 'approved',
+          createdAt: now.toISOString(),
+        });
+
+        // Recompute running saldoKasSetelah for both books
+        let runningKasAnggota = 0;
+        let runningKasKoperasi = 0;
+        const sortedKas = [...currentState.kasList].sort((a: any, b: any) => (a.tanggal || '').localeCompare(b.tanggal || ''));
+        sortedKas.forEach((k: any) => {
+          const nom = Number(k.nominal) || 0;
+          if (k.bukuKas === 'anggota') {
+            if (k.tipe === 'masuk') runningKasAnggota += nom;
+            else runningKasAnggota -= nom;
+            k.saldoKasSetelah = Math.max(0, runningKasAnggota);
+          } else {
+            if (k.tipe === 'masuk') runningKasKoperasi += nom;
+            else runningKasKoperasi -= nom;
+            k.saldoKasSetelah = Math.max(0, runningKasKoperasi);
+          }
+        });
+      }
+
+      // Purge all member transactions and track in deletedTransactionIds
+      currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
+      const memTxs = (currentState.memberTransactions || []).filter(
+        (tx: any) => tx && (tx.memberId === id || (targetMem?.nomorRekening && tx.nomorRekening === targetMem.nomorRekening))
+      );
+      memTxs.forEach((tx: any) => {
+        if (!currentState.deletedTransactionIds.includes(tx.id)) {
+          currentState.deletedTransactionIds.push(tx.id);
+        }
+      });
+      currentState.memberTransactions = (currentState.memberTransactions || []).filter(
+        (tx: any) => tx && tx.memberId !== id && (!targetMem?.nomorRekening || tx.nomorRekening !== targetMem.nomorRekening)
+      );
+
+      // Purge member deposits and track in deletedSetoranIds
+      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
+      const memSetorans = (currentState.setoranList || []).filter((s: any) => s && s.memberId === id);
+      memSetorans.forEach((s: any) => {
+        if (!currentState.deletedSetoranIds.includes(s.id)) {
+          currentState.deletedSetoranIds.push(s.id);
+        }
+      });
+      currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s && s.memberId !== id);
+
       // Permanently retain deleted member account number in usedAccountNumbers to ensure anti-reuse rule
       if (targetMem?.nomorRekening) {
         currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
@@ -2095,7 +2179,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Hapus Anggota Koperasi',
-        detail: `Menghapus anggota ${targetMem?.nama || id} (${targetMem?.nomorAnggota || ''}) dari database server`,
+        detail: `Menghapus anggota ${targetMem?.nama || id} (${targetMem?.nomorAnggota || ''}). Rekening dikunci, mutasi dibersihkan, dan saldo ${totalSaldo} disinkronkan ke Kas Koperasi`,
         targetId: id,
       });
 

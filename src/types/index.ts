@@ -230,6 +230,7 @@ export interface MemberTransaction {
   saldoSetelah: number;
   kategori: KategoriTabunganMutasi;
   referensiId?: string;
+  nomorRekening?: string;
   periode?: string;
   jumlahHari?: number;
 }

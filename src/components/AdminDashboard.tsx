@@ -1070,7 +1070,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* ================= MAIN CONTENT BODY ================= */}
-      <main className="max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6 flex-1 overflow-x-hidden">
+      <main className={`max-w-7xl w-full mx-auto flex-1 overflow-x-hidden ${activeTab === 'chat' ? 'p-2 sm:p-4 flex flex-col min-h-0' : 'p-4 sm:p-6 space-y-6'}`}>
         {activeTab === 'dashboard' ? (
           <>
             {/* PENDING LOCK POKOK APPROVAL ALERT BANNER (Req 7) */}

@@ -654,7 +654,12 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     admins: mergedAdmins,
     members: mergedMembers,
     setoranList: Array.from(setoranMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
-    chatMessages: Array.from(chatMap.values()).sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
+    chatMessages: Array.from(chatMap.values())
+      .filter((c) => {
+        const t = new Date(c.timestamp).getTime();
+        return !isNaN(t) ? Date.now() - t <= 5 * 24 * 60 * 60 * 1000 : false;
+      })
+      .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
     memberTransactions: mergedTxList.sort((a, b) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1)),
     kasList: mergedKasList.sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),

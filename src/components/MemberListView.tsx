@@ -596,10 +596,42 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         });
       }
 
+      // Recompute running saldoKasSetelah pada buku kas
+      let runAnggota = 0;
+      let runKoperasi = 0;
+      const sortedKas = [...updatedKasList].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+      sortedKas.forEach((k) => {
+        const nom = Number(k.nominal) || 0;
+        if (k.bukuKas === 'anggota') {
+          if (k.tipe === 'masuk') runAnggota += nom;
+          else runAnggota -= nom;
+          k.saldoKasSetelah = Math.max(0, runAnggota);
+        } else {
+          if (k.tipe === 'masuk') runKoperasi += nom;
+          else runKoperasi -= nom;
+          k.saldoKasSetelah = Math.max(0, runKoperasi);
+        }
+      });
+
+      // Hapus seluruh mutasi transaksi anggota & catat ke deletedTransactionIds
+      const memberTxIds: string[] = [];
+      const remainingTx = (prev.memberTransactions || []).filter((tx) => {
+        if (tx.memberId === member.id || (member.nomorRekening && tx.nomorRekening === member.nomorRekening)) {
+          memberTxIds.push(tx.id);
+          return false;
+        }
+        return true;
+      });
+
+      // Permanen kunci nomor rekening agar tidak dapat didaftarkan ulang
+      const updatedUsedAccountNumbers = Array.from(
+        new Set([...(prev.usedAccountNumbers || []), ...(member.nomorRekening ? [member.nomorRekening] : [])])
+      );
+
       const audit = createAuditLog(
         currentAdmin,
         'Hapus Anggota Koperasi',
-        `Menyetujui penghapusan anggota ${member.nama} (${member.nomorAnggota}). Saldo dialihkan ke Kas Koperasi: ${formatRupiah(totalSaldo)}`,
+        `Menyetujui penghapusan anggota ${member.nama} (${member.nomorAnggota}). Nomor rekening dikunci, mutasi dibersihkan, saldo dialihkan ke Kas Koperasi: ${formatRupiah(totalSaldo)}`,
         member.id
       );
 
@@ -607,12 +639,15 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         ...prev,
         members: prev.members.filter((m) => m.id !== member.id),
         deletedMemberIds: Array.from(new Set([...(prev.deletedMemberIds || []), member.id])),
+        deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...memberTxIds])),
+        usedAccountNumbers: updatedUsedAccountNumbers,
+        memberTransactions: remainingTx,
         kasList: updatedKasList,
         auditLogs: [audit, ...prev.auditLogs],
       };
     });
 
-    alert(`Anggota ${member.nama} berhasil dihapus dan saldo dicatat di buku kas!`);
+    alert(`Anggota ${member.nama} berhasil dihapus, rekening dikunci permanen, mutasi dibersihkan, dan saldo dicatat di buku kas!`);
   };
 
   // Reject Deletion Request
