@@ -119,8 +119,8 @@ const getInitialState = () => ({
   suratList: [],
   auditLogs: [],
   categoriesKasKoperasi: {
-    pemasukan: ['Iuran Tabungan Zakat & Qurban', 'Penerimaan Sumbangan / Donasi', 'Pendapatan Jasa Koperasi', 'Pindah Kas Tutup Akun'],
-    pengeluaran: ['Penyaluran Zakat Fitrah', 'Penyaluran Tabungan Qurban', 'Biaya Operasional & ATK', 'Sewa Kantor & Listrik', 'Honor Pengurus'],
+    pemasukan: ['Sedekah Subuh', 'Sedekah Jumat', 'Sedekah Umum', 'Pinjaman Kas', 'Pengembalian Kas', 'Penerimaan Sumbangan / Donasi', 'Pendapatan Jasa Koperasi', 'Pindah Kas Tutup Akun', 'Investor Koperasi'],
+    pengeluaran: ['Penyaluran Sedekah Subuh', 'Penyaluran Sedekah Jumat', 'Penyaluran Sedekah Umum', 'Pinjaman Kas', 'Pengembalian Buku Kas', 'Biaya Operasional & ATK', 'Sewa Kantor & Listrik', 'Honor Pengurus', 'Alat HWS Teknik'],
   },
   lastRunningNumber: 66666,
   serverSyncStatus: {
@@ -1003,14 +1003,27 @@ let currentState = loadDatabase();
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
-// Enforce 5-day chat retention on startup
-const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
-const chatCutoff = Date.now() - FIVE_DAYS_MS;
+// Enforce 10-day chat retention on startup
+const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+const chatCutoff = Date.now() - TEN_DAYS_MS;
 if (Array.isArray(currentState.chatMessages)) {
   currentState.chatMessages = currentState.chatMessages.filter((m: any) => {
     const t = new Date(m.timestamp).getTime();
     return !isNaN(t) && t >= chatCutoff;
   });
+}
+// User Req 5: Hapuskan pencatatan zakat fitrah dan qurban pada buku kas koperasi
+if (currentState.categoriesKasKoperasi) {
+  if (Array.isArray(currentState.categoriesKasKoperasi.pemasukan)) {
+    currentState.categoriesKasKoperasi.pemasukan = currentState.categoriesKasKoperasi.pemasukan.filter(
+      (c: string) => !c.toLowerCase().includes('zakat') && !c.toLowerCase().includes('qurban')
+    );
+  }
+  if (Array.isArray(currentState.categoriesKasKoperasi.pengeluaran)) {
+    currentState.categoriesKasKoperasi.pengeluaran = currentState.categoriesKasKoperasi.pengeluaran.filter(
+      (c: string) => !c.toLowerCase().includes('zakat') && !c.toLowerCase().includes('qurban')
+    );
+  }
 }
 // Archive any files in current database on startup
 archiveAllUploadedFiles(currentState);
@@ -1076,10 +1089,10 @@ async function startServer() {
     });
   });
 
-  // 5-Day Chat Retention Helper: Otomatis hapus pesan chat lebih dari 5 hari
+  // 10-Day Chat Retention Helper: Otomatis hapus pesan chat lebih dari 10 hari
   const purgeOldChatMessages = (state: any) => {
-    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - FIVE_DAYS_MS;
+    const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - TEN_DAYS_MS;
     if (Array.isArray(state.chatMessages)) {
       state.chatMessages = state.chatMessages.filter((m: any) => {
         const t = new Date(m.timestamp).getTime();
@@ -1088,7 +1101,7 @@ async function startServer() {
     }
   };
 
-  // Send Chat message & Broadcast Push Notification (Tersimpan 5 Hari)
+  // Send Chat message & Broadcast Push Notification (Tersimpan 10 Hari)
   app.post('/api/chat', (req: Request, res: Response) => {
     const { message } = req.body;
     if (!message || !message.memberId) {

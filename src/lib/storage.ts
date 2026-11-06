@@ -126,7 +126,6 @@ const defaultInitialState: AppState = {
       'Sedekah Umum',
       'Pinjaman Kas',
       'Pengembalian Kas',
-      'Iuran Tabungan Zakat & Qurban',
       'Penerimaan Sumbangan / Donasi',
       'Pendapatan Jasa Koperasi',
       'Pindah Kas Tutup Akun',
@@ -137,8 +136,6 @@ const defaultInitialState: AppState = {
       'Penyaluran Sedekah Umum',
       'Pinjaman Kas',
       'Pengembalian Buku Kas',
-      'Penyaluran Zakat Fitrah',
-      'Penyaluran Tabungan Qurban',
       'Biaya Operasional & ATK',
       'Sewa Kantor & Listrik',
       'Honor Pengurus',
@@ -657,7 +654,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     chatMessages: Array.from(chatMap.values())
       .filter((c) => {
         const t = new Date(c.timestamp).getTime();
-        return !isNaN(t) ? Date.now() - t <= 5 * 24 * 60 * 60 * 1000 : false;
+        return !isNaN(t) ? Date.now() - t <= 10 * 24 * 60 * 60 * 1000 : false;
       })
       .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),

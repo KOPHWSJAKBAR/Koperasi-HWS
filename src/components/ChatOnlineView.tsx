@@ -224,14 +224,14 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   const targetMemberId = isMember ? (currentMember?.id || selectedMemberId) : selectedMemberId;
   const activeMember = isMember ? (currentMember || state.members.find((m) => m.id === targetMemberId)) : state.members.find((m) => m.id === targetMemberId);
 
-  // Current active conversation messages (strictly 5 days retention)
-  const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+  // Current active conversation messages (strictly 10 days retention per user req)
+  const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
   const now = Date.now();
   const activeMessages = state.chatMessages.filter((m) => {
     if (m.memberId !== targetMemberId) return false;
     const time = new Date(m.timestamp).getTime();
-    // Strictly retain messages within 5 days
-    return !isNaN(time) ? now - time <= FIVE_DAYS_MS : true;
+    // Strictly retain messages within 10 days
+    return !isNaN(time) ? now - time <= TEN_DAYS_MS : true;
   });
 
   // Scroll to bottom on message change
@@ -385,10 +385,10 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     setShowDownloadMenu(false);
   };
 
-  // Download All Chat Messages across All Members (5 Days Retention)
+  // Download All Chat Messages across All Members (10 Days Retention)
   const handleDownloadAllChatHistory = () => {
     const memberMap = new Map(state.members.map((m) => [m.id, m]));
-    const cutoff = Date.now() - FIVE_DAYS_MS;
+    const cutoff = Date.now() - TEN_DAYS_MS;
     const allRecentMessages = state.chatMessages.filter((m) => {
       const t = new Date(m.timestamp).getTime();
       return !isNaN(t) ? t >= cutoff : false;
@@ -409,24 +409,24 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       };
     });
 
-    downloadExcelCsv(rows, `Riwayat_Chat_Seluruh_Anggota_5Hari_${Date.now()}`);
+    downloadExcelCsv(rows, `Riwayat_Chat_Seluruh_Anggota_10Hari_${Date.now()}`);
     setShowDownloadMenu(false);
   };
 
   // Download Raw JSON Archive of Chat History
   const handleDownloadJsonArchive = () => {
-    const cutoff = Date.now() - FIVE_DAYS_MS;
+    const cutoff = Date.now() - TEN_DAYS_MS;
     const recentMessages = state.chatMessages.filter((m) => {
       const t = new Date(m.timestamp).getTime();
       return !isNaN(t) ? t >= cutoff : false;
     });
 
     const exportPayload = {
-      title: 'Arsip Riwayat Chat Koperasi HWS (5 Hari)',
+      title: 'Arsip Riwayat Chat Koperasi HWS (10 Hari)',
       exportedAt: new Date().toISOString(),
       exportedBy: currentAdmin?.nama || 'Super Admin',
       totalMessages: recentMessages.length,
-      retentionPolicy: 'Tersimpan Maksimal 5 Hari Kalender (Realtime Online)',
+      retentionPolicy: 'Tersimpan Maksimal 10 Hari Kalender (Realtime Online)',
       messages: recentMessages,
     };
 
@@ -434,7 +434,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Arsip_Chat_Koperasi_HWS_5Hari_${Date.now()}.json`;
+    a.download = `Arsip_Chat_Koperasi_HWS_10Hari_${Date.now()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -456,7 +456,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             <div className="flex justify-between items-center">
               <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5 text-amber-400" />
-                Chat Anggota (5 Hari)
+                Chat Anggota (10 Hari)
               </span>
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -632,7 +632,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                 <div className="absolute right-0 top-full mt-2 w-64 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl p-2 z-30 space-y-1">
                   <div className="px-2.5 py-1.5 border-b border-slate-800">
                     <span className="text-[10px] uppercase font-black text-amber-400">
-                      Opsi Unduh Riwayat Chat (5 Hari)
+                      Opsi Unduh Riwayat Chat (10 Hari)
                     </span>
                   </div>
 
@@ -656,7 +656,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                   >
                     <Download className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                     <div>
-                      <div className="font-semibold text-white">Seluruh Percakapan (5 Hari)</div>
+                      <div className="font-semibold text-white">Seluruh Percakapan (10 Hari)</div>
                       <div className="text-[10px] text-slate-400">Semua anggota koperasi (Excel / CSV)</div>
                     </div>
                   </button>
@@ -669,7 +669,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                     <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <div>
                       <div className="font-semibold text-white">Cadangan Arsip JSON</div>
-                      <div className="text-[10px] text-slate-400">Penyimpanan audit & arsip 5 hari</div>
+                      <div className="text-[10px] text-slate-400">Penyimpanan audit & arsip 10 hari</div>
                     </div>
                   </button>
                 </div>
@@ -681,11 +681,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
         {/* Message Bubble List */}
         <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3 overscroll-contain">
-          {/* 5-Day Retention Notice */}
+          {/* 10-Day Retention Notice */}
           <div className="text-center my-1.5">
             <span className="text-[10px] bg-slate-800/80 text-slate-300 px-3.5 py-1.5 rounded-full border border-slate-700/80 inline-flex items-center gap-1.5 shadow-sm">
               <Clock className="w-3 h-3 text-amber-400" />
-              <span>Riwayat chat tersimpan <strong>5 hari</strong> & tersinkronisasi realtime ke semua perangkat.</span>
+              <span>Riwayat chat tersimpan <strong>10 hari</strong> & tersinkronisasi realtime ke semua perangkat.</span>
             </span>
           </div>
 

@@ -725,11 +725,11 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               {/* Title & Copyable Account Number */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 relative z-10 min-w-0">
                 <div className="min-w-0">
-                  <span className="text-[10px] sm:text-xs font-bold text-slate-400 tracking-wider uppercase block truncate">
+                  <span className="text-[10px] sm:text-xs font-bold text-slate-400 tracking-wider uppercase block break-words">
                     TOTAL SIMPANAN KESELURUHAN
                   </span>
                   <div
-                    className="text-2xl sm:text-3xl lg:text-4xl font-black text-white mt-1 tracking-tight truncate max-w-full"
+                    className="text-2xl sm:text-3xl lg:text-4xl font-black text-white mt-1 tracking-tight break-all font-mono"
                     title={formatRupiah(totalSimpanan)}
                   >
                     {formatRupiah(totalSimpanan)}
@@ -752,66 +752,66 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               {/* 5 Sub-Cards Grid: Pokok, Fitrah, Qurban, Umum, Saldo Sedekah (Req 3C) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4 mt-5 relative z-10">
                 {/* 1. Tabungan Pokok */}
-                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3.5 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
-                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block truncate">
+                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block break-words leading-tight">
                     Tabungan Pokok (Rp1rb/hr)
                   </span>
                   <div
-                    className="text-sm sm:text-base lg:text-sm xl:text-base font-black text-[#f59e0b] mt-1 truncate tracking-tight"
+                    className="text-sm sm:text-base font-black text-[#f59e0b] mt-1 break-all font-mono tracking-tight"
                     title={formatRupiah(currentMember.saldoPokok)}
                   >
                     {formatRupiah(currentMember.saldoPokok)}
                   </div>
-                  <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-1 truncate">
+                  <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-1 min-w-0">
                     <Lock className="w-3 h-3 text-amber-500 shrink-0" />
-                    <span className="truncate">Terkunci Sistem</span>
+                    <span className="break-words leading-tight text-[9px] sm:text-[10px]">Terkunci Sistem</span>
                   </div>
                 </div>
 
                 {/* 2. Zakat Fitrah */}
-                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3.5 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
-                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block truncate">
+                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block break-words leading-tight">
                     Zakat Fitrah (Rp500/hr)
                   </span>
                   <div
-                    className="text-sm sm:text-base lg:text-sm xl:text-base font-black text-emerald-400 mt-1 truncate tracking-tight"
+                    className="text-sm sm:text-base font-black text-emerald-400 mt-1 break-all font-mono tracking-tight"
                     title={formatRupiah(currentMember.saldoZakatFitrah)}
                   >
                     {formatRupiah(currentMember.saldoZakatFitrah)}
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1 truncate">
+                  <div className="text-[9px] sm:text-[10px] text-slate-400 mt-1 break-words leading-tight">
                     Dikelola Pengurus
                   </div>
                 </div>
 
                 {/* 3. Tabungan Qurban */}
-                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3.5 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
-                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block truncate">
+                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block break-words leading-tight">
                     Tabungan Qurban (Rp500/hr)
                   </span>
                   <div
-                    className="text-sm sm:text-base lg:text-sm xl:text-base font-black text-emerald-400 mt-1 truncate tracking-tight"
+                    className="text-sm sm:text-base font-black text-emerald-400 mt-1 break-all font-mono tracking-tight"
                     title={formatRupiah(currentMember.saldoQurban)}
                   >
                     {formatRupiah(currentMember.saldoQurban)}
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1 truncate">
+                  <div className="text-[9px] sm:text-[10px] text-slate-400 mt-1 break-words leading-tight">
                     Dikelola Pengurus
                   </div>
                 </div>
 
                 {/* 4. Tabungan Umum Bebas */}
-                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3.5 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
-                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block truncate">
+                <div className="bg-[#141d33] border border-slate-700/60 rounded-2xl p-3 sm:p-4 min-w-0 overflow-hidden flex flex-col justify-between">
+                  <span className="text-[10px] sm:text-xs text-slate-400 font-semibold block break-words leading-tight">
                     Tabungan Umum Bebas
                   </span>
                   <div
-                    className="text-sm sm:text-base lg:text-sm xl:text-base font-black text-sky-400 mt-1 truncate tracking-tight"
+                    className="text-sm sm:text-base font-black text-sky-400 mt-1 break-all font-mono tracking-tight"
                     title={formatRupiah(currentMember.saldoUmum)}
                   >
                     {formatRupiah(currentMember.saldoUmum)}
                   </div>
-                  <div className="text-[10px] text-sky-400 font-bold mt-1 truncate">
+                  <div className="text-[9px] sm:text-[10px] text-sky-400 font-bold mt-1 break-words leading-tight">
                     Bebas Setor & Tarik
                   </div>
                 </div>
@@ -819,24 +819,24 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 {/* 5. Saldo Sedekah Anggota & Kas Sedekah Koperasi (Req 3C) */}
                 <div
                   onClick={() => setShowBerbagiModal(true)}
-                  className="bg-gradient-to-br from-[#141d33] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-2xl p-3.5 sm:p-4 cursor-pointer transition-all hover:scale-[1.02] shadow-md group col-span-2 sm:col-span-1 min-w-0 overflow-hidden flex flex-col justify-between"
+                  className="bg-gradient-to-br from-[#141d33] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-2xl p-3 sm:p-4 cursor-pointer transition-all hover:scale-[1.02] shadow-md group col-span-2 sm:col-span-1 min-w-0 overflow-hidden flex flex-col justify-between"
                   title="Klik untuk membuka Menu Sedekah (Setor QRIS & Transfer Bank)"
                 >
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10px] sm:text-xs text-rose-300 font-semibold block truncate">
+                    <span className="text-[10px] sm:text-xs text-rose-300 font-semibold block break-words leading-tight">
                       Saldo Sedekah Saya
                     </span>
                     <Heart className="w-3.5 h-3.5 text-rose-400 fill-rose-400/30 group-hover:scale-110 transition-transform shrink-0" />
                   </div>
                   <div
-                    className="text-sm sm:text-base lg:text-sm xl:text-base font-black text-rose-300 mt-1 truncate tracking-tight"
+                    className="text-sm sm:text-base font-black text-rose-300 mt-1 break-all font-mono tracking-tight"
                     title={formatRupiah(memberSaldoSedekah)}
                   >
                     {formatRupiah(memberSaldoSedekah)}
                   </div>
-                  <div className="text-[10px] text-rose-400/90 mt-1 flex items-center justify-between gap-1 truncate">
-                    <span className="truncate">Kas: {formatRupiah(totalKasSedekahTersedia)}</span>
-                    <span className="font-bold underline text-[9px] group-hover:text-rose-200 shrink-0">Donasi ›</span>
+                  <div className="text-[9px] sm:text-[10px] text-rose-400/90 mt-1 flex items-center justify-between gap-1 min-w-0">
+                    <span className="break-words min-w-0 leading-tight">Kas: {formatRupiah(totalKasSedekahTersedia)}</span>
+                    <span className="font-bold underline text-[9px] group-hover:text-rose-200 shrink-0 whitespace-nowrap">Donasi ›</span>
                   </div>
                 </div>
               </div>

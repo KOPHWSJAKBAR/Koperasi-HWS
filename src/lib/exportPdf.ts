@@ -378,104 +378,163 @@ export function generateMutasiRekeningPdf(
   printDocumentHtml(html, `Mutasi_Rekening_${member.nomorRekening}_${options.periodeLabel.replace(/\s+/g, '_')}`);
 }
 
-// User Req 12 & 13: Export Excel Anggota dengan Judul di Atas, Periode, Kolom Sesuai Permintaan, dan Baris Total Keseluruhan di Bawah
+// User Req: Export Excel Data Anggota dengan total (Pokok + Zakat + Qurban), tanpa Tabungan Umum
 export function exportAnggotaExcel(
   members: MemberUser[],
   periodeLabel: string = 'Semua Periode',
-  judulLaporan: string = 'LAPORAN REKAPITULASI TABUNGAN ANGGOTA'
+  judulLaporan: string = 'LAPORAN REKAPITULASI DATA ANGGOTA'
 ) {
   let totalPokok = 0;
-  let totalQurban = 0;
   let totalZakat = 0;
+  let totalQurban = 0;
   let totalKeseluruhan = 0;
 
-  // Build CSV rows
-  const csvLines: string[] = [];
-
-  // 1. Judul & Header Laporan di bagian atas (Req 13)
-  csvLines.push(`"KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA (KOPERASI HWS)"`);
-  csvLines.push(`"${judulLaporan.toUpperCase()}"`);
-  csvLines.push(`"PERIODE LAPORAN: ${periodeLabel.toUpperCase()}"`);
-  csvLines.push(`"TANGGAL CETAK: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}"`);
-  csvLines.push(``); // Empty row separator
-
-  // 2. Kolom Header persis sesuai User Req 13:
-  // "kolom nama, wilayah, Tabungan pokok, Tabungan qurban, Tabungan zakat, dan jumlah tampilkan periode serta judul pada diatas"
-  csvLines.push(`"No","Nama Anggota","Nomor Rekening","Wilayah","Tabungan Pokok","Tabungan Qurban","Tabungan Zakat","Jumlah"`);
-
-  // 3. Data baris anggota
+  let rowsHtml = '';
   members.forEach((m, idx) => {
     const pokok = m.saldoPokok || 0;
-    const qurban = m.saldoQurban || 0;
     const zakat = m.saldoZakatFitrah || 0;
-    const jumlah = pokok + qurban + zakat + (m.saldoUmum || 0);
+    const qurban = m.saldoQurban || 0;
+    const jumlah = pokok + zakat + qurban;
 
     totalPokok += pokok;
-    totalQurban += qurban;
     totalZakat += zakat;
+    totalQurban += qurban;
     totalKeseluruhan += jumlah;
 
-    csvLines.push(
-      `"${idx + 1}","${m.nama.replace(/"/g, '""')}","${m.nomorRekening}","${m.wilayah}","${pokok}","${qurban}","${zakat}","${jumlah}"`
-    );
+    rowsHtml += `
+      <tr>
+        <td class="center">${idx + 1}</td>
+        <td style="font-weight: bold;">${m.nama}</td>
+        <td class="center" style="mso-number-format:'\\@';">${m.nomorRekening}</td>
+        <td class="center" style="mso-number-format:'\\@';">${m.nomorAnggota || '-'}</td>
+        <td class="center">${m.wilayah}</td>
+        <td class="num">${pokok}</td>
+        <td class="num">${zakat}</td>
+        <td class="num">${qurban}</td>
+        <td class="num" style="font-weight: bold; background-color: #f8fafc;">${jumlah}</td>
+      </tr>
+    `;
   });
 
-  // 4. Baris TOTAL KESELURUHAN ke bawah (Req 12)
-  csvLines.push(``);
-  csvLines.push(
-    `"TOTAL KESELURUHAN","Total Anggota: ${members.length}","","","${totalPokok}","${totalQurban}","${totalZakat}","${totalKeseluruhan}"`
-  );
+  const totalZakatQurban = totalZakat + totalQurban;
 
-  const csvContent = '\uFEFF' + csvLines.join('\r\n');
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', `Laporan_Tabungan_Anggota_HWS_${Date.now()}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  const excelHtml = `
+    <table>
+      <tr>
+        <td colspan="9" class="header-title" style="font-size: 14pt; font-weight: bold; text-align: center; color: #0f172a;">
+          KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA (KOPERASI HWS)
+        </td>
+      </tr>
+      <tr>
+        <td colspan="9" class="sub-title" style="font-size: 11pt; font-weight: bold; text-align: center; color: #d97706;">
+          ${judulLaporan.toUpperCase()}
+        </td>
+      </tr>
+      <tr>
+        <td colspan="9" class="center" style="font-size: 9pt; color: #64748b; text-align: center;">
+          Periode: ${periodeLabel.toUpperCase()} • Tanggal Unduh: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}
+        </td>
+      </tr>
+      <tr><td colspan="9"></td></tr>
+      <thead>
+        <tr style="background-color: #0f172a; color: #ffffff; font-weight: bold; font-size: 10pt;">
+          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 40px;">NO</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: left; width: 220px;">NAMA ANGGOTA</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 140px;">NO. REKENING</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 130px;">NO. ANGGOTA</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 120px;">WILAYAH</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: right; width: 130px;">TAB. POKOK</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: right; width: 120px;">TAB. ZAKAT</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: right; width: 120px;">TAB. QURBAN</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: right; width: 160px;">TOTAL (POKOK+ZAKAT+QURBAN)</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+        <tr style="background-color: #0f172a; color: #ffffff; font-weight: bold; font-size: 11pt; border-top: 2px solid #000;">
+          <td colspan="5" style="padding: 10px; text-align: left; font-weight: bold; color: #ffffff;">
+            TOTAL KESELURUHAN (${members.length} ANGGOTA)
+          </td>
+          <td class="num" style="padding: 10px; color: #fbbf24; font-weight: bold;">${totalPokok}</td>
+          <td class="num" style="padding: 10px; color: #34d399; font-weight: bold;">${totalZakat}</td>
+          <td class="num" style="padding: 10px; color: #38bdf8; font-weight: bold;">${totalQurban}</td>
+          <td class="num" style="padding: 10px; color: #ffffff; font-size: 12pt; font-weight: bold; background-color: #047857;">${totalKeseluruhan}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <br/>
+    <table style="width: 60%; margin-top: 15px; border-collapse: collapse;">
+      <tr style="background-color: #0f172a; color: #ffffff;">
+        <th colspan="2" style="padding: 8px 12px; font-size: 10pt; text-align: left;">RINGKASAN TOTAL REKAPITULASI DATA ANGGOTA</th>
+      </tr>
+      <tr>
+        <td style="padding: 6px 12px; border: 1px solid #cbd5e1;">1. Total Simpanan Pokok (50%):</td>
+        <td class="num" style="padding: 6px 12px; border: 1px solid #cbd5e1; font-weight: bold; color: #b45309;">${totalPokok}</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 12px; border: 1px solid #cbd5e1;">2. Total Tabungan Zakat Fitrah (25%):</td>
+        <td class="num" style="padding: 6px 12px; border: 1px solid #cbd5e1; font-weight: bold; color: #047857;">${totalZakat}</td>
+      </tr>
+      <tr>
+        <td style="padding: 6px 12px; border: 1px solid #cbd5e1;">3. Total Tabungan Qurban (25%):</td>
+        <td class="num" style="padding: 6px 12px; border: 1px solid #cbd5e1; font-weight: bold; color: #0369a1;">${totalQurban}</td>
+      </tr>
+      <tr style="background-color: #ecfdf5;">
+        <td style="padding: 6px 12px; border: 1px solid #cbd5e1; font-weight: bold; color: #065f46;">• Subtotal Dana Zakat & Qurban:</td>
+        <td class="num" style="padding: 6px 12px; border: 1px solid #cbd5e1; font-weight: bold; color: #065f46;">${totalZakatQurban}</td>
+      </tr>
+      <tr style="background-color: #0f172a; color: #fbbf24; font-weight: bold; font-size: 11pt;">
+        <td style="padding: 8px 12px; border: 1px solid #000;">TOTAL REKAPITULASI (POKOK + ZAKAT + QURBAN):</td>
+        <td class="num" style="padding: 8px 12px; border: 1px solid #000; font-size: 12pt; color: #fbbf24;">${totalKeseluruhan}</td>
+      </tr>
+    </table>
+  `;
+
+  downloadExcelHtml(excelHtml, `Laporan_Data_Anggota_HWS_${Date.now()}`);
 }
 
-// User Req 12: Export PDF Anggota dengan Baris Total Keseluruhan di Bawah dan Watermark Anti-Pemalsuan
+// User Req: Export PDF Data Anggota dengan total (Pokok + Zakat + Qurban), tanpa Tabungan Umum
 export function exportAnggotaPdf(
   members: MemberUser[],
   periodeLabel: string = 'Semua Periode',
   wilayahLabel: string = 'Semua Wilayah'
 ) {
   let totalPokok = 0;
-  let totalQurban = 0;
   let totalZakat = 0;
+  let totalQurban = 0;
   let totalKeseluruhan = 0;
 
   const tableRows = members
     .map((m, idx) => {
       const pokok = m.saldoPokok || 0;
-      const qurban = m.saldoQurban || 0;
       const zakat = m.saldoZakatFitrah || 0;
-      const jumlah = pokok + qurban + zakat + (m.saldoUmum || 0);
+      const qurban = m.saldoQurban || 0;
+      const jumlah = pokok + zakat + qurban;
 
       totalPokok += pokok;
-      totalQurban += qurban;
       totalZakat += zakat;
+      totalQurban += qurban;
       totalKeseluruhan += jumlah;
 
       return `
-        <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
-          <td style="padding: 6px; text-align: center; color: #64748b;">${idx + 1}</td>
-          <td style="padding: 6px; font-weight: 700; color: #0f172a;">${m.nama}</td>
-          <td style="padding: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px;">${m.nomorRekening}</td>
-          <td style="padding: 6px;">${m.wilayah}</td>
-          <td style="padding: 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(pokok)}</td>
-          <td style="padding: 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(qurban)}</td>
-          <td style="padding: 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(zakat)}</td>
-          <td style="padding: 6px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #0f172a;">
+        <tr style="border-bottom: 1px solid #e2e8f0; font-size: 10px;">
+          <td style="padding: 5px 4px; text-align: center; color: #64748b;">${idx + 1}</td>
+          <td style="padding: 5px 6px; font-weight: 700; color: #0f172a;">${m.nama}</td>
+          <td style="padding: 5px 4px; font-family: 'JetBrains Mono', monospace; font-size: 9px; text-align: center;">${m.nomorRekening}</td>
+          <td style="padding: 5px 4px; text-align: center; font-size: 9px;">${m.wilayah}</td>
+          <td style="padding: 5px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(pokok)}</td>
+          <td style="padding: 5px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(zakat)}</td>
+          <td style="padding: 5px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(qurban)}</td>
+          <td style="padding: 5px 6px; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 800; color: #0f172a;">
             ${formatRupiah(jumlah)}
           </td>
         </tr>
       `;
     })
     .join('');
+
+  const totalZakatQurban = totalZakat + totalQurban;
 
   const html = `
     <div class="watermark-container">
@@ -491,54 +550,82 @@ export function exportAnggotaPdf(
       </div>
 
       <div class="content-layer">
-        <div style="border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 14px;">
-          <h2 style="font-size: 18px; font-weight: 900; color: #0f172a; letter-spacing: 0.5px;">KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA (KOPERASI HWS)</h2>
-          <div style="font-size: 13px; font-weight: 800; color: #d97706; margin-top: 2px;">
-            LAPORAN REKAPITULASI TABUNGAN ANGGOTA (${wilayahLabel.toUpperCase()})
+        <div style="border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px;">
+          <h2 style="font-size: 16px; font-weight: 900; color: #0f172a; letter-spacing: 0.5px; margin: 0;">KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA (KOPERASI HWS)</h2>
+          <div style="font-size: 12px; font-weight: 800; color: #d97706; margin-top: 2px;">
+            LAPORAN REKAPITULASI DATA ANGGOTA (${wilayahLabel.toUpperCase()})
           </div>
-          <div style="font-size: 11px; color: #475569; margin-top: 2px;">
+          <div style="font-size: 10px; color: #475569; margin-top: 2px;">
             Periode: <b>${periodeLabel.toUpperCase()}</b> • Dicetak: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}
           </div>
         </div>
 
         <table style="width: 100%; border-collapse: collapse; border: 1.5px solid #0f172a;">
           <thead>
-            <tr style="background: #f1f5f9; font-size: 10px; text-transform: uppercase; font-weight: 800; border-bottom: 1.5px solid #0f172a;">
-              <th style="padding: 7px 5px; width: 4%; text-align: center;">NO</th>
-              <th style="padding: 7px 6px; text-align: left;">NAMA ANGGOTA</th>
-              <th style="padding: 7px 6px; text-align: left; width: 14%;">NO. REKENING</th>
-              <th style="padding: 7px 6px; text-align: left; width: 12%;">WILAYAH</th>
-              <th style="padding: 7px 6px; text-align: right; width: 13%;">TAB. POKOK</th>
-              <th style="padding: 7px 6px; text-align: right; width: 13%;">TAB. QURBAN</th>
-              <th style="padding: 7px 6px; text-align: right; width: 13%;">TAB. ZAKAT</th>
-              <th style="padding: 7px 6px; text-align: right; width: 16%;">JUMLAH TOTAL</th>
+            <tr style="background: #f1f5f9; font-size: 9px; text-transform: uppercase; font-weight: 800; border-bottom: 1.5px solid #0f172a;">
+              <th style="padding: 6px 4px; width: 4%; text-align: center;">NO</th>
+              <th style="padding: 6px; text-align: left;">NAMA ANGGOTA</th>
+              <th style="padding: 6px 4px; text-align: center; width: 14%;">NO. REKENING</th>
+              <th style="padding: 6px 4px; text-align: center; width: 12%;">WILAYAH</th>
+              <th style="padding: 6px; text-align: right; width: 15%;">TAB. POKOK</th>
+              <th style="padding: 6px; text-align: right; width: 14%;">TAB. ZAKAT</th>
+              <th style="padding: 6px; text-align: right; width: 14%;">TAB. QURBAN</th>
+              <th style="padding: 6px; text-align: right; width: 20%;">TOTAL (POKOK+ZAKAT+QURBAN)</th>
             </tr>
           </thead>
           <tbody>
             ${tableRows}
-            <!-- Baris Total Keseluruhan ke bawah (Req 12) -->
-            <tr style="background: #0f172a; color: #ffffff; font-weight: 900; font-size: 11px; border-top: 2px solid #0f172a;">
-              <td colspan="4" style="padding: 8px 10px; text-align: left;">
+            <!-- Baris Total Keseluruhan ke bawah -->
+            <tr style="background: #0f172a; color: #ffffff; font-weight: 900; font-size: 10px; border-top: 2px solid #0f172a;">
+              <td colspan="4" style="padding: 8px 6px; text-align: left;">
                 TOTAL KESELURUHAN (${members.length} ANGGOTA)
               </td>
-              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">
+              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace; color: #fbbf24;">
                 ${formatRupiah(totalPokok)}
               </td>
-              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">
-                ${formatRupiah(totalQurban)}
-              </td>
-              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">
+              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace; color: #34d399;">
                 ${formatRupiah(totalZakat)}
               </td>
-              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #fbbf24;">
+              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace; color: #38bdf8;">
+                ${formatRupiah(totalQurban)}
+              </td>
+              <td style="padding: 8px 6px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #ffffff; background: #047857;">
                 ${formatRupiah(totalKeseluruhan)}
               </td>
             </tr>
           </tbody>
         </table>
 
-        <div style="margin-top: 24px; font-size: 9px; color: #64748b; text-align: center; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
-          Dokumen ini diterbitkan secara sah dan otomatis oleh Sistem Elektronik Koperasi Himpunan Wirausaha Sejahtera (Koperasi HWS). Watermark logo tertanam untuk menjamin keaslian data.
+        <!-- Ringkasan Rincian Kas Tabungan Anggota (Pokok, Zakat, Qurban) -->
+        <div style="margin-top: 14px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 10px;">
+          <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 8px 10px;">
+            <div style="font-size: 8px; font-weight: 800; color: #b45309; text-transform: uppercase;">1. Simpanan Pokok (50%)</div>
+            <div style="font-size: 13px; font-weight: 900; color: #92400e; font-family: 'JetBrains Mono', monospace; margin-top: 2px;">${formatRupiah(totalPokok)}</div>
+          </div>
+          <div style="background: #ecfdf5; border: 1px solid #10b981; border-radius: 6px; padding: 8px 10px;">
+            <div style="font-size: 8px; font-weight: 800; color: #047857; text-transform: uppercase;">2. Zakat Fitrah (25%)</div>
+            <div style="font-size: 13px; font-weight: 900; color: #065f46; font-family: 'JetBrains Mono', monospace; margin-top: 2px;">${formatRupiah(totalZakat)}</div>
+          </div>
+          <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 8px 10px;">
+            <div style="font-size: 8px; font-weight: 800; color: #0369a1; text-transform: uppercase;">3. Tabungan Qurban (25%)</div>
+            <div style="font-size: 13px; font-weight: 900; color: #075985; font-family: 'JetBrains Mono', monospace; margin-top: 2px;">${formatRupiah(totalQurban)}</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 10px; background: #0f172a; color: #ffffff; border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 900;">
+          <div>
+            <span>DANA ZAKAT & QURBAN: ${formatRupiah(totalZakatQurban)}</span>
+            <span style="font-size: 9px; font-weight: 600; color: #94a3b8; margin-left: 8px;">
+              (Zakat: ${formatRupiah(totalZakat)} + Qurban: ${formatRupiah(totalQurban)})
+            </span>
+          </div>
+          <div style="font-size: 12px; color: #fbbf24; font-family: 'JetBrains Mono', monospace;">
+            TOTAL (POKOK + ZAKAT + QURBAN): ${formatRupiah(totalKeseluruhan)}
+          </div>
+        </div>
+
+        <div style="margin-top: 18px; font-size: 8px; color: #64748b; text-align: center; border-top: 1px dashed #cbd5e1; padding-top: 6px;">
+          Dokumen resmi Koperasi Himpunan Wirausaha Sejahtera (Koperasi HWS). Watermark logo tertanam untuk menjamin keaslian data.
         </div>
       </div>
     </div>
@@ -980,7 +1067,8 @@ export function exportBukuKasPdf(payload: BukuKasExportPayload) {
   });
 
   const categoryDetailSections = allCategoryDetails.map((sec, secIdx) => {
-    const sortedEntries = [...sec.entries].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    // User Req 9: Urutkan tanggal-tanggal lama di bawah, tanggal terbaru di atas
+    const sortedEntries = [...sec.entries].sort((a, b) => b.tanggal.localeCompare(a.tanggal));
     const entriesRows =
       sortedEntries.length > 0
         ? sortedEntries.map((e, eIdx) => `
@@ -1094,7 +1182,7 @@ export function exportBukuKasPdf(payload: BukuKasExportPayload) {
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 900; border-top: 1.5px solid #047857; padding-top: 5px; color: #047857;">
               <span>SALDO KAS BERJALAN</span>
-              <span style="font-family: 'JetBrains Mono', monospace;">${formatRupiah(saldoKasBerjalan ?? (totalSimpananPokok + totalSimpananUmum + totalZakatQurban + saldoSedekahKoperasi))}</span>
+              <span style="font-family: 'JetBrains Mono', monospace;">${formatRupiah(saldoKasBerjalan ?? (totalSimpananPokok + totalSimpananUmum + totalZakatQurban + saldoKasKoperasi))}</span>
             </div>
           </div>
         </div>
@@ -1479,7 +1567,7 @@ export function exportBukuKasExcel(payload: BukuKasExportPayload) {
           <td>TOTAL ASET LANCAR</td>
           <td class="num">${formatRupiah(totalAsetLancar)}</td>
           <td>SALDO KAS BERJALAN</td>
-          <td class="num" style="color: #047857; font-weight: bold;">${formatRupiah(saldoKasBerjalan ?? (totalSimpananPokok + totalSimpananUmum + totalZakatQurban + saldoSedekahKoperasi))}</td>
+          <td class="num" style="color: #047857; font-weight: bold;">${formatRupiah(saldoKasBerjalan ?? (totalSimpananPokok + totalSimpananUmum + totalZakatQurban + saldoKasKoperasi))}</td>
         </tr>
       </table>
     `;
@@ -1507,7 +1595,8 @@ export function exportBukuKasExcel(payload: BukuKasExportPayload) {
   });
 
   allDetails.forEach((sec, idx) => {
-    const sorted = [...sec.entries].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    // User Req 9: Urutkan tanggal-tanggal lama di bawah, tanggal terbaru di atas
+    const sorted = [...sec.entries].sort((a, b) => b.tanggal.localeCompare(a.tanggal));
     const tipeBadge =
       sec.tipe === 'masuk'
         ? (bukuKasType === 'neraca' ? 'PENDAPATAN / PENERIMAAN' : 'PEMASUKAN')

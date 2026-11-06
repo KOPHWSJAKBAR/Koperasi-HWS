@@ -2692,17 +2692,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span>›</span>
               </button>
 
-              {/* Sesuaikan Saldo Anggota */}
-              <button
-                onClick={() => setSubModal('sesuaikan_saldo')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <DollarSign className="w-4 h-4 text-emerald-400" />
-                  <span>Penyesuaian Saldo Anggota</span>
-                </div>
-                <span>›</span>
-              </button>
 
               {/* KUNCI / BEKUKAN MAINTENANCE SISTEM (Req 3: Khusus Super Admin) */}
               {state.maintenanceLock?.isLocked ? (

@@ -178,8 +178,19 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     runningSaldoMap.set(k.id, saldoKasKoperasi);
   });
 
-  // 3. User Formula: Saldo kas berjalan = saldo dari total buku kas anggota dan buku kas koperasi
-  const saldoKasBerjalan = saldoKasAnggota + saldoKasKoperasi;
+  const totalSimpananPokok = state.members.reduce((acc, m) => acc + (m.saldoPokok || 0), 0);
+  const totalTabunganUmum = state.members.reduce((acc, m) => acc + (m.saldoUmum || 0), 0);
+  const totalDanaZakatQurban = state.members.reduce(
+    (acc, m) => acc + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0),
+    0
+  );
+
+  // User Req 2: Dasboard buku kas anggota = Total simpanan pokok anggota + total Tabungan umum + Tabungan zakat Fitrah + Tabungan qurban
+  const totalSaldoAnggota = totalSimpananPokok + totalTabunganUmum + totalDanaZakatQurban;
+  saldoKasAnggota = totalSaldoAnggota;
+
+  // User Req 1: Dashboard Saldo kas berjalan = total saldo anggota (pokok+Tabungan umum+Zakat+qurban) + saldo buku kas koperasi
+  const saldoKasBerjalan = totalSaldoAnggota + saldoKasKoperasi;
 
   const allSedekah = getUnifiedSedekahList(state);
   const totalSedekahMasuk = allSedekah
@@ -189,13 +200,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     .filter((e) => e.tipe === 'penyaluran' && e.status === 'approved')
     .reduce((acc, e) => acc + e.nominal, 0);
   const saldoSedekahKoperasi = Math.max(0, totalSedekahMasuk - totalSedekahSalur);
-
-  const totalSimpananPokok = state.members.reduce((acc, m) => acc + (m.saldoPokok || 0), 0);
-  const totalTabunganUmum = state.members.reduce((acc, m) => acc + (m.saldoUmum || 0), 0);
-  const totalDanaZakatQurban = state.members.reduce(
-    (acc, m) => acc + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0),
-    0
-  );
 
   // 4. Filter current displayed list (Hanya transaksi aktif, urutan kas terakhir masuk ada di atas)
   const currentList = activeKasList
@@ -207,9 +211,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       return true;
     })
     .sort((a, b) => {
+      // User Req 9: Tanggal lama di bawah, tanggal terbaru di atas
+      if (b.tanggal !== a.tanggal) return b.tanggal.localeCompare(a.tanggal);
       const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
       const timeB = new Date(b.createdAt || b.tanggal).getTime() || 0;
-      if (timeA !== timeB) return timeB - timeA; // Terakhir masuk ada di atas
+      if (timeA !== timeB) return timeB - timeA;
       return b.id.localeCompare(a.id);
     });
 
@@ -1236,16 +1242,16 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             </div>
 
             <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
-              <div className="text-2xl sm:text-3xl font-black font-mono text-amber-400 tracking-tight">
+              <div className="text-2xl sm:text-3xl font-black font-mono text-amber-400 tracking-tight break-all">
                 {formatRupiah(saldoKasAnggota)}
               </div>
-              <div className="text-[11px] text-slate-400 font-medium">
-                Akumulasi Simpanan Pokok, Qurban, Zakat & Tabungan Bebas Anggota
+              <div className="text-[10px] sm:text-[11px] text-slate-400 font-medium break-words leading-tight" title="Total Simpanan Pokok Anggota + Total Tabungan Umum + Tabungan Zakat Fitrah + Tabungan Qurban">
+                Total Simpanan Pokok Anggota + Total Tabungan Umum + Tabungan Zakat Fitrah + Tabungan Qurban
               </div>
             </div>
           </button>
 
-          {/* Card 2: Buku Kas Koperasi */}
+          {/* Card 2: Buku Kas Koperasi (Req 6: Tampilan atas total saldo, tampilan di bawahnya = total bersedekah dan saldo kas berjalan) */}
           <button
             type="button"
             onClick={() => setActiveKasTab('koperasi')}
@@ -1272,12 +1278,29 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               )}
             </div>
 
-            <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
-              <div className="text-2xl sm:text-3xl font-black font-mono text-sky-400 tracking-tight">
-                {formatRupiah(saldoKasKoperasi)}
+            <div className="mt-3 pt-3 border-t border-slate-700/50 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Saldo Kas Koperasi:</span>
+                  <div className="text-2xl sm:text-3xl font-black font-mono text-sky-400 tracking-tight break-all">
+                    {formatRupiah(saldoKasKoperasi)}
+                  </div>
+                </div>
               </div>
-              <div className="text-[11px] text-slate-400 font-medium">
-                Penerimaan Jasa, Sumbangan / Donasi, Biaya Operasional & Tutup Akun
+              <div className="pt-2 border-t border-slate-700/40 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                <div className="p-2 bg-slate-900/60 rounded-xl flex justify-between items-center gap-1.5 min-w-0">
+                  <span className="text-slate-300 truncate">Total Bersedekah:</span>
+                  <span className="font-bold text-rose-400 font-mono shrink-0 whitespace-nowrap">{formatRupiah(saldoSedekahKoperasi)}</span>
+                </div>
+                <div className="p-2 bg-slate-900/60 rounded-xl flex justify-between items-center gap-1.5 min-w-0">
+                  <div className="min-w-0 break-words">
+                    <div className="text-slate-300 text-xs">Saldo Kas Berjalan:</div>
+                    <div className="text-[9px] text-slate-400 leading-tight">Total Saldo - Bersedekah</div>
+                  </div>
+                  <span className="font-bold text-emerald-400 font-mono shrink-0 whitespace-nowrap">
+                    {formatRupiah(Math.max(0, saldoKasKoperasi - saldoSedekahKoperasi))}
+                  </span>
+                </div>
               </div>
             </div>
           </button>
@@ -1310,11 +1333,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             </div>
 
             <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-col sm:flex-row sm:items-baseline justify-between gap-1">
-              <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-400 tracking-tight">
+              <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-400 tracking-tight break-all">
                 {formatRupiah(saldoKasBerjalan)}
               </div>
-              <div className="text-[11px] text-slate-400 font-medium truncate" title={`Simpanan Pokok: ${formatRupiah(totalSimpananPokok)} + Tabungan Umum: ${formatRupiah(totalTabunganUmum)} + Zakat & Qurban: ${formatRupiah(totalDanaZakatQurban)} + Sedekah: ${formatRupiah(saldoSedekahKoperasi)}`}>
-                Pokok + Umum + Zakat & Qurban + Sedekah
+              <div className="text-[10px] sm:text-[11px] text-slate-400 font-medium break-words leading-tight" title={`Total Saldo Anggota (${formatRupiah(totalSaldoAnggota)}) + Saldo Buku Kas Koperasi (${formatRupiah(saldoKasKoperasi)}) = ${formatRupiah(saldoKasBerjalan)}`}>
+                Total Saldo Anggota (Pokok + Umum + Zakat + Qurban) + Kas Koperasi
               </div>
             </div>
           </button>
