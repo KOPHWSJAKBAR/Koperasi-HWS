@@ -400,6 +400,7 @@ export interface AppState {
   deletedKasIds?: string[];
   deletedSetoranIds?: string[];
   usedAccountNumbers?: string[]; // Rekening yang pernah dipakai tidak dapat digunakan kembali
+  usedMemberNumbers?: string[];  // Nomor anggota yang pernah dipakai tidak dapat digunakan kembali meskipun anggota sudah dihapus
 }
 
 

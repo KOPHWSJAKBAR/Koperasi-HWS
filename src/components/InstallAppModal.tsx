@@ -40,6 +40,23 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
     text: string;
     type: 'success' | 'info' | 'warn';
   } | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  const currentAppUrl = typeof window !== 'undefined' ? window.location.origin : 'https://koperasi-hws.id';
+
+  const handleCopyLink = () => {
+    try {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(currentAppUrl);
+      }
+    } catch {}
+    setCopiedLink(true);
+    setNotificationMsg({
+      text: '✓ Link resmi aplikasi berhasil disalin! Buka pada HP Android, iOS, atau PC untuk langsung terhubung realtime.',
+      type: 'success',
+    });
+    setTimeout(() => setCopiedLink(false), 3000);
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -480,6 +497,48 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
               </div>
             </div>
           )}
+        </div>
+
+        {/* Link Resmi Realtime Online Perangkat Baru (Android, iOS, PC, Web) */}
+        <div className="p-3.5 bg-slate-900/90 border border-slate-700/80 rounded-2xl space-y-2">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+            <span className="flex items-center gap-1.5 text-amber-400">
+              <ExternalLink className="w-4 h-4" />
+              <span>Link Resmi Realtime Online:</span>
+            </span>
+            <span className="text-[10px] text-emerald-400 font-mono">Tersinkronisasi ⚡</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              readOnly
+              value={currentAppUrl}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-slate-300 select-all focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleCopyLink}
+              className={`px-3 py-2 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer flex items-center gap-1.5 ${
+                copiedLink
+                  ? 'bg-emerald-500 text-slate-950 font-black'
+                  : 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold'
+              }`}
+            >
+              {copiedLink ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Tersalin!</span>
+                </>
+              ) : (
+                <>
+                  <span>Salin Link</span>
+                </>
+              )}
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-400 leading-relaxed">
+            Buka link ini pada perangkat baru mana pun (HP Android, iPhone/iPad, Laptop/PC). Aplikasi langsung terhubung ke database online realtime tanpa meniban data anggota lama.
+          </p>
         </div>
 
         {/* Security & Cloud integration note */}

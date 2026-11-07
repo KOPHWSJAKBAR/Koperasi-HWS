@@ -110,6 +110,7 @@ const getInitialState = () => ({
   deletedKasIds: [],
   deletedSetoranIds: [],
   usedAccountNumbers: [],
+  usedMemberNumbers: [],
   setoranList: [],
   memberTransactions: [],
   kasList: [],
@@ -523,6 +524,12 @@ function mergeServerState(current: any, incoming: any): any {
     ...mergedMembers.map((m: any) => m.nomorRekening).filter(Boolean),
   ]);
 
+  const allUsedMemberNumbers = new Set<string>([
+    ...(current.usedMemberNumbers || []),
+    ...(incoming.usedMemberNumbers || []),
+    ...mergedMembers.map((m: any) => m.nomorAnggota).filter(Boolean),
+  ]);
+
   return {
     ...current,
     ...incoming,
@@ -535,6 +542,7 @@ function mergeServerState(current: any, incoming: any): any {
     deletedKasIds: mergedDeletedKasIds,
     deletedSetoranIds: mergedDeletedSetoranIds,
     usedAccountNumbers: Array.from(allUsedAccountNumbers),
+    usedMemberNumbers: Array.from(allUsedMemberNumbers),
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
@@ -1054,6 +1062,9 @@ saveDatabase(currentState);
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
+
+  // Trust reverse proxy (Cloud Run, load balancers) so req.protocol and req.headers are accurate HTTPS
+  app.set('trust proxy', true);
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -2102,7 +2113,8 @@ async function startServer() {
   // Dedicated Member Deletion Endpoint for Super Admin (Req 8)
   app.post('/api/members/delete', (req: Request, res: Response) => {
     try {
-      const { id, adminName } = req.body;
+      const id = req.body.id || req.body.memberId;
+      const adminName = req.body.adminName;
       if (!id) return res.status(400).json({ error: 'ID anggota diperlukan' });
 
       const targetMem = (currentState.members || []).find((m: any) => m.id === id);
@@ -2192,11 +2204,17 @@ async function startServer() {
       });
       currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s && s.memberId !== id);
 
-      // Permanently retain deleted member account number in usedAccountNumbers to ensure anti-reuse rule
+      // Permanently retain deleted member account number and member number (nomer rekening dan nomer anggota tidak dapat dipergunakan kembali meskipun sudah dihapus)
       if (targetMem?.nomorRekening) {
         currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
         if (!currentState.usedAccountNumbers.includes(targetMem.nomorRekening)) {
           currentState.usedAccountNumbers.push(targetMem.nomorRekening);
+        }
+      }
+      if (targetMem?.nomorAnggota) {
+        currentState.usedMemberNumbers = currentState.usedMemberNumbers || [];
+        if (!currentState.usedMemberNumbers.includes(targetMem.nomorAnggota)) {
+          currentState.usedMemberNumbers.push(targetMem.nomorAnggota);
         }
       }
 
@@ -2286,24 +2304,32 @@ async function startServer() {
           }
         }
 
-        // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Anti-Meniban)
+        // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Anti-Meniban & Anti-Reuse)
+        // Nomor anggota yang pernah dipakai TIDAK DAPAT digunakan kembali meskipun anggota sudah dihapus
         const abbr = WILAYAH_ABBR_MAP[member.wilayah] || 'CKR';
         const year = new Date().getFullYear();
-        const existingNoSet = new Set(
-          currentState.members.map((m: any) => m.nomorAnggota).filter(Boolean)
-        );
+        const usedNoSet = new Set<string>([
+          ...(currentState.usedMemberNumbers || []),
+          ...currentState.members.map((m: any) => m.nomorAnggota).filter(Boolean),
+        ]);
 
         let candidateNo = member.nomorAnggota;
-        if (!candidateNo || existingNoSet.has(candidateNo)) {
-          let seq = currentState.members.length + 1;
+        if (!candidateNo || usedNoSet.has(candidateNo)) {
+          let seq = Math.max(currentState.members.length + 1, usedNoSet.size + 1);
           candidateNo = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
-          while (existingNoSet.has(candidateNo)) {
+          while (usedNoSet.has(candidateNo)) {
             seq++;
             candidateNo = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
           }
         }
 
+        currentState.usedMemberNumbers = currentState.usedMemberNumbers || [];
+        if (!currentState.usedMemberNumbers.includes(candidateNo)) {
+          currentState.usedMemberNumbers.push(candidateNo);
+        }
+
         // 3. Authoritative & Unique 10-digit Nomor Rekening Generation (Anti-Reuse & Anti-Meniban)
+        // Nomor rekening yang pernah dipakai TIDAK DAPAT digunakan kembali meskipun anggota sudah dihapus
         const kodeWilayah = WILAYAH_CODE_MAP[member.wilayah] || '77';
         const hp3 = cleanHp.slice(-3).padStart(3, '0');
         const usedRekSet = new Set<string>([
@@ -4001,9 +4027,18 @@ async function startServer() {
     res.send(JSON.stringify(currentState, null, 2));
   });
 
+  function getHostUrl(req: Request): string {
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const proto = forwardedProto
+      ? (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto.split(',')[0].trim())
+      : (req.secure ? 'https' : (req.protocol || 'https'));
+    const host = req.headers['x-forwarded-host'] || req.get('host') || 'koperasi-hws.id';
+    return `${proto}://${host}`;
+  }
+
   // Download Official PC Desktop Executable (.exe) (Real PE32 Windows executable launcher)
   app.get('/api/download/exe', (req: Request, res: Response) => {
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    const hostUrl = getHostUrl(req);
     const pePath = path.join(DATA_DIR, 'koperasi-hws-setup.exe');
     const makePeScript = path.join(DATA_DIR, 'make_pe.py');
 
@@ -4027,7 +4062,7 @@ async function startServer() {
 
   // Download Apple iOS Mobile Configuration Profile (Valid Apple WebClip profile)
   app.get('/api/download/ios', (req: Request, res: Response) => {
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    const hostUrl = getHostUrl(req);
     res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws.mobileconfig"');
     res.setHeader('Content-Type', 'application/x-apple-aspen-config');
 
@@ -4093,7 +4128,7 @@ async function startServer() {
 
   // Download PC Desktop Shortcut (.url - Buka Langsung Tanpa Install)
   app.get('/api/download/pc-shortcut', (req: Request, res: Response) => {
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    const hostUrl = getHostUrl(req);
     res.setHeader('Content-Disposition', 'attachment; filename="Koperasi-HWS.url"');
     res.setHeader('Content-Type', 'application/internet-shortcut');
     res.send(`[InternetShortcut]\nURL=${hostUrl}\nIconIndex=0\n`);
@@ -4101,7 +4136,7 @@ async function startServer() {
 
   // Download PC Desktop Installer (Windows .bat launcher / PowerShell desktop shortcut)
   app.get('/api/download/pc-installer', (req: Request, res: Response) => {
-    const hostUrl = `${req.protocol}://${req.get('host')}`;
+    const hostUrl = getHostUrl(req);
     res.setHeader('Content-Disposition', 'attachment; filename="Install-Koperasi-HWS.bat"');
     res.setHeader('Content-Type', 'application/x-bat');
 

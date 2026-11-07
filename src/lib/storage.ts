@@ -163,6 +163,7 @@ const defaultInitialState: AppState = {
     qrisImageUrl: '',
   },
   usedAccountNumbers: [],
+  usedMemberNumbers: [],
 };
 
 let globalState: AppState = (() => {
@@ -680,6 +681,14 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         ...(incoming.usedAccountNumbers || []),
         ...(base.members || []).map((m) => m?.nomorRekening).filter(Boolean),
         ...(incoming.members || []).map((m) => m?.nomorRekening).filter(Boolean),
+      ])
+    ),
+    usedMemberNumbers: Array.from(
+      new Set([
+        ...(base.usedMemberNumbers || []),
+        ...(incoming.usedMemberNumbers || []),
+        ...(base.members || []).map((m) => m?.nomorAnggota).filter(Boolean),
+        ...(incoming.members || []).map((m) => m?.nomorAnggota).filter(Boolean),
       ])
     ),
     serverSyncStatus: {
@@ -1342,6 +1351,8 @@ export async function syncShardedToFirestore(state: AppState) {
       deletedTransactionIds: state.deletedTransactionIds || [],
       deletedKasIds: state.deletedKasIds || [],
       deletedSetoranIds: state.deletedSetoranIds || [],
+      usedAccountNumbers: state.usedAccountNumbers || [],
+      usedMemberNumbers: state.usedMemberNumbers || [],
       updatedAt: now,
       updatedBy: CLIENT_ID,
     });
@@ -1657,6 +1668,9 @@ export function useKoperasiState() {
                     members: [...globalState.members, regMem],
                     usedAccountNumbers: Array.from(
                       new Set([...(globalState.usedAccountNumbers || []), regMem.nomorRekening].filter(Boolean))
+                    ),
+                    usedMemberNumbers: Array.from(
+                      new Set([...(globalState.usedMemberNumbers || []), regMem.nomorAnggota].filter(Boolean))
                     ),
                   };
                   try {
@@ -2124,15 +2138,40 @@ export function generateNomorRekening(
   return { nomorRekening: candidate, nextRunningNumber: running, usedAccountNumbers: updatedUsedList };
 }
 
-// Helper: Generate Official Member Number (e.g. HWS-CKR-2026-001)
+// Helper: Generate Official Member Number (e.g. HWS-CKR-2026-001) - ANTI-REUSE & ANTI-MENIBAN
+// Nomor anggota yang pernah dipakai tidak dapat dipergunakan kembali meskipun sudah dihapus
 export function generateNomorAnggota(
   wilayah: WilayahKoperasi,
-  existingCount: number
+  existingCount: number,
+  usedMemberNumbers?: string[] | Set<string>,
+  existingMembers?: MemberUser[]
 ): string {
   const abbr = WILAYAH_ABBR_MAP[wilayah] || 'CKR';
   const year = getWibDateStr().slice(0, 4);
-  const seq = String(existingCount + 1).padStart(3, '0');
-  return `HWS-${abbr}-${year}-${seq}`;
+
+  const usedSet = new Set<string>();
+  if (Array.isArray(usedMemberNumbers)) {
+    usedMemberNumbers.forEach((n) => n && usedSet.add(String(n).trim()));
+  } else if (usedMemberNumbers instanceof Set) {
+    usedMemberNumbers.forEach((n) => n && usedSet.add(String(n).trim()));
+  }
+  (globalState.usedMemberNumbers || []).forEach((n) => n && usedSet.add(String(n).trim()));
+  (globalState.members || []).forEach((m) => m?.nomorAnggota && usedSet.add(String(m.nomorAnggota).trim()));
+  if (Array.isArray(existingMembers)) {
+    existingMembers.forEach((m) => m?.nomorAnggota && usedSet.add(String(m.nomorAnggota).trim()));
+  }
+
+  let seq = Math.max(existingCount + 1, usedSet.size + 1);
+  let candidate = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+  while (usedSet.has(candidate)) {
+    seq++;
+    candidate = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+  }
+
+  usedSet.add(candidate);
+  globalState.usedMemberNumbers = Array.from(usedSet);
+
+  return candidate;
 }
 
 // Unified Authoritative Online Registration across all platforms (Android, iOS, PC, Web, AI Studio)
