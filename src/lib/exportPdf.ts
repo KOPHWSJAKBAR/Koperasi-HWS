@@ -106,6 +106,58 @@ export function printDocumentHtml(htmlContent: string, title: string = 'Dokumen 
   printWindow.document.close();
 }
 
+// Date helpers for accurate Mutasi Rekening calculations
+export function getOneDayBefore(dateStr: string): string {
+  if (!dateStr || !dateStr.includes('-')) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() - 1);
+  const resY = date.getUTCFullYear();
+  const resM = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const resD = String(date.getUTCDate()).padStart(2, '0');
+  return `${resY}-${resM}-${resD}`;
+}
+
+export function getLastDayOfMonth(yearMonthStr: string): string {
+  if (!yearMonthStr || !yearMonthStr.includes('-')) return '';
+  const [year, month] = yearMonthStr.split('-').map(Number);
+  const d = new Date(Date.UTC(year, month, 0));
+  const dt = String(d.getUTCDate()).padStart(2, '0');
+  const m = String(month).padStart(2, '0');
+  return `${year}-${m}-${dt}`;
+}
+
+export function formatIndonesianDate(dateStr: string): string {
+  if (!dateStr || !dateStr.includes('-')) return dateStr;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const monthNames = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+  ];
+  if (month < 1 || month > 12) return dateStr;
+  return `${day} ${monthNames[month - 1]} ${year}`;
+}
+
+export function addDaysToDate(dateStr: string, days: number): string {
+  if (!dateStr || !dateStr.includes('-')) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + days);
+  const resY = date.getUTCFullYear();
+  const resM = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const resD = String(date.getUTCDate()).padStart(2, '0');
+  return `${resY}-${resM}-${resD}`;
+}
+
+export function getDaysDifference(startDate: string, endDate: string): number {
+  if (!startDate || !endDate) return 0;
+  const [y1, m1, d1] = startDate.split('-').map(Number);
+  const [y2, m2, d2] = endDate.split('-').map(Number);
+  const t1 = Date.UTC(y1, m1 - 1, d1);
+  const t2 = Date.UTC(y2, m2 - 1, d2);
+  return Math.round((t2 - t1) / (1000 * 3600 * 24)) + 1; // inclusive
+}
+
 // Generate exact BCA Rekening Tahapan style for member mutasi with REAL Saldo Awal from prior days
 export function generateMutasiRekeningPdf(
   member: MemberUser,
@@ -117,11 +169,15 @@ export function generateMutasiRekeningPdf(
     endDate?: string;
   }
 ) {
-  // 1. Calculate REAL Saldo Awal from days strictly before options.startDate
+  // 1. Calculate REAL Saldo Awal from days strictly before options.startDate (1 hari sebelumnya)
   let saldoAwal = 0;
+  const prevDate = options.startDate ? getOneDayBefore(options.startDate) : '';
+  const prevDateFormatted = prevDate ? prevDate.split('-').reverse().slice(0, 2).join('/') : '-';
+  const prevDateIndonesian = prevDate ? formatIndonesianDate(prevDate) : 'Hari Sebelumnya';
+
   if (options.startDate) {
     const priorTransactions = transactions
-      .filter((t) => t.memberId === member.id)
+      .filter((t) => t.memberId === member.id && (t as any).status !== 'deleted')
       .filter((t) => options.kategori === 'semua' || t.kategori === options.kategori)
       .filter((t) => t.tanggal < options.startDate!);
 
@@ -129,9 +185,12 @@ export function generateMutasiRekeningPdf(
       saldoAwal += t.tipe === 'masuk' ? t.nominal : -t.nominal;
     });
   }
+  if (saldoAwal < 0) saldoAwal = 0;
 
   // 2. Filter transactions in the current period
-  let filtered = [...transactions].filter((t) => t.memberId === member.id);
+  let filtered = [...transactions].filter(
+    (t) => t.memberId === member.id && (t as any).status !== 'deleted'
+  );
 
   if (options.kategori !== 'semua') {
     filtered = filtered.filter((t) => t.kategori === options.kategori);
@@ -151,23 +210,30 @@ export function generateMutasiRekeningPdf(
     return da.localeCompare(db);
   });
 
-  // Calculate totals in the period
+  // Calculate totals and compute exact running balance starting from saldoAwal
   let totalMasuk = 0;
   let totalKeluar = 0;
   let countMasuk = 0;
   let countKeluar = 0;
+  let runningSaldo = saldoAwal;
 
-  filtered.forEach((t) => {
+  const enrichedTransactions = filtered.map((t) => {
     if (t.tipe === 'masuk') {
       totalMasuk += t.nominal;
       countMasuk++;
+      runningSaldo += t.nominal;
     } else {
       totalKeluar += t.nominal;
       countKeluar++;
+      runningSaldo -= t.nominal;
     }
+    return {
+      ...t,
+      computedSaldo: runningSaldo,
+    };
   });
 
-  const saldoAkhir = saldoAwal + totalMasuk - totalKeluar;
+  const saldoAkhir = runningSaldo;
 
   let kategoriTitle = 'SEMUA TABUNGAN';
   if (options.kategori === 'pokok') kategoriTitle = 'TABUNGAN POKOK / WAJIB';
@@ -175,12 +241,12 @@ export function generateMutasiRekeningPdf(
   if (options.kategori === 'zakat') kategoriTitle = 'SIMPANAN ZAKAT FITRAH';
   if (options.kategori === 'qurban') kategoriTitle = 'TABUNGAN QURBAN';
 
-  // First row: SALDO AWAL (dari hari sebelumnya)
+  // First row: SALDO AWAL (dari 1 hari sebelumnya)
   const saldoAwalRow = `
     <tr style="border-bottom: 1px dashed #cbd5e1; font-size: 11px; background-color: #f8fafc;">
-      <td style="padding: 6px 8px; vertical-align: top; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #64748b;">-</td>
+      <td style="padding: 6px 8px; vertical-align: top; font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #475569;">${prevDateFormatted}</td>
       <td style="padding: 6px 8px; vertical-align: top; font-weight: 800; color: #1e293b; text-transform: uppercase;">
-        SALDO AWAL (DARI HARI SEBELUMNYA)
+        SALDO AWAL PER ${prevDateIndonesian.toUpperCase()} (1 HARI SEBELUMNYA)
       </td>
       <td style="padding: 6px 8px; vertical-align: top; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #64748b;">0001</td>
       <td style="padding: 6px 8px; vertical-align: top; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 600; color: #64748b;">-</td>
@@ -190,18 +256,18 @@ export function generateMutasiRekeningPdf(
     </tr>
   `;
 
-  const rowsHtml = filtered.length === 0
+  const rowsHtml = enrichedTransactions.length === 0
     ? `
       ${saldoAwalRow}
-      <tr><td colspan="5" style="text-align: center; padding: 20px; color: #64748b; font-size: 12px; font-style: italic;">Tidak ada transaksi tambahan pada periode ini.</td></tr>
+      <tr><td colspan="5" style="text-align: center; padding: 20px; color: #64748b; font-size: 12px; font-style: italic;">Tidak ada transaksi tambahan pada periode ini. Saldo tetap ${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(saldoAwal)}.</td></tr>
     `
     : [
         saldoAwalRow,
-        ...filtered.map((tx) => {
+        ...enrichedTransactions.map((tx) => {
           const formattedTgl = tx.tanggal.split('-').reverse().slice(0, 2).join('/');
           const isMasuk = tx.tipe === 'masuk';
           const mutasiStr = `${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.nominal)} ${isMasuk ? 'CR' : 'DB'}`;
-          const saldoStr = new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.saldoSetelah);
+          const saldoStr = new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.computedSaldo);
 
           return `
             <tr style="border-bottom: 1px dashed #e2e8f0; font-size: 11px;">
@@ -340,9 +406,9 @@ export function generateMutasiRekeningPdf(
 
         <!-- Summary Box at Bottom (Req 9: Terdapat saldo awal dari hari sebelumnya, saldo awal dan jumlah kredit dan debit serta saldo) -->
         <div style="display: flex; justify-content: flex-end;">
-          <table style="width: 55%; border-collapse: collapse; font-size: 11px; font-family: 'JetBrains Mono', monospace; border: 1.5px solid #0f172a; border-radius: 6px; overflow: hidden;">
+          <table style="width: 60%; border-collapse: collapse; font-size: 11px; font-family: 'JetBrains Mono', monospace; border: 1.5px solid #0f172a; border-radius: 6px; overflow: hidden;">
             <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-              <td style="padding: 5px 8px; font-weight: 700; color: #1e293b;">SALDO AWAL (HARI SEBELUMNYA)</td>
+              <td style="padding: 5px 8px; font-weight: 700; color: #1e293b; font-size: 10px;">SALDO AWAL PER ${prevDateIndonesian.toUpperCase()} (1 HARI SEBELUMNYA)</td>
               <td style="width: 4%;">:</td>
               <td style="padding: 5px 8px; text-align: right; font-weight: 700;">${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(saldoAwal)}</td>
               <td style="width: 10%;"></td>
