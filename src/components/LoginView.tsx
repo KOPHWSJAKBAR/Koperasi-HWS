@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
-import { generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
+import { generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
 import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
@@ -594,7 +594,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsRegistering(true);
 
     try {
-      // Generate Nomor Rekening & Nomor Anggota
+      // Generate Nomor Rekening & Nomor Anggota proposal
       const { nomorRekening, nextRunningNumber } = generateNomorRekening(
         regForm.wilayah,
         regForm.whatsapp,
@@ -602,8 +602,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
       );
       const nomorAnggota = generateNomorAnggota(regForm.wilayah, state.members.length);
 
-      const newMember: MemberUser = {
-        id: `mem-${Date.now()}`,
+      const candidateMember: MemberUser = {
+        id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         nomorAnggota,
         nomorRekening,
         nama: regForm.nama.trim(),
@@ -639,41 +639,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
         terdaftarSejak: new Date().toISOString().split('T')[0],
       };
 
-      // Persist authoritatively to backend server
-      try {
-        await fetch('/api/members/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ member: newMember, nextRunningNumber }),
-        });
-      } catch (e) {
-        console.warn('Backend register call notice:', e);
+      // Authoritative Realtime Online Registration (Anti-Meniban across all devices)
+      const regResult = await registerMemberOnline(candidateMember, nextRunningNumber);
+      if (!regResult.success || !regResult.member) {
+        setRegError(regResult.error || 'Pendaftaran gagal. Silakan coba lagi.');
+        setIsRegistering(false);
+        return;
       }
 
-      await updateState((prev) => ({
-        ...prev,
-        members: [...prev.members.filter((m) => m.id !== newMember.id), newMember],
-        lastRunningNumber: nextRunningNumber,
-        auditLogs: [
-          {
-            id: `log-${Date.now()}`,
-            timestamp: new Date().toISOString(),
-            adminId: 'system',
-            adminNama: 'Pendaftaran Mandiri Online',
-            adminRole: 'super_admin',
-            action: 'Pendaftaran Anggota Baru (Mandiri)',
-            detail: `Anggota ${newMember.nama} (${newMember.nomorAnggota}) berhasil mendaftar mandiri di wilayah ${newMember.wilayah}. No. Rek: ${newMember.nomorRekening}`,
-            targetId: newMember.id,
-          },
-          ...prev.auditLogs,
-        ],
-      }));
+      const confirmedMember = regResult.member;
 
       // Set member identifier & password ready for immediate login
-      setMemberIdentifier(nomorAnggota);
+      setMemberIdentifier(confirmedMember.nomorAnggota);
       setMemberPassword(regForm.password);
-      setSuccessMessage(`✓ Pendaftaran berhasil! No. Anggota: ${nomorAnggota}, No. Rekening: ${nomorRekening}`);
-      setRegSuccessMember(newMember);
+      setSuccessMessage(`✓ Pendaftaran berhasil secara realtime online! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}`);
+      setRegSuccessMember(confirmedMember);
     } catch (err: any) {
       setRegError(err?.message || 'Terjadi kesalahan saat memproses pendaftaran. Silakan coba lagi.');
     } finally {

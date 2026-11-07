@@ -1645,6 +1645,28 @@ export function useKoperasiState() {
               data.type === 'SYSTEM_REPAIRED'
             ) {
               fetchStateFromServer();
+            } else if (data.type === 'MEMBER_REGISTERED') {
+              const regMem = data.payload?.member as MemberUser | undefined;
+              if (regMem && regMem.id) {
+                const existing = globalState.members.find(
+                  (m) => m.id === regMem.id || (regMem.nik && m.nik === regMem.nik)
+                );
+                if (!existing) {
+                  globalState = {
+                    ...globalState,
+                    members: [...globalState.members, regMem],
+                    usedAccountNumbers: Array.from(
+                      new Set([...(globalState.usedAccountNumbers || []), regMem.nomorRekening].filter(Boolean))
+                    ),
+                  };
+                  try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+                  } catch {}
+                  notifyListeners();
+                }
+              }
+              window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: data.payload }));
+              fetchStateFromServer();
             } else if (data.type === 'NEW_CHAT_MESSAGE') {
               const msg = data.payload;
               if (msg && !globalState.chatMessages.find((m) => m.id === msg.id)) {
@@ -2111,6 +2133,61 @@ export function generateNomorAnggota(
   const year = getWibDateStr().slice(0, 4);
   const seq = String(existingCount + 1).padStart(3, '0');
   return `HWS-${abbr}-${year}-${seq}`;
+}
+
+// Unified Authoritative Online Registration across all platforms (Android, iOS, PC, Web, AI Studio)
+// Mencegah data saling meniban pada device baru terinstall dan multi-device bersamaan
+export async function registerMemberOnline(
+  newMember: MemberUser,
+  nextRunningNumber?: number,
+  adminName?: string
+): Promise<{ success: boolean; member?: MemberUser; error?: string }> {
+  try {
+    // 1. Ambil state terbaru dari server terlebih dahulu (menghindari cache kosong pada device baru)
+    await fetchStateFromServer();
+
+    // 2. Kirim ke backend endpoint pendaftaran otoritatif
+    const res = await fetch('/api/members/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        member: newMember,
+        nextRunningNumber,
+        adminName,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || 'Gagal mendaftarkan anggota ke server online.' };
+    }
+
+    const savedMember = data.member as MemberUser;
+
+    // 3. Langsung sinkronkan state dari server ke globalState lokal tanpa meniban data lain
+    if (data.state) {
+      globalState = mergeStates(globalState, data.state);
+    } else {
+      globalState = {
+        ...globalState,
+        members: [...globalState.members.filter((m) => m.id !== savedMember.id), savedMember],
+        usedAccountNumbers: Array.from(
+          new Set([...(globalState.usedAccountNumbers || []), savedMember.nomorRekening].filter(Boolean))
+        ),
+      };
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+    } catch {}
+
+    notifyListeners();
+    scheduleShardedFirestoreSync(globalState);
+
+    return { success: true, member: savedMember };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Koneksi ke server online terputus.' };
+  }
 }
 
 // Helper: Add Audit Log with Firestore 'logs' collection synchronization

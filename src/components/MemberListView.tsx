@@ -7,7 +7,7 @@ import {
   LockPokokRequest,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
@@ -694,8 +694,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     );
     const nomorAnggota = generateNomorAnggota(formWilayah, state.members.length);
 
-    const newMember: MemberUser = {
-      id: `mem-${Date.now()}`,
+    const candidateMember: MemberUser = {
+      id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       nomorAnggota,
       nomorRekening,
       nama: formNama.trim(),
@@ -731,38 +731,21 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       terdaftarSejak: new Date().toISOString().split('T')[0],
     };
 
-    // Persist authoritatively to backend server
-    try {
-      await fetch('/api/members/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          member: newMember,
-          nextRunningNumber,
-          adminName: currentAdmin.nama,
-        }),
-      });
-    } catch (e) {
-      console.warn('Backend register call notice:', e);
+    // Authoritative Realtime Online Registration (Anti-Meniban across all devices)
+    const regResult = await registerMemberOnline(
+      candidateMember,
+      nextRunningNumber,
+      currentAdmin.nama
+    );
+
+    if (!regResult.success || !regResult.member) {
+      alert(regResult.error || 'Gagal menambahkan anggota baru ke server.');
+      return;
     }
 
-    await updateState((prev) => ({
-      ...prev,
-      members: [...prev.members.filter((m) => m.id !== newMember.id), newMember],
-      lastRunningNumber: nextRunningNumber,
-      auditLogs: [
-        createAuditLog(
-          currentAdmin,
-          'Tambah Anggota',
-          `Admin menambahkan anggota baru ${newMember.nama} (${newMember.nomorAnggota})`,
-          newMember.id
-        ),
-        ...prev.auditLogs,
-      ],
-    }));
-
+    const confirmedMember = regResult.member;
     setShowAddModal(false);
-    alert(`Anggota berhasil ditambahkan! Rekening: ${nomorRekening}`);
+    alert(`✓ Anggota ${confirmedMember.nama} berhasil ditambahkan secara realtime online!\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}`);
   };
 
   // Edit Member Profile Save

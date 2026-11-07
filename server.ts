@@ -241,6 +241,28 @@ function archiveAllUploadedFiles(state: any) {
   }
 }
 
+const WILAYAH_CODE_MAP: Record<string, string> = {
+  Cengkareng: '77',
+  Kalideres: '76',
+  Kembangan: '78',
+  'Kebon Jeruk': '79',
+  'Grogol Petamburan': '75',
+  Palmerah: '74',
+  'Taman Sari': '73',
+  Tambora: '72',
+};
+
+const WILAYAH_ABBR_MAP: Record<string, string> = {
+  Cengkareng: 'CKR',
+  Kalideres: 'KLD',
+  Kembangan: 'KMB',
+  'Kebon Jeruk': 'KBJ',
+  'Grogol Petamburan': 'GPT',
+  Palmerah: 'PLM',
+  'Taman Sari': 'TMS',
+  Tambora: 'TMB',
+};
+
 // Smart Server State Merger (JANGAN HAPUS FILE ATAU DATA YANG TELAH DIINPUT DATABASE)
 function mergeServerState(current: any, incoming: any): any {
   if (!current) return incoming;
@@ -2204,77 +2226,155 @@ async function startServer() {
     }
   });
 
-  // Dedicated Member Registration Endpoint for instant authoritative persistence (Login & Admin)
+  // Dedicated Member Registration Endpoint for instant authoritative persistence (Login & Admin) - ANTI MENIBAN & REALTIME ONLINE
   app.post('/api/members/register', (req: Request, res: Response) => {
     try {
       const { member, nextRunningNumber, adminName } = req.body;
-      if (!member || !member.id || !member.nama) {
-        return res.status(400).json({ error: 'Data anggota tidak lengkap' });
+      if (!member || !member.nama) {
+        return res.status(400).json({ error: 'Data nama anggota diperlukan' });
       }
-
-      // Ensure totalSimpanan is correctly calculated
-      const p = Number(member.saldoPokok) || 0;
-      const u = Number(member.saldoUmum) || 0;
-      const z = Number(member.saldoZakatFitrah) || 0;
-      const q = Number(member.saldoQurban) || 0;
-      member.totalSimpanan = p + u + z + q;
 
       currentState.members = currentState.members || [];
       const cleanNik = member.nik ? String(member.nik).trim() : '';
       const cleanHp = member.whatsapp ? String(member.whatsapp).replace(/\D/g, '') : '';
-      // Replace existing member with same id, NIK, or nomorAnggota to prevent duplicate member registration
+
+      // Check if this member is an existing member updating their own profile (matched STRICTLY by ID or NIK, NEVER by nomorAnggota or nomorRekening!)
       const existingIdx = currentState.members.findIndex((m: any) =>
-        m.id === member.id ||
-        (cleanNik && m.nik && String(m.nik).trim() === cleanNik) ||
-        (cleanHp && m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp) ||
-        (member.nomorAnggota && m.nomorAnggota === member.nomorAnggota) ||
-        (member.nomorRekening && m.nomorRekening === member.nomorRekening)
+        (member.id && m.id === member.id) ||
+        (cleanNik && m.nik && String(m.nik).trim() === cleanNik)
       );
+
+      let finalMember: any;
+
       if (existingIdx !== -1) {
-        const targetId = currentState.members[existingIdx].id;
-        currentState.members[existingIdx] = {
-          ...currentState.members[existingIdx],
+        // UPDATE EXISTING MEMBER ONLY - NEVER OVERWRITE OTHER MEMBERS ("TIDAK MENIBAN")
+        const existing = currentState.members[existingIdx];
+        finalMember = {
+          ...existing,
           ...member,
-          id: targetId,
+          id: existing.id,
+          nik: existing.nik || cleanNik,
+          nomorAnggota: existing.nomorAnggota || member.nomorAnggota,
+          nomorRekening: existing.nomorRekening || member.nomorRekening,
+          // Balance protection: preserve existing balances unless explicitly updated through financial operations
+          saldoPokok: existing.saldoPokok !== undefined ? existing.saldoPokok : (Number(member.saldoPokok) || 0),
+          saldoUmum: existing.saldoUmum !== undefined ? existing.saldoUmum : (Number(member.saldoUmum) || 0),
+          saldoZakatFitrah: existing.saldoZakatFitrah !== undefined ? existing.saldoZakatFitrah : (Number(member.saldoZakatFitrah) || 0),
+          saldoQurban: existing.saldoQurban !== undefined ? existing.saldoQurban : (Number(member.saldoQurban) || 0),
+          isPokokLocked: existing.isPokokLocked !== undefined ? existing.isPokokLocked : true,
+          status: existing.status || 'aktif',
+          terdaftarSejak: existing.terdaftarSejak || member.terdaftarSejak || new Date().toISOString().split('T')[0],
         };
+        finalMember.totalSimpanan =
+          (Number(finalMember.saldoPokok) || 0) +
+          (Number(finalMember.saldoUmum) || 0) +
+          (Number(finalMember.saldoZakatFitrah) || 0) +
+          (Number(finalMember.saldoQurban) || 0);
+
+        currentState.members[existingIdx] = finalMember;
       } else {
-        currentState.members.push(member);
-      }
-
-      // Record nomorRekening in usedAccountNumbers to prevent reuse
-      if (member.nomorRekening) {
-        currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
-        if (!currentState.usedAccountNumbers.includes(member.nomorRekening)) {
-          currentState.usedAccountNumbers.push(member.nomorRekening);
+        // BRAND NEW MEMBER REGISTRATION
+        // 1. Validate WhatsApp uniqueness
+        if (cleanHp) {
+          const duplicateHp = currentState.members.find(
+            (m: any) => m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp
+          );
+          if (duplicateHp) {
+            return res.status(400).json({
+              error: `Nomor WhatsApp ${member.whatsapp} sudah digunakan oleh anggota lain (${duplicateHp.nama}).`,
+            });
+          }
         }
-      }
 
-      if (nextRunningNumber) {
-        currentState.lastRunningNumber = Math.max(currentState.lastRunningNumber || 66666, Number(nextRunningNumber));
+        // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Anti-Meniban)
+        const abbr = WILAYAH_ABBR_MAP[member.wilayah] || 'CKR';
+        const year = new Date().getFullYear();
+        const existingNoSet = new Set(
+          currentState.members.map((m: any) => m.nomorAnggota).filter(Boolean)
+        );
+
+        let candidateNo = member.nomorAnggota;
+        if (!candidateNo || existingNoSet.has(candidateNo)) {
+          let seq = currentState.members.length + 1;
+          candidateNo = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+          while (existingNoSet.has(candidateNo)) {
+            seq++;
+            candidateNo = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+          }
+        }
+
+        // 3. Authoritative & Unique 10-digit Nomor Rekening Generation (Anti-Reuse & Anti-Meniban)
+        const kodeWilayah = WILAYAH_CODE_MAP[member.wilayah] || '77';
+        const hp3 = cleanHp.slice(-3).padStart(3, '0');
+        const usedRekSet = new Set<string>([
+          ...(currentState.usedAccountNumbers || []),
+          ...currentState.members.map((m: any) => m.nomorRekening).filter(Boolean),
+        ]);
+
+        let running = Math.max(
+          currentState.lastRunningNumber || 66666,
+          Number(nextRunningNumber) || 66666
+        );
+        let candidateRek = member.nomorRekening;
+        if (!candidateRek || usedRekSet.has(candidateRek)) {
+          running++;
+          candidateRek = `${kodeWilayah}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
+          while (usedRekSet.has(candidateRek)) {
+            running++;
+            candidateRek = `${kodeWilayah}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
+          }
+        }
+
+        currentState.lastRunningNumber = running;
+        currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
+        if (!currentState.usedAccountNumbers.includes(candidateRek)) {
+          currentState.usedAccountNumbers.push(candidateRek);
+        }
+
+        finalMember = {
+          ...member,
+          id: member.id || `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          nomorAnggota: candidateNo,
+          nomorRekening: candidateRek,
+          nik: cleanNik,
+          whatsapp: member.whatsapp ? String(member.whatsapp).trim() : '',
+          saldoPokok: 0,
+          isPokokLocked: true,
+          saldoUmum: 0,
+          saldoZakatFitrah: 0,
+          saldoQurban: 0,
+          totalSimpanan: 0,
+          status: 'aktif',
+          terdaftarSejak: member.terdaftarSejak || new Date().toISOString().split('T')[0],
+        };
+
+        currentState.members.push(finalMember);
       }
 
       // Remove from deletedMemberIds if previously deleted
       if (Array.isArray(currentState.deletedMemberIds)) {
-        currentState.deletedMemberIds = currentState.deletedMemberIds.filter((id: string) => id !== member.id);
+        currentState.deletedMemberIds = currentState.deletedMemberIds.filter((id: string) => id !== finalMember.id);
       }
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-reg-${Date.now()}`,
         timestamp: new Date().toISOString(),
-        adminId: adminName ? 'admin' : member.id,
-        adminNama: adminName || member.nama,
+        adminId: adminName ? 'admin' : finalMember.id,
+        adminNama: adminName || finalMember.nama,
         adminRole: adminName ? 'admin_write' : 'member',
         action: adminName ? 'Tambah Anggota (Admin)' : 'Pendaftaran Anggota (Mandiri)',
-        detail: `Anggota ${member.nama} (${member.nomorAnggota}) tersimpan permanen di server. Rekening: ${member.nomorRekening}`,
-        targetId: member.id,
+        detail: `Anggota ${finalMember.nama} (${finalMember.nomorAnggota}) tersimpan permanen di server realtime. Rekening: ${finalMember.nomorRekening}`,
+        targetId: finalMember.id,
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
-      broadcastEvent('MEMBER_REGISTERED', { member });
 
-      res.json({ success: true, member, state: currentState });
+      // Realtime online broadcast to ALL connected devices (Android, iOS, PC, Web, AI Studio)
+      broadcastEvent('MEMBER_REGISTERED', { member: finalMember });
+      broadcastEvent('STATE_UPDATED', currentState);
+
+      res.json({ success: true, member: finalMember, state: currentState });
     } catch (err: any) {
       console.error('Error in /api/members/register:', err);
       res.status(500).json({ error: 'Gagal mendaftarkan anggota ke database: ' + (err.message || 'Server error') });
