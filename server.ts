@@ -311,7 +311,11 @@ function mergeServerState(current: any, incoming: any): any {
     ...(incoming.deletedMemberIds || []),
   ]);
   allDeletedMemIds.forEach((id) => memberMap.delete(id));
-  const mergedMembers = Array.from(memberMap.values());
+  const mergedMembers = Array.from(memberMap.values()).map((m: any) => {
+    const clean = { ...m };
+    delete clean.biometricActive;
+    return clean;
+  });
   const mergedDeletedMemIds = Array.from(allDeletedMemIds);
 
   // 2. Setoran List (Preserve all deposits & filter deletedSetoranIds)
@@ -465,7 +469,11 @@ function mergeServerState(current: any, incoming: any): any {
     }
   });
   allDeletedAdminIds.forEach((id) => adminMap.delete(id));
-  const mergedAdmins = Array.from(adminMap.values());
+  const mergedAdmins = Array.from(adminMap.values()).map((a: any) => {
+    const clean = { ...a };
+    delete clean.biometricActive;
+    return clean;
+  });
   const mergedDeletedAdminIds = Array.from(allDeletedAdminIds);
 
   // 10. Profile: preserve rekeningPenampungan, QRIS and official details
@@ -603,6 +611,92 @@ function broadcastEvent(type: string, payload: any) {
   }
 }
 
+// Server-Side Realtime Cloud Firestore Synchronizer (Triple Redundancy Realtime Database)
+let serverFirestoreInstance: any = null;
+let serverFirestoreMethods: any = null;
+
+async function syncStateToFirestoreServer(state: any) {
+  try {
+    if (!serverFirestoreInstance || !serverFirestoreMethods) {
+      const { initializeApp, getApps } = await import('firebase/app');
+      const { getFirestore, doc, setDoc, deleteDoc } = await import('firebase/firestore');
+      const configPath = path.join(__dirname, 'firebase-applet-config.json');
+      if (fs.existsSync(configPath)) {
+        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
+        serverFirestoreInstance = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+        serverFirestoreMethods = { doc, setDoc, deleteDoc };
+      }
+    }
+    if (!serverFirestoreInstance || !serverFirestoreMethods) return;
+
+    const { doc, setDoc, deleteDoc } = serverFirestoreMethods;
+    const now = new Date().toISOString();
+
+    // 1. Synchronize Members to Firestore (Strictly strip biometricActive - User Req: biometric tidak tersimpan di database)
+    if (Array.isArray(state.members)) {
+      for (const m of state.members) {
+        if (m && m.id) {
+          const cleanMem = JSON.parse(JSON.stringify(m));
+          delete cleanMem.biometricActive;
+          await setDoc(doc(serverFirestoreInstance, 'members', m.id), cleanMem, { merge: true }).catch(() => {});
+        }
+      }
+    }
+    if (Array.isArray(state.deletedMemberIds)) {
+      for (const delId of state.deletedMemberIds) {
+        await deleteDoc(doc(serverFirestoreInstance, 'members', delId)).catch(() => {});
+      }
+    }
+
+    // 2. Synchronize Admins to Firestore (Strictly strip biometricActive)
+    if (Array.isArray(state.admins)) {
+      for (const a of state.admins) {
+        if (a && a.id) {
+          const cleanAdm = JSON.parse(JSON.stringify(a));
+          delete cleanAdm.biometricActive;
+          await setDoc(doc(serverFirestoreInstance, 'admins', a.id), cleanAdm, { merge: true }).catch(() => {});
+        }
+      }
+    }
+
+    // 3. Synchronize Settings General to Firestore (Includes permanently used account numbers & member numbers)
+    const generalData = {
+      id: 'general',
+      profile: state.profile || {},
+      categoriesKasKoperasi: state.categoriesKasKoperasi || {},
+      pengaturanBerbagi: state.pengaturanBerbagi || {},
+      sedekahList: state.sedekahList || [],
+      penyaluranList: state.penyaluranList || [],
+      maintenanceLock: state.maintenanceLock || { isLocked: false },
+      lastRunningNumber: state.lastRunningNumber || 66666,
+      deletedMemberIds: state.deletedMemberIds || [],
+      deletedTransactionIds: state.deletedTransactionIds || [],
+      deletedKasIds: state.deletedKasIds || [],
+      deletedSetoranIds: state.deletedSetoranIds || [],
+      usedAccountNumbers: state.usedAccountNumbers || [],
+      usedMemberNumbers: state.usedMemberNumbers || [],
+      updatedAt: now,
+      updatedBy: 'server_realtime',
+    };
+    await setDoc(doc(serverFirestoreInstance, 'settings', 'general'), generalData, { merge: true }).catch(() => {});
+
+    // 4. Lightweight Metadata Pulse to koperasi_state/main_database
+    await setDoc(doc(serverFirestoreInstance, 'koperasi_state', 'main_database'), {
+      id: 'main_database',
+      lastSynced: now,
+      updatedBy: 'server_realtime',
+      isSharded: true,
+      totalMembers: (state.members || []).length,
+      totalKas: (state.kasList || []).length,
+      totalSetoran: (state.setoranList || []).length,
+      online: true,
+    }, { merge: true }).catch(() => {});
+  } catch (err) {
+    // Non-blocking firestore sync notice
+  }
+}
+
 // Save DB with automated backup and physical file archiving
 function saveDatabase(state: any) {
   try {
@@ -616,6 +710,14 @@ function saveDatabase(state: any) {
       filesProtected: true,
       permanentStorage: true,
     };
+
+    // Strip biometricActive from all members and admins (biometric tidak tersimpan di database)
+    if (Array.isArray(state.members)) {
+      state.members.forEach((m: any) => { if (m) delete m.biometricActive; });
+    }
+    if (Array.isArray(state.admins)) {
+      state.admins.forEach((a: any) => { if (a) delete a.biometricActive; });
+    }
 
     // Rolling backup before writing to prevent data corruption or loss
     try {
@@ -634,6 +736,10 @@ function saveDatabase(state: any) {
 
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
     broadcastEvent('STATE_UPDATED', state);
+
+    // Asynchronous Realtime sync to Cloud Firestore
+    syncStateToFirestoreServer(state);
+
     return true;
   } catch (err) {
     console.error('Failed saving DB file', err);
@@ -1065,6 +1171,17 @@ async function startServer() {
 
   // Trust reverse proxy (Cloud Run, load balancers) so req.protocol and req.headers are accurate HTTPS
   app.set('trust proxy', true);
+
+  // CORS middleware for multi-device & hybrid apps (Android, iOS, PC, Web)
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -2256,16 +2373,36 @@ async function startServer() {
       const cleanNik = member.nik ? String(member.nik).trim() : '';
       const cleanHp = member.whatsapp ? String(member.whatsapp).replace(/\D/g, '') : '';
 
-      // Check if this member is an existing member updating their own profile (matched STRICTLY by ID or NIK, NEVER by nomorAnggota or nomorRekening!)
+      // For self-registration (non-admin), prevent duplicate NIK or WhatsApp from updating or overwriting existing members
+      if (!adminName) {
+        if (cleanNik) {
+          const dupNik = currentState.members.find((m: any) => m.nik && String(m.nik).trim() === cleanNik);
+          if (dupNik) {
+            return res.status(400).json({ error: 'NIK ini sudah terdaftar sebagai anggota koperasi HWS.' });
+          }
+        }
+        if (cleanHp) {
+          const dupHp = currentState.members.find(
+            (m: any) => m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp
+          );
+          if (dupHp) {
+            return res.status(400).json({
+              error: `Nomor WhatsApp ${member.whatsapp} sudah digunakan oleh anggota lain (${dupHp.nama}).`,
+            });
+          }
+        }
+      }
+
+      // Check if this member is an existing member updating their own profile (strictly by ID or NIK for admin management)
       const existingIdx = currentState.members.findIndex((m: any) =>
         (member.id && m.id === member.id) ||
-        (cleanNik && m.nik && String(m.nik).trim() === cleanNik)
+        (adminName && cleanNik && m.nik && String(m.nik).trim() === cleanNik)
       );
 
       let finalMember: any;
 
       if (existingIdx !== -1) {
-        // UPDATE EXISTING MEMBER ONLY - NEVER OVERWRITE OTHER MEMBERS ("TIDAK MENIBAN")
+        // UPDATE EXISTING MEMBER ONLY (Admin management) - NEVER OVERWRITE OTHER MEMBERS ("TIDAK MENIBAN")
         const existing = currentState.members[existingIdx];
         finalMember = {
           ...existing,
@@ -2283,6 +2420,7 @@ async function startServer() {
           status: existing.status || 'aktif',
           terdaftarSejak: existing.terdaftarSejak || member.terdaftarSejak || new Date().toISOString().split('T')[0],
         };
+        delete finalMember.biometricActive;
         finalMember.totalSimpanan =
           (Number(finalMember.saldoPokok) || 0) +
           (Number(finalMember.saldoUmum) || 0) +
@@ -2373,6 +2511,7 @@ async function startServer() {
           status: 'aktif',
           terdaftarSejak: member.terdaftarSejak || new Date().toISOString().split('T')[0],
         };
+        delete finalMember.biometricActive;
 
         currentState.members.push(finalMember);
       }

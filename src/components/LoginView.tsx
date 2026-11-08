@@ -121,7 +121,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   // Biometric Device Connection State (Req 7 & User Req 1)
   const [showBiometricModal, setShowBiometricModal] = useState(false);
-  const [biometricMethod, setBiometricMethod] = useState<'fingerprint' | 'face_id'>('fingerprint');
+  const [biometricMethod] = useState<'fingerprint'>('fingerprint');
   const [biometricStatus, setBiometricStatus] = useState<'connecting' | 'ready' | 'scanning' | 'success' | 'failed'>('ready');
   const [biometricTargetUser, setBiometricTargetUser] = useState('');
   const [biometricMsg, setBiometricMsg] = useState('');
@@ -413,31 +413,56 @@ export const LoginView: React.FC<LoginViewProps> = ({
       try { navigator.vibrate([40, 60, 40]); } catch {}
     }
 
-    // Tentukan akun target dari input yang diketik atau dari profil biometrik
-    let target = '';
+    // Tentukan akun target dari profil biometrik sidik jari lokal yang tersimpan di perangkat ini
     const storedBioUser = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user') || '' : '';
     const storedBioRole = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user_role') || '' : '';
+    const storedBioNama = typeof window !== 'undefined' ? localStorage.getItem('hws_biometric_user_nama') || '' : '';
     const isBioActive = typeof window !== 'undefined' && localStorage.getItem('hws_biometric_active') === 'true';
 
-    if (activeTab === 'member') {
-      target = memberIdentifier.trim() || (storedBioRole === 'member' ? storedBioUser : '') || (state.members[0]?.nomorAnggota || '');
-    } else {
-      target = adminUsername.trim() || (storedBioRole === 'admin' ? storedBioUser : '') || (state.admins[0]?.username || 'Abzqar');
-    }
-
-    if (!target) {
-      alert('Autentikasi Biometrik: Silakan masukkan Nomor Anggota / Username Anda atau masuk menggunakan kata sandi.');
+    // Periksa apakah sidik jari telah didaftarkan di perangkat fisik ini
+    if (!isBioActive || !storedBioUser) {
+      alert(
+        'Sensor sidik jari belum diaktifkan pada perangkat ini.\n\n' +
+        'Keamanan Biometrik: Sidik jari hanya tersimpan lokal pada hardware sensor perangkat ini dan tidak disimpan di database server.\n\n' +
+        'Silakan masuk menggunakan kata sandi/PIN terlebih dahulu, kemudian aktifkan sidik jari di menu Pengaturan pada perangkat ini.'
+      );
       return;
     }
 
+    if (storedBioRole !== activeTab) {
+      alert(
+        `Sensor sidik jari pada perangkat ini terdaftar untuk akun ${storedBioRole === 'admin' ? 'Petugas/Admin' : 'Anggota'} (${storedBioNama || storedBioUser}).\n\n` +
+        `Silakan beralih ke tab ${storedBioRole === 'admin' ? 'Petugas' : 'Anggota'} atau masuk menggunakan kata sandi/PIN.`
+      );
+      return;
+    }
+
+    // Jika pengguna mengetik identifier manual, pastikan cocok dengan akun sidik jari di perangkat ini
+    const typedIdentifier = activeTab === 'member' ? memberIdentifier.trim().toLowerCase() : adminUsername.trim().toLowerCase();
+    if (typedIdentifier && typedIdentifier !== storedBioUser.toLowerCase()) {
+      const isMatched = activeTab === 'member'
+        ? state.members.some((m) =>
+            (m.nomorAnggota.toLowerCase() === typedIdentifier || m.nomorRekening === typedIdentifier || m.whatsapp.replace(/\D/g, '') === typedIdentifier.replace(/\D/g, '')) &&
+            m.nomorAnggota.toLowerCase() === storedBioUser.toLowerCase()
+          )
+        : state.admins.some((a) =>
+            a.username.toLowerCase() === typedIdentifier && a.username.toLowerCase() === storedBioUser.toLowerCase()
+          );
+
+      if (!isMatched) {
+        alert(
+          `Sensor sidik jari pada perangkat ini hanya terdaftar untuk akun "${storedBioNama || storedBioUser}".\n\n` +
+          'Tidak dapat digunakan oleh akun atau perangkat lain. Silakan masuk menggunakan kata sandi akun tersebut.'
+        );
+        return;
+      }
+    }
+
+    const target = storedBioUser;
     setBiometricTargetUser(target);
     setShowBiometricModal(true);
     setBiometricStatus('scanning');
-    setBiometricMsg(
-      biometricMethod === 'fingerprint'
-        ? 'Sentuh sensor sidik jari pada perangkat (Android / iOS / Web) untuk memindai...'
-        : 'Arahkan wajah ke kamera sensor perangkat...'
-    );
+    setBiometricMsg('Tempelkan jari Anda pada sensor sidik jari perangkat untuk memindai...');
 
     // Integrasi Web Authentication API (WebAuthn) & Hardware Sensor Device
     const runHardwareScan = async () => {
@@ -464,18 +489,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const executeBiometricLogin = (targetUser: string) => {
     const cleanTarget = targetUser.trim().toLowerCase();
     if (activeTab === 'member') {
-      let member = state.members.find(
+      const member = state.members.find(
         (m) =>
           m.nomorAnggota.toLowerCase() === cleanTarget ||
           m.whatsapp.replace(/\D/g, '') === cleanTarget.replace(/\D/g, '') ||
           m.nomorRekening === cleanTarget
       );
-      if (!member && state.members.length > 0) {
-        member = state.members[0];
-      }
       if (!member) {
         setBiometricStatus('failed');
-        setBiometricMsg('Belum ada akun anggota di database. Silakan daftar mandiri terlebih dahulu.');
+        setBiometricMsg('Akun anggota yang terdaftar pada sidik jari perangkat ini tidak ditemukan di database.');
         return;
       }
       if (member.status === 'dibekukan' || member.status === 'nonaktif') {
@@ -492,23 +514,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
 
       setBiometricStatus('success');
-      setBiometricMsg(`✓ Sensor Biometrik Device Terverifikasi! Masuk sebagai: ${member.nama}`);
+      setBiometricMsg(`✓ Sidik Jari Terverifikasi! Masuk sebagai: ${member.nama}`);
       setTimeout(() => {
         setShowBiometricModal(false);
         onLoginMember(member);
       }, 650);
     } else {
-      let admin = state.admins.find(
+      const admin = state.admins.find(
         (a) =>
           a.username.toLowerCase() === cleanTarget ||
-          a.email.toLowerCase() === cleanTarget
+          a.email.toLowerCase() === cleanTarget ||
+          a.id.toLowerCase() === cleanTarget
       );
-      if (!admin && state.admins.length > 0) {
-        admin = state.admins[0];
-      }
       if (!admin) {
         setBiometricStatus('failed');
-        setBiometricMsg('Akun pengurus tidak ditemukan di database.');
+        setBiometricMsg('Akun pengurus yang terdaftar pada sidik jari perangkat ini tidak ditemukan di database.');
         return;
       }
       if (admin.status === 'dibekukan') {
@@ -1786,42 +1806,24 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </p>
             </div>
 
-            {/* Method Switcher: Fingerprint vs Face ID */}
-            <div className="grid grid-cols-2 gap-2 bg-slate-900/90 p-1 rounded-2xl border border-slate-800 text-xs font-bold">
-              <button
-                type="button"
-                onClick={() => setBiometricMethod('fingerprint')}
-                className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-                  biometricMethod === 'fingerprint'
-                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Fingerprint className="w-4 h-4" />
-                <span>Finger Scan</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setBiometricMethod('face_id')}
-                className={`py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-                  biometricMethod === 'face_id'
-                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <span>🤳 Face ID</span>
-              </button>
+            {/* Exclusive Fingerprint Scan Mode */}
+            <div className="bg-slate-900/90 py-2 px-3 rounded-2xl border border-slate-800 text-xs font-bold flex items-center justify-center gap-2 text-amber-400">
+              <Fingerprint className="w-4 h-4 text-amber-400" />
+              <span>Biometrik Sidik Jari (Fingerprint Sensor)</span>
             </div>
 
             {/* Target Account Info */}
             <div className="p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 text-xs text-left">
-              <div className="text-[10px] text-slate-400 font-semibold">Tautan Akun Device:</div>
+              <div className="text-[10px] text-slate-400 font-semibold">Tautan Sidik Jari Perangkat:</div>
               <div className="font-extrabold text-amber-300 truncate">
                 {biometricTargetUser || (activeTab === 'member' ? 'Akun Anggota Aktif' : 'Super Admin (Abzqar)')}
               </div>
+              <div className="text-[9px] text-slate-500 mt-0.5">
+                *Hanya tersimpan di sensor perangkat ini & tidak dapat digunakan oleh perangkat lain
+              </div>
             </div>
 
-            {/* Automatic Device Sensor Scanner (Tanpa perlu klik tombol kedua - Langsung scan otomatis) */}
+            {/* Automatic Device Sensor Scanner (Interactive Touch to Scan Finger) */}
             <div className="py-4 flex flex-col items-center justify-center">
               <div className="relative group focus:outline-none">
                 {/* Glow rings */}
@@ -1841,11 +1843,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       try { navigator.vibrate([40, 50, 40]); } catch {}
                     }
                     setBiometricStatus('scanning');
-                    setBiometricMsg(
-                      biometricMethod === 'fingerprint'
-                        ? 'Memindai sidik jari device...'
-                        : 'Memindai wajah...'
-                    );
+                    setBiometricMsg('Memindai sidik jari pada sensor perangkat...');
                     setTimeout(() => {
                       executeBiometricLogin(biometricTargetUser);
                     }, 650);
@@ -1857,21 +1855,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       ? 'border-emerald-400 bg-emerald-950/80 shadow-[0_0_25px_rgba(52,211,153,0.5)]'
                       : 'border-amber-400/80 bg-slate-900 shadow-xl'
                   }`}>
-                  {biometricMethod === 'fingerprint' ? (
-                    <Fingerprint className={`w-14 h-14 transition-colors ${
-                      biometricStatus === 'scanning'
-                        ? 'text-sky-300 animate-pulse'
-                        : biometricStatus === 'success'
-                        ? 'text-emerald-400'
-                        : 'text-amber-400'
-                    }`} />
-                  ) : (
-                    <div className="flex flex-col items-center">
-                      <span className="text-4xl animate-bounce">🤳</span>
-                      <span className="text-[10px] font-bold text-amber-300 mt-1">Face Scan</span>
-                    </div>
-                  )}
+                  <Fingerprint className={`w-14 h-14 transition-colors ${
+                    biometricStatus === 'scanning'
+                      ? 'text-sky-300 animate-pulse'
+                      : biometricStatus === 'success'
+                      ? 'text-emerald-400'
+                      : 'text-amber-400'
+                  }`} />
 
+                  {biometricStatus === 'scanning' && (
+                    <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
+                  )}
                   {biometricStatus === 'scanning' && (
                     <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
                   )}

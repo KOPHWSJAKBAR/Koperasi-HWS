@@ -862,30 +862,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         setBioEnrollStep('prompt');
         setShowBioEnrollModal(true);
       } else {
-        const confirmDisable = confirm('Apakah Anda yakin ingin memutuskan tautan biometrik pada perangkat ini?');
+        const confirmDisable = confirm('Apakah Anda yakin ingin memutuskan tautan sidik jari pada perangkat ini?');
         if (!confirmDisable) return;
         localStorage.removeItem('hws_biometric_active');
         clearBiometricData();
         setBiometricEnabled(false);
-        await updateState((prev) => {
-          if (currentMember) {
-            return {
-              ...prev,
-              members: prev.members.map((m) =>
-                m.id === currentMember.id ? { ...m, biometricActive: false } : m
-              ),
-            };
-          } else if (currentAdmin) {
-            return {
-              ...prev,
-              admins: prev.admins.map((a) =>
-                a.id === currentAdmin.id ? { ...a, biometricActive: false } : a
-              ),
-            };
-          }
-          return prev;
-        });
-        alert('Tautan autentikasi biometrik telah diputuskan dari perangkat ini.');
+        alert('Tautan autentikasi sidik jari telah diputuskan dari perangkat ini.');
       }
     } catch {
       setBiometricEnabled(false);
@@ -902,29 +884,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     if (res.success) {
       setBioEnrollStep('success');
       setBiometricEnabled(true);
-      await updateState((prev) => {
-        if (currentMember) {
-          return {
-            ...prev,
-            members: prev.members.map((m) =>
-              m.id === currentMember.id ? { ...m, biometricActive: true } : m
-            ),
-          };
-        } else if (currentAdmin) {
-          return {
-            ...prev,
-            admins: prev.admins.map((a) =>
-              a.id === currentAdmin.id ? { ...a, biometricActive: true } : a
-            ),
-          };
-        }
-        return prev;
-      });
       setTimeout(() => {
         setShowBioEnrollModal(false);
       }, 1000);
     } else {
-      alert(`Pendaftaran biometrik: ${res.error || 'Dibatalkan'}`);
+      alert(`Pendaftaran sidik jari: ${res.error || 'Dibatalkan'}`);
       setShowBioEnrollModal(false);
     }
   };
@@ -2446,9 +2410,9 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <Lock className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="font-bold text-white text-xs">Biometrik (Fingerprint / Face ID)</div>
+                    <div className="font-bold text-white text-xs">Biometrik Sidik Jari (Fingerprint Scan)</div>
                     <div className="text-[10px] text-slate-400">
-                      {biometricEnabled ? 'Terintegrasi pada device mobile ini' : 'Klik untuk mengaktifkan pada perangkat'}
+                      {biometricEnabled ? 'Aktif pada sensor perangkat ini (tidak tersimpan di database)' : 'Klik untuk mengaktifkan pada perangkat ini saja'}
                     </div>
                   </div>
                 </div>
@@ -6223,8 +6187,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </div>
 
               <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[10px] text-slate-400 text-left space-y-1">
-                <div>• Biometrik ini akan didaftarkan pada penyimpanan aman perangkat ini.</div>
-                <div>• Hanya berlaku untuk login versi mobile (Android / iOS).</div>
+                <div>• Biometrik sidik jari hanya tersimpan lokal pada hardware sensor perangkat ini.</div>
+                <div>• Tidak disimpan di database server dan tidak dapat digunakan oleh perangkat lain.</div>
               </div>
             </div>
 

@@ -369,7 +369,11 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     ...(incoming.deletedMemberIds || []),
   ]);
   allDeletedMemIds.forEach((id) => memberMap.delete(id));
-  const mergedMembers = Array.from(memberMap.values());
+  const mergedMembers = Array.from(memberMap.values()).map((m) => {
+    const clean = { ...m };
+    delete (clean as any).biometricActive;
+    return clean;
+  });
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl, protect approved status)
   const allDeletedSetoranIds = new Set<string>([
@@ -544,7 +548,11 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
 
   (base.admins || []).forEach(upsertAdmin);
   (incoming.admins || []).forEach(upsertAdmin);
-  const mergedAdmins = Array.from(adminMap.values());
+  const mergedAdmins = Array.from(adminMap.values()).map((a) => {
+    const clean = { ...a };
+    delete (clean as any).biometricActive;
+    return clean;
+  });
 
   // 10. Profile: preserve rekeningPenampungan, QRIS and official details
   const incomingRek = incoming.profile?.rekeningPenampungan;
@@ -2213,6 +2221,9 @@ export async function registerMemberOnline(
         usedAccountNumbers: Array.from(
           new Set([...(globalState.usedAccountNumbers || []), savedMember.nomorRekening].filter(Boolean))
         ),
+        usedMemberNumbers: Array.from(
+          new Set([...(globalState.usedMemberNumbers || []), savedMember.nomorAnggota].filter(Boolean))
+        ),
       };
     }
 
@@ -2225,6 +2236,20 @@ export async function registerMemberOnline(
 
     return { success: true, member: savedMember };
   } catch (err: any) {
+    // If backend is temporarily unreachable, fallback to direct Cloud Firestore write!
+    try {
+      const { db } = await import('./firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      const cleanMem = sanitizeForFirestore({ ...newMember, updatedAt: new Date().toISOString() });
+      delete (cleanMem as any).biometricActive;
+      await setDoc(doc(db, 'members', newMember.id), cleanMem, { merge: true });
+      globalState = {
+        ...globalState,
+        members: [...globalState.members.filter((m) => m.id !== newMember.id), newMember],
+      };
+      notifyListeners();
+      return { success: true, member: newMember };
+    } catch {}
     return { success: false, error: err.message || 'Koneksi ke server online terputus.' };
   }
 }
