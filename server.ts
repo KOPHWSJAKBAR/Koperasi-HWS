@@ -681,7 +681,77 @@ async function syncStateToFirestoreServer(state: any) {
     };
     await setDoc(doc(serverFirestoreInstance, 'settings', 'general'), generalData, { merge: true }).catch(() => {});
 
-    // 4. Lightweight Metadata Pulse to koperasi_state/main_database
+    // 4. Synchronize Kas to Firestore
+    if (Array.isArray(state.kasList)) {
+      for (const k of state.kasList) {
+        if (k && k.id) {
+          await setDoc(doc(serverFirestoreInstance, 'kas', k.id), JSON.parse(JSON.stringify(k)), { merge: true }).catch(() => {});
+        }
+      }
+    }
+    if (Array.isArray(state.deletedKasIds)) {
+      for (const delId of state.deletedKasIds) {
+        await deleteDoc(doc(serverFirestoreInstance, 'kas', delId)).catch(() => {});
+      }
+    }
+
+    // 5. Synchronize Setoran to Firestore
+    if (Array.isArray(state.setoranList)) {
+      for (const s of state.setoranList) {
+        if (s && s.id) {
+          await setDoc(doc(serverFirestoreInstance, 'setoran', s.id), JSON.parse(JSON.stringify(s)), { merge: true }).catch(() => {});
+        }
+      }
+    }
+    if (Array.isArray(state.deletedSetoranIds)) {
+      for (const delId of state.deletedSetoranIds) {
+        await deleteDoc(doc(serverFirestoreInstance, 'setoran', delId)).catch(() => {});
+      }
+    }
+
+    // 6. Synchronize Member Transactions to Firestore
+    if (Array.isArray(state.memberTransactions)) {
+      for (const tx of state.memberTransactions) {
+        if (tx && tx.id) {
+          await setDoc(doc(serverFirestoreInstance, 'transactions', tx.id), JSON.parse(JSON.stringify(tx)), { merge: true }).catch(() => {});
+        }
+      }
+    }
+    if (Array.isArray(state.deletedTransactionIds)) {
+      for (const delId of state.deletedTransactionIds) {
+        await deleteDoc(doc(serverFirestoreInstance, 'transactions', delId)).catch(() => {});
+      }
+    }
+
+    // 7. Synchronize Sedekah to Firestore
+    if (Array.isArray(state.sedekahList)) {
+      for (const sd of state.sedekahList) {
+        if (sd && sd.id) {
+          await setDoc(doc(serverFirestoreInstance, 'sedekah', sd.id), JSON.parse(JSON.stringify(sd)), { merge: true }).catch(() => {});
+        }
+      }
+    }
+
+    // 8. Synchronize recent Chats to Firestore
+    if (Array.isArray(state.chatMessages)) {
+      const recent = state.chatMessages.slice(-50);
+      for (const c of recent) {
+        if (c && c.id) {
+          await setDoc(doc(serverFirestoreInstance, 'chats', c.id), JSON.parse(JSON.stringify(c)), { merge: true }).catch(() => {});
+        }
+      }
+    }
+
+    // 9. Synchronize Surat to Firestore
+    if (Array.isArray(state.suratList)) {
+      for (const sr of state.suratList) {
+        if (sr && sr.id) {
+          await setDoc(doc(serverFirestoreInstance, 'surat', sr.id), JSON.parse(JSON.stringify(sr)), { merge: true }).catch(() => {});
+        }
+      }
+    }
+
+    // 10. Lightweight Metadata Pulse to koperasi_state/main_database
     await setDoc(doc(serverFirestoreInstance, 'koperasi_state', 'main_database'), {
       id: 'main_database',
       lastSynced: now,
@@ -690,6 +760,8 @@ async function syncStateToFirestoreServer(state: any) {
       totalMembers: (state.members || []).length,
       totalKas: (state.kasList || []).length,
       totalSetoran: (state.setoranList || []).length,
+      totalTransactions: (state.memberTransactions || []).length,
+      totalSedekah: (state.sedekahList || []).length,
       online: true,
     }, { merge: true }).catch(() => {});
   } catch (err) {
@@ -1214,8 +1286,11 @@ async function startServer() {
     });
   });
 
-  // Get full state
+  // Get full state (strictly uncached for installed devices, mobile apps & PWAs)
   app.get('/api/state', (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.json(currentState);
   });
 

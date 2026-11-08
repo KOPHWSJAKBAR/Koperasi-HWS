@@ -202,7 +202,7 @@ function notifyListeners() {
   }
 }
 
-export function scheduleDebouncedNotify(delay = 120, pushToServer = true) {
+export function scheduleDebouncedNotify(delay = 120, pushToServer = false) {
   if (debounceNotifyTimer) {
     clearTimeout(debounceNotifyTimer);
   }
@@ -1587,10 +1587,17 @@ export async function syncStateToServer(state: AppState) {
   }
 }
 
-// Load from server on startup (with safe merge)
+// Load from server on startup (with safe merge & anti-cache for all installed devices)
 export async function fetchStateFromServer(): Promise<AppState> {
   try {
-    const res = await fetch('/api/state');
+    const res = await fetch(`/api/state?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      },
+    });
     if (res.ok) {
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
@@ -1627,6 +1634,18 @@ export function useKoperasiState() {
 
     // Initial fetch
     fetchStateFromServer();
+
+    // Foregrounding & network re-sync handlers for installed mobile & desktop apps
+    const handleDeviceResume = () => {
+      if (document.visibilityState === 'visible' || navigator.onLine) {
+        fetchStateFromServer();
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('visibilitychange', handleDeviceResume);
+      window.addEventListener('online', handleDeviceResume);
+      window.addEventListener('focus', handleDeviceResume);
+    }
 
     // Regular polling fallback every 3 seconds to keep all devices & mobile in sync
     const pollInterval = setInterval(() => {
@@ -1971,6 +1990,11 @@ export function useKoperasiState() {
       firestoreUnsubscribers.forEach((unsub) => {
         try { unsub(); } catch {}
       });
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('visibilitychange', handleDeviceResume);
+        window.removeEventListener('online', handleDeviceResume);
+        window.removeEventListener('focus', handleDeviceResume);
+      }
     };
   }, []);
 
