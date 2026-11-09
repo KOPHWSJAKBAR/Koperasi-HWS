@@ -5,6 +5,7 @@ import { generateNomorRekening, generateNomorAnggota, createAuditLog, registerMe
 import { detectPlatform } from '../lib/activityLogger';
 import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
+import { BiometricPolicyModal } from './BiometricPolicyModal';
 import {
   Fingerprint,
   Lock,
@@ -125,6 +126,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [biometricStatus, setBiometricStatus] = useState<'connecting' | 'ready' | 'scanning' | 'success' | 'failed'>('ready');
   const [biometricTargetUser, setBiometricTargetUser] = useState('');
   const [biometricMsg, setBiometricMsg] = useState('');
+  const [showBiometricPolicyModal, setShowBiometricPolicyModal] = useState(false);
   const [isMobileEnv, setIsMobileEnv] = useState(false);
 
   useEffect(() => {
@@ -597,7 +599,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // Validation: NIK & No HP cannot be used twice per prompt
+    // Validation: NIK, No HP, and Email cannot be used twice (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
     const existingNik = state.members.find((m) => m.nik === regForm.nik.trim());
     if (existingNik) {
       setRegError('NIK ini sudah terdaftar sebagai anggota koperasi HWS.');
@@ -607,8 +609,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
     const cleanHp = regForm.whatsapp.replace(/\D/g, '');
     const existingHp = state.members.find((m) => m.whatsapp.replace(/\D/g, '') === cleanHp);
     if (existingHp) {
-      setRegError('Nomor HP / WhatsApp ini sudah digunakan oleh anggota lain.');
+      setRegError(`Nomor HP / WhatsApp ${regForm.whatsapp} sudah digunakan oleh anggota lain (${existingHp.nama}). Silakan gunakan nomor lain.`);
       return;
+    }
+
+    const cleanEmail = regForm.email.trim().toLowerCase();
+    if (cleanEmail) {
+      const existingEmail = state.members.find(
+        (m) => m.email && m.email.trim().toLowerCase() === cleanEmail
+      );
+      if (existingEmail) {
+        setRegError(`Alamat email ${regForm.email} sudah digunakan oleh anggota lain (${existingEmail.nama}). Silakan gunakan email lain.`);
+        return;
+      }
     }
 
     setIsRegistering(true);
@@ -971,6 +984,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </span>
               </button>
 
+              <div className="flex justify-center -mt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowBiometricPolicyModal(true)}
+                  className="text-[10px] text-emerald-700 hover:text-emerald-800 hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                >
+                  <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                  <span>Aturan & Standar Keamanan Biometrik (Zero-Server Storage)</span>
+                </button>
+              </div>
+
               <button
                 type="submit"
                 className="w-full py-3 bg-[#f59e0b] hover:bg-[#d97706] active:scale-[0.99] text-slate-950 font-extrabold text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all"
@@ -1133,6 +1157,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   ⚡ Scan Fingerprint
                 </span>
               </button>
+
+              <div className="flex justify-center -mt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowBiometricPolicyModal(true)}
+                  className="text-[10px] text-emerald-700 hover:text-emerald-800 hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                >
+                  <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                  <span>Aturan & Standar Keamanan Biometrik (Zero-Server Storage)</span>
+                </button>
+              </div>
 
               <button
                 type="submit"
@@ -1886,8 +1921,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
             </div>
 
-            {/* Fallback to Password & Putuskan Tautan Biometrik */}
-            <div className="pt-3 border-t border-slate-800 space-y-2">
+            {/* Fallback to Password, Lupa Akun & Putuskan Tautan Biometrik (Rule 5) */}
+            <div className="pt-3 border-t border-slate-800 space-y-2.5">
               <button
                 type="button"
                 onClick={() => {
@@ -1897,8 +1932,29 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer border border-slate-700 hover:border-amber-500/50"
               >
                 <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                <span>Masuk dengan Kata Sandi / PIN (Password Fallback)</span>
+                <span>Masuk dengan Nomor Anggota / Rekening + Password (Fallback)</span>
               </button>
+
+              <div className="flex items-center justify-between text-[11px] px-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBiometricModal(false);
+                    setShowForgotModal('password');
+                  }}
+                  className="text-amber-400 hover:text-amber-300 underline font-semibold cursor-pointer"
+                >
+                  Lupa Password? (Verifikasi NIK & WA)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowBiometricPolicyModal(true)}
+                  className="text-slate-400 hover:text-slate-200 underline flex items-center gap-1 cursor-pointer"
+                >
+                  <ShieldCheck className="w-3 h-3 text-amber-400" />
+                  <span>Standar Keamanan</span>
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -1908,7 +1964,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   setBiometricStatus('ready');
                   alert('Tautan biometrik dengan perangkat ini telah diputuskan.');
                 }}
-                className="w-full py-1 text-[11px] text-slate-400 hover:text-red-400 transition-colors underline cursor-pointer text-center"
+                className="w-full py-1 text-[10px] text-slate-500 hover:text-rose-400 transition-colors underline cursor-pointer text-center"
               >
                 Putuskan Koneksi Biometrik dengan Tautan Device Ini
               </button>
@@ -1917,6 +1973,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal Kebijakan & Standar Keamanan Biometrik (5 Ketentuan Resmi) */}
+      <BiometricPolicyModal
+        isOpen={showBiometricPolicyModal}
+        onClose={() => setShowBiometricPolicyModal(false)}
+      />
     </div>
   );
 };

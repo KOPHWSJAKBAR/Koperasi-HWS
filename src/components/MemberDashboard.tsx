@@ -17,6 +17,7 @@ import { SettingModal } from './SettingModal';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
+import { BiometricPolicyModal } from './BiometricPolicyModal';
 import {
   CreditCard,
   ArrowUpRight,
@@ -43,6 +44,7 @@ import {
   TrendingUp,
   Eye,
   EyeOff,
+  Fingerprint,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -101,8 +103,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const [tarikJenisTabungan, setTarikJenisTabungan] = useState<'umum' | 'pokok'>('umum');
   const [tarikNominal, setTarikNominal] = useState('');
   const [tarikCatatan, setTarikCatatan] = useState('');
+  const [tarikPin, setTarikPin] = useState('');
   const [tarikError, setTarikError] = useState('');
   const [showBerbagiModal, setShowBerbagiModal] = useState(false);
+  const [showBiometricPolicyModal, setShowBiometricPolicyModal] = useState(false);
 
   // Req 6: Grafik pada anggota dapat di hide atau di lihat
   const [showGrafik, setShowGrafik] = useState<boolean>(() => {
@@ -475,6 +479,13 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       return;
     }
 
+    // Pemisahan Wewenang (Two-Factor Protection): Penarikan Dana WAJIB memasukkan PIN Transaksi 6 digit
+    const validPin = currentMember.pinTransaksi || '123456';
+    if (!tarikPin || tarikPin.length !== 6 || tarikPin !== validPin) {
+      setTarikError('PIN Transaksi 6 digit salah atau belum lengkap. Silakan masukkan PIN yang benar.');
+      return;
+    }
+
     const now = new Date();
     const tgl = now.toISOString().split('T')[0];
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
@@ -539,6 +550,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     setShowTarikModal(false);
     setTarikNominal('');
     setTarikCatatan('');
+    setTarikPin('');
   };
 
   // Generate data for Recharts: Ringkasan Mutasi Saldo & Transaksi 30 Hari Terakhir
@@ -1775,17 +1787,51 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 />
               </div>
 
+              {/* Pemisahan Wewenang: PIN Transaksi 6 Digit Wajib untuk Penarikan Dana (Two-Factor Protection) */}
+              <div className="p-3 rounded-2xl bg-slate-900/90 border border-amber-500/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-amber-300 text-xs flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                    <span>PIN Transaksi (6 Digit) *</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowBiometricPolicyModal(true)}
+                    className="text-[10px] text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Fingerprint className="w-3 h-3" />
+                    <span>Aturan Biometrik & PIN</span>
+                  </button>
+                </div>
+                <input
+                  type="password"
+                  required
+                  maxLength={6}
+                  disabled={tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked}
+                  value={tarikPin}
+                  onChange={(e) => setTarikPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="••••••"
+                  className="w-full px-3 py-2 bg-slate-800 disabled:bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-center tracking-widest text-base focus:ring-2 focus:ring-amber-500"
+                />
+                <div className="text-[10px] text-slate-400 leading-snug">
+                  *Sesuai standar keamanan perbankan, biometrik sidik jari hanya untuk Login Cepat. Penarikan dana wajib otentikasi PIN Transaksi 6 digit.
+                </div>
+              </div>
+
               <div className="pt-2 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowTarikModal(false)}
+                  onClick={() => {
+                    setShowTarikModal(false);
+                    setTarikPin('');
+                  }}
                   className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={!tarikNominal || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
+                  disabled={!tarikNominal || !tarikPin || tarikPin.length !== 6 || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
                   className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all cursor-pointer"
                 >
                   {tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? '🔒 Tabungan Pokok Terkunci' : 'Tarik Dana Sekarang'}
@@ -1797,6 +1843,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       )}
 
       {/* ================= MODALS ================= */}
+      <BiometricPolicyModal
+        isOpen={showBiometricPolicyModal}
+        onClose={() => setShowBiometricPolicyModal(false)}
+      />
       {showSettings && (
         <SettingModal
           state={state}

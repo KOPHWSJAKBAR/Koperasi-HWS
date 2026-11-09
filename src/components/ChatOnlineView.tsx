@@ -6,7 +6,7 @@ import {
   ChatMessage,
 } from '../types';
 import { downloadExcelCsv } from '../lib/exportPdf';
-import { fetchStateFromServer } from '../lib/storage';
+import { fetchStateFromServer, sanitizeForFirestore } from '../lib/storage';
 import {
   MessageSquare,
   Send,
@@ -310,7 +310,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       senderType: isMember ? 'member' : 'admin',
       senderNama: isMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus',
       pesan: msgText || (lampiranUrl ? '📷 [Lampiran Gambar]' : ''),
-      lampiranUrl: lampiranUrl || undefined,
+      ...(lampiranUrl ? { lampiranUrl } : {}),
       timestamp: new Date().toISOString(),
       isReadByAdmin: !isMember,
       isReadByMember: isMember,
@@ -319,11 +319,12 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     setInputPesan('');
     setLampiranUrl('');
 
-    // 1. Direct Firestore setDoc for immediate zero-delay cross-device sync
+    // 1. Direct Firestore setDoc with deep undefined sanitization for immediate zero-delay cross-device sync
     try {
       const { db } = await import('../lib/firebase');
       const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'chats', newMsg.id), newMsg);
+      const cleanDoc = sanitizeForFirestore(newMsg);
+      await setDoc(doc(db, 'chats', newMsg.id), cleanDoc);
     } catch (e) {
       console.warn('Direct Firestore chat error:', e);
     }

@@ -674,7 +674,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const handleAddMemberSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate unique NIK & HP
+    // Validate unique NIK, HP, & Email (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
     const existNik = state.members.find((m) => m.nik === formNik.trim());
     if (existNik) {
       alert('NIK ini sudah terdaftar sebagai anggota koperasi.');
@@ -683,8 +683,18 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     const cleanHp = formWhatsapp.replace(/\D/g, '');
     const existHp = state.members.find((m) => m.whatsapp.replace(/\D/g, '') === cleanHp);
     if (existHp) {
-      alert('Nomor WhatsApp ini sudah digunakan oleh anggota lain.');
+      alert(`Nomor telepon / WhatsApp ${formWhatsapp} sudah digunakan oleh anggota lain (${existHp.nama}).`);
       return;
+    }
+    const cleanEmail = formEmail.trim().toLowerCase();
+    if (cleanEmail) {
+      const existEmail = state.members.find(
+        (m) => m.email && m.email.trim().toLowerCase() === cleanEmail
+      );
+      if (existEmail) {
+        alert(`Alamat email ${formEmail} sudah digunakan oleh anggota lain (${existEmail.nama}).`);
+        return;
+      }
     }
 
     const { nomorRekening, nextRunningNumber } = generateNomorRekening(
@@ -748,10 +758,32 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     alert(`✓ Anggota ${confirmedMember.nama} berhasil ditambahkan secara realtime online!\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}`);
   };
 
-  // Edit Member Profile Save
+  // Edit Member Profile Save (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
   const handleSaveEditMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMember) return;
+
+    const cleanHp = editingMember.whatsapp ? editingMember.whatsapp.replace(/\D/g, '') : '';
+    if (cleanHp) {
+      const dupHp = state.members.find(
+        (m) => m.id !== editingMember.id && m.whatsapp && m.whatsapp.replace(/\D/g, '') === cleanHp
+      );
+      if (dupHp) {
+        alert(`Nomor telepon / WhatsApp ${editingMember.whatsapp} sudah digunakan oleh anggota lain (${dupHp.nama}).`);
+        return;
+      }
+    }
+
+    const cleanEmail = editingMember.email ? editingMember.email.trim().toLowerCase() : '';
+    if (cleanEmail) {
+      const dupEmail = state.members.find(
+        (m) => m.id !== editingMember.id && m.email && m.email.trim().toLowerCase() === cleanEmail
+      );
+      if (dupEmail) {
+        alert(`Alamat email ${editingMember.email} sudah digunakan oleh anggota lain (${dupEmail.nama}).`);
+        return;
+      }
+    }
 
     await updateState((prev) => ({
       ...prev,

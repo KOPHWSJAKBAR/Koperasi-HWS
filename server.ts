@@ -1502,6 +1502,11 @@ async function startServer() {
         return res.status(400).json({ error: 'Data setoran tidak lengkap' });
       }
 
+      // User Req 3: Bukti setoran wajib di-upload saat anggota melakukan setoran tabungan pokok, tabungan umum, dan sedekah
+      if (deposit.metode !== 'tabungan_umum' && (!deposit.buktiTransferUrl || !deposit.buktiTransferUrl.trim())) {
+        return res.status(400).json({ error: 'Foto bukti transfer / setoran wajib di-upload.' });
+      }
+
       currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
       if (sedekahEntry && sedekahEntry.id) {
         currentState.sedekahList = [
@@ -2447,24 +2452,35 @@ async function startServer() {
       currentState.members = currentState.members || [];
       const cleanNik = member.nik ? String(member.nik).trim() : '';
       const cleanHp = member.whatsapp ? String(member.whatsapp).replace(/\D/g, '') : '';
+      const cleanEmail = member.email ? String(member.email).trim().toLowerCase() : '';
 
-      // For self-registration (non-admin), prevent duplicate NIK or WhatsApp from updating or overwriting existing members
-      if (!adminName) {
-        if (cleanNik) {
-          const dupNik = currentState.members.find((m: any) => m.nik && String(m.nik).trim() === cleanNik);
-          if (dupNik) {
-            return res.status(400).json({ error: 'NIK ini sudah terdaftar sebagai anggota koperasi HWS.' });
-          }
+      // User Req 2: Nomer tlp anggota dan email anggota tidak bisa sama dengan anggota lainnya
+      if (cleanNik) {
+        const dupNik = currentState.members.find(
+          (m: any) => m.id !== member.id && m.nik && String(m.nik).trim() === cleanNik
+        );
+        if (dupNik) {
+          return res.status(400).json({ error: 'NIK ini sudah terdaftar sebagai anggota koperasi HWS.' });
         }
-        if (cleanHp) {
-          const dupHp = currentState.members.find(
-            (m: any) => m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp
-          );
-          if (dupHp) {
-            return res.status(400).json({
-              error: `Nomor WhatsApp ${member.whatsapp} sudah digunakan oleh anggota lain (${dupHp.nama}).`,
-            });
-          }
+      }
+      if (cleanHp) {
+        const dupHp = currentState.members.find(
+          (m: any) => m.id !== member.id && m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp
+        );
+        if (dupHp) {
+          return res.status(400).json({
+            error: `Nomor telepon / WhatsApp ${member.whatsapp} sudah digunakan oleh anggota lain (${dupHp.nama}).`,
+          });
+        }
+      }
+      if (cleanEmail) {
+        const dupEmail = currentState.members.find(
+          (m: any) => m.id !== member.id && m.email && String(m.email).trim().toLowerCase() === cleanEmail
+        );
+        if (dupEmail) {
+          return res.status(400).json({
+            error: `Alamat email ${member.email} sudah digunakan oleh anggota lain (${dupEmail.nama}).`,
+          });
         }
       }
 

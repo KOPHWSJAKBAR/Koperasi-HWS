@@ -176,6 +176,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       return;
     }
 
+    // User Req 3: Bukti setoran wajib di upload saat anggota melakukan setoran tabungan pokok, tabungan umum, dan sedekah
+    if (!buktiUrl || !buktiUrl.trim()) {
+      setMsg({
+        type: 'error',
+        text: 'Bukti transfer / setoran wajib di-upload saat melakukan setoran tabungan pokok maupun tabungan umum.',
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     let finalBukti = buktiUrl;
     if (finalBukti && finalBukti.startsWith('data:image')) {
@@ -188,8 +197,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           finalBukti = cloudUrl;
         }
       } catch {}
-    } else if (!finalBukti) {
-      finalBukti = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="220" viewBox="0 0 400 220"><rect width="400" height="220" fill="%230f172a"/><rect x="10" y="10" width="380" height="200" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-dasharray="4"/><text x="200" y="55" font-size="15" fill="%23f59e0b" font-weight="bold" text-anchor="middle">SLIP SETORAN RESMI KOPERASI HWS</text><text x="200" y="90" font-size="12" fill="%23ffffff" text-anchor="middle">A/N: ${encodeURIComponent(currentMember.nama)}</text><text x="200" y="125" font-size="16" fill="%2338bdf8" font-weight="bold" text-anchor="middle">Rp ${nominalFinal.toLocaleString('id-ID')}</text><text x="200" y="155" font-size="11" fill="%2394a3b8" text-anchor="middle">Jenis: ${jenisSetoran.toUpperCase()} • ${metode.toUpperCase()}</text><text x="200" y="185" font-size="10" fill="%2310b981" text-anchor="middle">✓ Terdaftar Online Realtime di Sistem</text></svg>`;
     }
     const newDeposit: SetoranVerifikasi = {
       id: `dep-${Date.now()}`,
@@ -1358,26 +1365,32 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               {/* Upload Bukti Transfer */}
               <div className="bg-slate-800/60 p-3.5 rounded-2xl border border-dashed border-slate-600">
                 <div className="flex justify-between items-center mb-1">
-                  <label className="block text-xs font-bold text-slate-200">
-                    Upload Bukti Transfer Bank / QRIS
+                  <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                    <span>Upload Bukti Transfer Bank / QRIS</span>
+                    <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
                   </label>
                   <span className="text-[10px] text-amber-400 font-semibold">
-                    (Slip digital otomatis dibuat jika kosong)
+                    {buktiUrl ? '✓ Foto Terlampir' : 'Format JPG/PNG/Foto Resi'}
                   </span>
                 </div>
                 <div className="flex flex-col sm:flex-row items-center gap-3">
                   <input
                     type="file"
+                    required
                     accept="image/*"
                     onChange={handleProofUpload}
                     className="text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer"
                   />
-                  {buktiUrl && (
-                    <div className="relative w-24 h-16 rounded-xl overflow-hidden border border-slate-600">
+                  {buktiUrl ? (
+                    <div className="relative w-24 h-16 rounded-xl overflow-hidden border border-emerald-500 shadow-md">
                       <img src={buktiUrl} alt="Preview Bukti" className="w-full h-full object-cover" />
-                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-center text-emerald-400 py-0.5">
+                      <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center text-emerald-400 py-0.5 font-bold">
                         ✓ Terlampir
                       </span>
+                    </div>
+                  ) : (
+                    <div className="p-2 rounded-xl bg-rose-950/40 border border-rose-500/40 text-[10px] text-rose-300 text-left">
+                      Wajib melampirkan foto resi / transfer bank / QRIS
                     </div>
                   )}
                 </div>
@@ -1397,11 +1410,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full py-3 bg-[#f59e0b] hover:bg-[#d97706] active:scale-[0.99] text-slate-950 font-extrabold text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                disabled={isSubmitting || !buktiUrl}
+                className="w-full py-3 bg-[#f59e0b] hover:bg-[#d97706] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-extrabold text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <Send className="w-4 h-4" />
-                {isSubmitting ? 'Mengirim...' : `Kirim Setoran (${formatRupiah(nominalFinal)})`}
+                {isSubmitting ? 'Mengirim Data...' : !buktiUrl ? '⚠️ Wajib Upload Bukti Setoran Dahulu' : `Kirim Setoran (${formatRupiah(nominalFinal)})`}
               </button>
             </form>
           </div>
