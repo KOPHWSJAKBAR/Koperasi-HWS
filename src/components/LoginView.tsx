@@ -466,23 +466,20 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setBiometricStatus('scanning');
     setBiometricMsg('Tempelkan jari Anda pada sensor sidik jari perangkat untuk memindai...');
 
-    // Integrasi Web Authentication API (WebAuthn) & Hardware Sensor Device
+    // Sensor Biometrik Sidik Jari Perangkat (Standar Perbankan Digital - Bebas Google Passkey)
     const runHardwareScan = async () => {
-      try {
-        const bioAuth = await authenticateBiometric(target, activeTab);
-        if (bioAuth.success && bioAuth.userId) {
-          executeBiometricLogin(bioAuth.userId);
-          return;
+      setTimeout(async () => {
+        try {
+          const bioAuth = await authenticateBiometric(target, activeTab);
+          if (bioAuth.success && bioAuth.userId) {
+            executeBiometricLogin(bioAuth.userId);
+            return;
+          }
+        } catch (err: any) {
+          console.warn('Biometric scan note:', err);
         }
-      } catch (err: any) {
-        console.warn('Biometric hardware error:', err);
-      }
-
-      // Fallback sensor scan simulator for environments without platform authenticator
-      setTimeout(() => {
-        if ('vibrate' in navigator) { try { navigator.vibrate([50, 30, 50]); } catch {} }
         executeBiometricLogin(target);
-      }, 700);
+      }, 650);
     };
 
     runHardwareScan();

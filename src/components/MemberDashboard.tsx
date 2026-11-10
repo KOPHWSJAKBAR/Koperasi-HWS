@@ -832,7 +832,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 <div
                   onClick={() => setShowBerbagiModal(true)}
                   className="bg-gradient-to-br from-[#141d33] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-2xl p-3 sm:p-4 cursor-pointer transition-all hover:scale-[1.02] shadow-md group col-span-2 sm:col-span-1 min-w-0 overflow-hidden flex flex-col justify-between"
-                  title="Klik untuk membuka Menu Sedekah (Setor QRIS & Transfer Bank)"
+                  title="Klik untuk membuka Menu Sedekah (Setor via QRIS)"
                 >
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-[10px] sm:text-xs text-rose-300 font-semibold block break-words leading-tight">

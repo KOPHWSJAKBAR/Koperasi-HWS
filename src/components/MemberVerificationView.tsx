@@ -56,10 +56,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [jenisSetoran, setJenisSetoran] = useState<'kewajiban' | 'umum'>('kewajiban');
   const [jumlahHari, setJumlahHari] = useState<string>('');
   const [nominalUmum, setNominalUmum] = useState<string>('50000');
-  const [rekeningTujuan, setRekeningTujuan] = useState<string>(
-    state.profile.rekeningPenampungan[0]?.bankName + ' - ' + state.profile.rekeningPenampungan[0]?.accountNumber || 'BCA 5490706161'
-  );
-  const [metode, setMetode] = useState<'transfer_bank' | 'qris'>('transfer_bank');
+  const [rekeningTujuan, setRekeningTujuan] = useState<string>('QRIS Resmi Koperasi HWS');
+  const [metode, setMetode] = useState<'transfer_bank' | 'qris'>('qris');
   const [buktiUrl, setBuktiUrl] = useState<string>('');
   const [catatan, setCatatan] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1240,133 +1238,77 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 </div>
               )}
 
-              {/* PILIHAN METODE SETORAN: TRANSFER BANK ATAU QRIS (Req 3) */}
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  Pilih Cara Pembayaran Setoran *
-                </label>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMetode('transfer_bank');
-                      const firstRek = state.profile.rekeningPenampungan[0];
-                      if (firstRek) {
-                        setRekeningTujuan(`${firstRek.bankName} - ${firstRek.accountNumber}`);
-                      }
-                    }}
-                    className={`py-3 px-3 rounded-2xl text-left border transition-all ${
-                      metode === 'transfer_bank'
-                        ? 'bg-amber-500/15 border-amber-500 text-amber-300 ring-2 ring-amber-500/50'
-                        : 'bg-slate-800/70 border-slate-700 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <div className="text-xs font-extrabold flex items-center gap-1.5">
-                      <Building className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>1. Transfer Bank</span>
+              {/* PILIHAN METODE SETORAN: KHUSUS SCAN QRIS RESMI (User Req: Setoran tabungan pokok & umum hanya menggunakan QRIS) */}
+              <div className="p-3.5 bg-gradient-to-r from-emerald-950/60 to-[#0e241e] border-2 border-emerald-500/50 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
+                      <QrCode className="w-5 h-5 text-emerald-400" />
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">
-                      Rekening penampungan koperasi
+                    <div>
+                      <div className="text-xs font-black text-white flex items-center gap-1.5">
+                        <span>Metode Pembayaran: QRIS Resmi Koperasi</span>
+                        <span className="text-[9px] px-2 py-0.5 bg-emerald-500/25 text-emerald-300 font-extrabold rounded-full">
+                          Khusus QRIS
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-emerald-300/80">
+                        Scan via BCA Mobile, Livin Mandiri, BRImo, BNI, Dana, OVO, Gopay, ShopeePay
+                      </div>
                     </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMetode('qris');
-                      setRekeningTujuan('QRIS Resmi Koperasi HWS');
-                    }}
-                    className={`py-3 px-3 rounded-2xl text-left border transition-all ${
-                      metode === 'qris'
-                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 ring-2 ring-emerald-500/50'
-                        : 'bg-slate-800/70 border-slate-700 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <div className="text-xs font-extrabold flex items-center gap-1.5">
-                      <QrCode className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>2. Scan QRIS</span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-[9px] text-slate-400">Total Setoran</div>
+                    <div className="text-xs font-mono font-black text-amber-300">
+                      {formatRupiah(nominalFinal)}
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">
-                      m-Banking & Semua E-Wallet
-                    </div>
-                  </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Rincian Metode: Jika Transfer Bank */}
-              {metode === 'transfer_bank' && (
-                <div className="bg-[#141e33] p-3.5 rounded-2xl border border-slate-700 space-y-2">
-                  <label className="block text-xs font-bold text-slate-200 mb-1">
-                    Pilih Rekening Penampungan Koperasi HWS
-                  </label>
-                  {state.profile.rekeningPenampungan && state.profile.rekeningPenampungan.length > 0 ? (
-                    <select
-                      value={rekeningTujuan}
-                      onChange={(e) => setRekeningTujuan(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
-                    >
-                      {state.profile.rekeningPenampungan.map((rek) => (
-                        <option key={rek.id} value={`${rek.bankName} - ${rek.accountNumber}`}>
-                          {rek.bankName} ({rek.accountNumber}) a/n {rek.accountHolder}
-                        </option>
-                      ))}
-                    </select>
+              {/* Tampilkan Barcode QRIS & Tombol Unduh */}
+              <div className="bg-emerald-950/30 p-3.5 rounded-2xl border border-emerald-500/40 space-y-2 text-center">
+                <div className="font-extrabold text-emerald-300 text-xs flex items-center justify-center gap-1.5">
+                  <QrCode className="w-4 h-4 text-emerald-400" />
+                  <span>Scan QRIS Resmi Koperasi HWS</span>
+                </div>
+                <div className="w-36 h-36 mx-auto bg-white p-2 rounded-2xl shadow-md border border-slate-300 flex items-center justify-center">
+                  {state.profile.qrisImageUrl ? (
+                    <img
+                      src={state.profile.qrisImageUrl}
+                      alt="QRIS Resmi Koperasi HWS"
+                      className="w-full h-full object-contain"
+                    />
                   ) : (
-                    <div className="text-xs text-amber-300 font-mono p-2 bg-slate-900 rounded-xl">
-                      BCA 5490706161 a/n KOPERASI HWS
+                    <div className="flex flex-col items-center justify-center text-slate-900">
+                      <QrCode className="w-20 h-20 text-slate-900" />
+                      <span className="text-[8px] font-black tracking-widest mt-0.5">QRIS NASIONAL</span>
                     </div>
                   )}
-                  <p className="text-[10px] text-slate-400">
-                    Silakan transfer nominal <b>{formatRupiah(nominalFinal)}</b> ke rekening tujuan di atas.
-                  </p>
                 </div>
-              )}
-
-              {/* Rincian Metode: Jika QRIS */}
-              {metode === 'qris' && (
-                <div className="bg-emerald-950/30 p-3.5 rounded-2xl border border-emerald-500/40 space-y-2 text-center">
-                  <div className="font-extrabold text-emerald-300 text-xs flex items-center justify-center gap-1.5">
-                    <QrCode className="w-4 h-4 text-emerald-400" />
-                    <span>Scan QRIS Resmi Koperasi HWS</span>
-                  </div>
-                  <div className="w-36 h-36 mx-auto bg-white p-2 rounded-2xl shadow-md border border-slate-300 flex items-center justify-center">
-                    {state.profile.qrisImageUrl ? (
-                      <img
-                        src={state.profile.qrisImageUrl}
-                        alt="QRIS Resmi Koperasi HWS"
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center text-slate-900">
-                        <QrCode className="w-20 h-20 text-slate-900" />
-                        <span className="text-[8px] font-black tracking-widest mt-0.5">QRIS NASIONAL</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-emerald-200">
-                    Scan via <b>BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay</b>
-                  </div>
-                  <div className="font-mono text-xs font-black text-amber-300">
-                    Nominal Transfer: {formatRupiah(nominalFinal)}
-                  </div>
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={handleDownloadQrisJpg}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold rounded-xl shadow-md transition-all active:scale-95"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Unduh QRIS (JPG)</span>
-                    </button>
-                  </div>
+                <div className="text-[10px] text-emerald-200">
+                  Scan via <b>BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay</b>
                 </div>
-              )}
+                <div className="font-mono text-xs font-black text-amber-300">
+                  Nominal Transfer: {formatRupiah(nominalFinal)}
+                </div>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={handleDownloadQrisJpg}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Unduh QRIS (JPG)</span>
+                  </button>
+                </div>
+              </div>
 
               {/* Upload Bukti Transfer */}
               <div className="bg-slate-800/60 p-3.5 rounded-2xl border border-dashed border-slate-600">
                 <div className="flex justify-between items-center mb-1">
                   <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
-                    <span>Upload Bukti Transfer Bank / QRIS</span>
+                    <span>Upload Bukti Transaksi / Resi QRIS</span>
                     <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
                   </label>
                   <span className="text-[10px] text-amber-400 font-semibold">
@@ -1390,7 +1332,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                     </div>
                   ) : (
                     <div className="p-2 rounded-xl bg-rose-950/40 border border-rose-500/40 text-[10px] text-rose-300 text-left">
-                      Wajib melampirkan foto resi / transfer bank / QRIS
+                      Wajib melampirkan foto resi / struk scan QRIS
                     </div>
                   )}
                 </div>
@@ -1493,38 +1435,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               </div>
             </div>
 
-            {/* Rekening Penampungan Card */}
-            <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 shadow-xl">
-              <h4 className="text-xs font-extrabold text-slate-300 uppercase tracking-wider mb-3">
-                Daftar Rekening Bank Penampungan Koperasi
-              </h4>
-              <div className="space-y-2">
-                {state.profile.rekeningPenampungan.map((rek) => (
-                  <div
-                    key={rek.id}
-                    className="p-3 bg-slate-800/80 rounded-xl border border-slate-700/60 flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="text-xs font-bold text-white">{rek.bankName}</div>
-                      <div className="text-xs font-mono text-amber-400 font-extrabold">
-                        {rek.accountNumber}
-                      </div>
-                      <div className="text-[10px] text-slate-400">a/n {rek.accountHolder}</div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard?.writeText(rek.accountNumber);
-                        alert(`Nomor rekening ${rek.bankName} disalin: ${rek.accountNumber}`);
-                      }}
-                      className="py-1 px-2.5 bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-bold rounded-lg"
-                    >
-                      Salin Rek
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       )}

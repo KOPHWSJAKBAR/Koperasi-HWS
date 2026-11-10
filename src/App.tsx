@@ -133,29 +133,49 @@ export default function App() {
       ? state.admins.find((a) => a.id === activeSession.id) || null
       : null;
 
-  // Requirement 12: Auto logout dalam 2 menit apabila tidak ada interaksi / tidak tertutup
+  // Auto-logout dalam 2 menit (120 detik) apabila tidak ada aktivitas
+  const lastActivityRef = useRef<number>(Date.now());
+
   useEffect(() => {
-    if (!currentMember && !currentAdmin) return;
+    if (!activeSession) return;
 
-    let timeoutId: any;
+    // Inisialisasi waktu aktivitas saat sesi aktif
+    lastActivityRef.current = Date.now();
 
-    const resetTimer = () => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        handleLogout('Sesi Anda telah berakhir secara otomatis demi keamanan (inaktif 2 menit).');
-      }, AUTO_LOGOUT_MS);
+    const recordActivity = () => {
+      lastActivityRef.current = Date.now();
     };
 
-    resetTimer();
+    // Periksa inaktivitas setiap 1 detik
+    const checkInterval = setInterval(() => {
+      const idleTime = Date.now() - lastActivityRef.current;
+      if (idleTime >= AUTO_LOGOUT_MS) {
+        clearInterval(checkInterval);
+        handleLogout('Sesi Anda telah berakhir secara otomatis karena tidak ada aktivitas selama 2 menit (Auto-Logout demi keamanan akun).');
+      }
+    }, 1000);
 
-    const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click'];
-    activityEvents.forEach((ev) => window.addEventListener(ev, resetTimer, { passive: true }));
+    // Cek juga saat tab kembali aktif (visibility change)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const idleTime = Date.now() - lastActivityRef.current;
+        if (idleTime >= AUTO_LOGOUT_MS) {
+          clearInterval(checkInterval);
+          handleLogout('Sesi Anda telah berakhir secara otomatis karena tidak ada aktivitas selama 2 menit (Auto-Logout demi keamanan akun).');
+        }
+      }
+    };
+
+    const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click', 'wheel', 'pointerdown'];
+    activityEvents.forEach((ev) => window.addEventListener(ev, recordActivity, { passive: true }));
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      clearTimeout(timeoutId);
-      activityEvents.forEach((ev) => window.removeEventListener(ev, resetTimer));
+      clearInterval(checkInterval);
+      activityEvents.forEach((ev) => window.removeEventListener(ev, recordActivity));
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [currentMember, currentAdmin]);
+  }, [activeSession?.id, activeSession?.type]);
 
   // Requirement 7: Apabila masuk kedalam suatu menu tombol 1x klik Kembali ke menu sebelumnya, 3 klik logout
   useEffect(() => {

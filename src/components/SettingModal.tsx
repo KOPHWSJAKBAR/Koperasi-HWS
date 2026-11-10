@@ -14,7 +14,6 @@ import { LogoHws } from '../lib/logo';
 import { GoogleDriveModal } from './GoogleDriveModal';
 import { InstallAppModal } from './InstallAppModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
-import { BiometricPolicyModal } from './BiometricPolicyModal';
 import {
   X,
   User,
@@ -422,7 +421,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   // User Req 1: Pendaftaran Biometrik via Scan Finger
   const [showBioEnrollModal, setShowBioEnrollModal] = useState(false);
   const [bioEnrollStep, setBioEnrollStep] = useState<'prompt' | 'scanning' | 'success'>('prompt');
-  const [showBiometricPolicyModal, setShowBiometricPolicyModal] = useState(false);
   const [mobileNotifEnabled, setMobileNotifEnabled] = useState(
     () => typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
   );
@@ -2453,28 +2451,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   {biometricEnabled ? '✓ Aktif' : 'Aktifkan'}
                 </button>
               </div>
-
-              {/* Tombol Baca Aturan & Standar Keamanan Biometrik */}
-              <button
-                type="button"
-                onClick={() => setShowBiometricPolicyModal(true)}
-                className="w-full p-2.5 bg-slate-900/60 hover:bg-slate-900 rounded-xl border border-slate-750 hover:border-amber-500/40 text-left flex items-center justify-between transition-colors group cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
-                  <div>
-                    <div className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
-                      Aturan & Standar Keamanan Biometrik Sidik Jari
-                    </div>
-                    <div className="text-[10px] text-slate-400">
-                      Zero-Server Storage • Device Binding • Two-Factor PIN Protection
-                    </div>
-                  </div>
-                </div>
-                <span className="text-[11px] text-amber-400 font-bold group-hover:translate-x-0.5 transition-transform">
-                  Lihat Ketentuan →
-                </span>
-              </button>
 
               {/* Toggle Notifikasi Mobile (Req 8) */}
               <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
@@ -6236,16 +6212,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[10px] text-slate-400 text-left space-y-1">
                 <div>• Biometrik sidik jari hanya tersimpan lokal pada hardware sensor perangkat ini.</div>
                 <div>• Tidak disimpan di database server dan tidak dapat digunakan oleh perangkat lain.</div>
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowBiometricPolicyModal(true)}
-                    className="text-amber-400 hover:underline flex items-center gap-1 font-bold cursor-pointer"
-                  >
-                    <ShieldCheck className="w-3 h-3" />
-                    <span>Baca 5 Ketentuan Lengkap Standar Keamanan Biometrik</span>
-                  </button>
-                </div>
               </div>
             </div>
 
@@ -6586,12 +6552,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           </div>
         </div>
       )}
-
-      {/* Modal Kebijakan & Standar Keamanan Biometrik (5 Ketentuan Resmi) */}
-      <BiometricPolicyModal
-        isOpen={showBiometricPolicyModal}
-        onClose={() => setShowBiometricPolicyModal(false)}
-      />
     </div>
   );
 };

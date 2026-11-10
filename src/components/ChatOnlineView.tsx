@@ -65,7 +65,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   // Quick Questions for Members
   const QUICK_PROMPTS = [
     'Mohon bantu verifikasi setoran saya',
-    'Berapa nomor rekening resmi koperasi?',
+    'Bagaimana cara pembayaran setor via QRIS resmi?',
     'Bagaimana cara permohonan buka kunci simpanan pokok?',
     'Apakah jam operasional layanan pengurus hari ini?',
   ];

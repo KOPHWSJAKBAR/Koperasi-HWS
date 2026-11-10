@@ -162,7 +162,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const [selectedJenis, setSelectedJenis] = useState<JenisSedekahBerbagi>('sedekah_subuh');
   // User Req: hapuskan nominal angka berbagi hanya input nominal manual
   const [customNominal, setCustomNominal] = useState<string>('');
-  const [sumberDana, setSumberDana] = useState<'tabungan_umum' | 'transfer_bank' | 'qris'>('transfer_bank');
+  const [sumberDana, setSumberDana] = useState<'qris' | 'tabungan_umum' | 'transfer_bank'>('qris');
   const [doaPesan, setDoaPesan] = useState<string>('');
   const [buktiTransferUrl, setBuktiTransferUrl] = useState<string>('');
   const [isSubmittingDonasi, setIsSubmittingDonasi] = useState(false);
@@ -340,9 +340,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     const jenisLabel = getJenisLabel(selectedJenis);
 
     const confirmMsg = confirm(
-      `Konfirmasi ${jenisLabel}:\nNominal: ${formatRupiah(nominal)}\nMetode: ${
-        sumberDana === 'tabungan_umum' ? 'Tabungan Umum Bebas' : `Transfer Bank / QRIS (${bankName})`
-      }\n\nPengajuan berbagi ini akan dikirim dan diverifikasi / dikonfirmasi oleh Admin. Setelah disetujui, dana akan resmi tercatat pada Buku Kas Koperasi dan tidak dapat ditarik kembali oleh anggota. Lanjutkan?`
+      `Konfirmasi ${jenisLabel}:\nNominal: ${formatRupiah(nominal)}\nMetode: QRIS Resmi Kas Berbagi\n\nPengajuan berbagi ini akan dikirim dan diverifikasi / dikonfirmasi oleh Admin. Setelah disetujui, dana akan resmi tercatat pada Buku Kas Koperasi dan tidak dapat ditarik kembali oleh anggota. Lanjutkan?`
     );
     if (!confirmMsg) return;
 
@@ -381,8 +379,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         memberNomorAnggota: currentMember?.nomorAnggota,
         jenis: 'sedekah' as const,
         nominal,
-        rekeningTujuan: `${bankName} (${noRekening})`,
-        metode: (sumberDana === 'tabungan_umum' ? 'tabungan_umum' : 'qris') as any,
+        rekeningTujuan: 'QRIS Resmi Kas Berbagi',
+        metode: 'qris' as any,
         ...(buktiTransferUrl ? { buktiTransferUrl } : {}),
         catatanAnggota: doaPesan.trim() ? `[${jenisLabel}] ${doaPesan.trim()}` : `Donasi ${jenisLabel}`,
         status: 'pending' as const,
@@ -1206,7 +1204,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </p>
               </div>
 
-              {/* TAMPILKAN LOGO QRIS DAN NO REKENING BERBAGI (User Req) */}
+              {/* TAMPILKAN QRIS KAS BERBAGI RESMI (User Req: Bersedekah hanya menggunakan QRIS) */}
               <div className="p-3.5 bg-gradient-to-br from-slate-900 via-[#131d35] to-slate-900 border border-rose-500/30 rounded-2xl space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
@@ -1216,49 +1214,21 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                       <span className="text-[8px] text-slate-700 font-bold ml-1 border-l border-slate-300 pl-1">NASIONAL</span>
                     </div>
                     <span className="text-xs font-extrabold text-white">
-                      Rekening Resmi & QRIS Kas Berbagi Koperasi
+                      QRIS Resmi Kas Berbagi Koperasi
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowQrisPreview(!showQrisPreview)}
-                    className="text-[11px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 cursor-pointer"
-                  >
-                    <QrCode className="w-3.5 h-3.5" />
-                    <span>{showQrisPreview ? 'Tutup Kode QR' : 'Tampilkan QRIS Barcode'}</span>
-                  </button>
+                  <span className="text-[10px] px-2 py-0.5 bg-rose-500/25 text-rose-300 font-extrabold rounded-full border border-rose-500/40">
+                    Khusus QRIS
+                  </span>
                 </div>
 
-                {/* Info Rekening Kas Berbagi */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                  <div className="p-2.5 bg-slate-800/90 rounded-xl border border-slate-700 flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] text-slate-400">{bankName}</div>
-                      <div className="text-sm font-mono font-black text-amber-400 tracking-wider">
-                        {noRekening}
-                      </div>
-                      <div className="text-[10px] text-slate-300 font-semibold truncate">
-                        a.n {namaPemilikRekening}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleCopyNoRek}
-                      className="p-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors cursor-pointer shrink-0"
-                      title="Salin Nomor Rekening Kas Berbagi"
-                    >
-                      {copiedRekening ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    </button>
+                <div className="p-2.5 bg-slate-800/90 rounded-xl border border-slate-700 flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/30">
+                    <ShieldCheck className="w-5 h-5 text-rose-400" />
                   </div>
-
-                  <div className="p-2.5 bg-slate-800/90 rounded-xl border border-slate-700 flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/30">
-                      <ShieldCheck className="w-5 h-5 text-rose-400" />
-                    </div>
-                    <div className="text-[11px] text-slate-300 leading-tight">
-                      <div className="font-bold text-white">Kas Berbagi Khusus</div>
-                      <div>Rekening khusus sosial, terpisah dari kas simpanan operasional.</div>
-                    </div>
+                  <div className="text-[11px] text-slate-300 leading-tight">
+                    <div className="font-bold text-white">Kas Berbagi Khusus Koperasi</div>
+                    <div>Penyaluran sedekah resmi khusus menggunakan pembayaran scan QRIS.</div>
                   </div>
                 </div>
 
@@ -1335,69 +1305,29 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 )}
               </div>
 
-              {/* Pilihan Sumber Dana */}
+              {/* Metode Pembayaran: Khusus QRIS */}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  3. Pilih Metode Pembayaran Sedekah:
+                  3. Metode Pembayaran Sedekah:
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSumberDana('qris');
-                      setShowQrisPreview(true);
-                    }}
-                    className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
-                      sumberDana === 'qris'
-                        ? 'bg-rose-500/20 border-rose-500 text-white font-bold ring-1 ring-rose-500 shadow-sm'
-                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <div>
-                      <div className="text-xs flex items-center gap-1.5">
-                        <QrCode className="w-3.5 h-3.5 text-rose-400" />
-                        <span className="font-extrabold text-white">QRIS Kas Berbagi</span>
-                      </div>
-                      <div className="text-[10px] text-rose-300">Scan via Semua E-Wallet & M-Banking</div>
+                <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                      <QrCode className="w-4 h-4" />
                     </div>
-                    {sumberDana === 'qris' && <span className="text-rose-400 text-xs font-black">✓</span>}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setSumberDana('transfer_bank')}
-                    className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
-                      sumberDana === 'transfer_bank'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-white font-bold ring-1 ring-emerald-500 shadow-sm'
-                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-                    }`}
-                  >
                     <div>
-                      <div className="text-xs font-extrabold text-white">Transfer Bank Kas Berbagi</div>
-                      <div className="text-[10px] text-emerald-400">{bankName} - {noRekening}</div>
-                    </div>
-                    {sumberDana === 'transfer_bank' && <span className="text-emerald-400 text-xs font-black">✓</span>}
-                  </button>
-
-                  {currentMember && (
-                    <button
-                      type="button"
-                      onClick={() => setSumberDana('tabungan_umum')}
-                      className={`p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer sm:col-span-2 ${
-                        sumberDana === 'tabungan_umum'
-                          ? 'bg-sky-500/20 border-sky-500 text-white font-bold ring-1 ring-sky-500 shadow-sm'
-                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      <div>
-                        <div className="text-xs font-extrabold text-white">Tabungan Umum Bebas Anggota</div>
-                        <div className="text-[10px] text-sky-400 font-mono">
-                          Saldo Tersedia: {formatRupiah(currentMember.saldoUmum)}
-                        </div>
+                      <div className="text-xs font-extrabold text-white flex items-center gap-1.5">
+                        <span>QRIS Resmi Kas Berbagi</span>
+                        <span className="text-[9px] px-1.5 py-0.5 bg-rose-500/25 text-rose-300 font-extrabold rounded">
+                          Khusus QRIS
+                        </span>
                       </div>
-                      {sumberDana === 'tabungan_umum' && <span className="text-sky-400 text-xs font-black">✓</span>}
-                    </button>
-                  )}
+                      <div className="text-[10px] text-rose-300/80">
+                        Scan via BCA Mobile, Livin, BRImo, DANA, OVO, GoPay, ShopeePay
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-rose-400 text-xs font-black">✓ Aktif</span>
                 </div>
               </div>
 
@@ -1406,7 +1336,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 <div className="bg-slate-850 p-3 rounded-2xl border border-dashed border-slate-700 space-y-1.5">
                   <label className="block text-xs font-bold text-slate-300 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
-                      <span>Foto Bukti Transfer / Resi QRIS:</span>
+                      <span>Foto Bukti Transaksi / Resi QRIS:</span>
                       <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
                     </span>
                     {buktiTransferUrl ? (
