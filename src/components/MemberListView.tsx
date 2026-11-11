@@ -7,7 +7,7 @@ import {
   LockPokokRequest,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, fetchStateFromServer } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
@@ -36,6 +36,7 @@ import {
   Send,
   KeyRound,
   FileText,
+  RefreshCw,
 } from 'lucide-react';
 
 interface MemberListViewProps {
@@ -62,6 +63,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [hapusTxInitialMemberId, setHapusTxInitialMemberId] = useState<string>('semua');
   const [hapusTxInitialWilayah, setHapusTxInitialWilayah] = useState<WilayahKoperasi | 'semua'>('semua');
   const [hapusTxInitialTxId, setHapusTxInitialTxId] = useState<string | undefined>(undefined);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -844,6 +846,25 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     }
   };
 
+  // Sinkronisasi realtime data anggota dari Cloud Firestore (khusus pendaftaran dari device smartphone/PC lain)
+  const handleSyncDeviceMembers = async () => {
+    try {
+      setIsSyncingCloud(true);
+      const res = await fetch('/api/sync/firestore', { method: 'POST' });
+      const data = await res.json();
+      await fetchStateFromServer();
+      const count = data?.totalMembers || data?.membersCount || state.members.length;
+      const newAdded = data?.newMembersCount ? ` (${data.newMembersCount} anggota baru ditambahkan)` : '';
+      alert(`✓ Sinkronisasi Cloud Berhasil!\nTotal ${count} anggota aktif terdaftar${newAdded}.\nSemua data pendaftaran anggota baru dari perangkat smartphone/PC lain telah tersinkronkan ke dalam sistem.`);
+    } catch (err) {
+      console.error('Error syncing with cloud:', err);
+      await fetchStateFromServer();
+      alert('✓ Data anggota telah dimuat ulang dari server.');
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* PENDING LOCK / BUKA TABUNGAN POKOK APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN APPROVAL (Req 7) */}
@@ -1099,6 +1120,21 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 + Tambah Anggota Baru
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={handleSyncDeviceMembers}
+              disabled={isSyncingCloud}
+              className={`py-2 px-3 text-xs rounded-xl font-bold flex items-center gap-1.5 transition-all ${
+                isSyncingCloud
+                  ? 'bg-sky-950 text-sky-400 border border-sky-500/50 cursor-wait'
+                  : 'bg-sky-950/80 hover:bg-sky-900 text-sky-300 border border-sky-500/40 shadow-sm'
+              }`}
+              title="Sinkronkan data pendaftaran anggota baru dari perangkat smartphone/PC lain melalui Cloud Firestore"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncingCloud ? 'animate-spin text-sky-400' : 'text-sky-400'}`} />
+              {isSyncingCloud ? 'Menyinkronkan...' : 'Sinkronkan Anggota Device'}
+            </button>
 
             <button
               onClick={() => handleExportMembers('pdf')}

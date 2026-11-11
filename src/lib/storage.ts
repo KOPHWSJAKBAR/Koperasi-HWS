@@ -1803,7 +1803,7 @@ export function useKoperasiState() {
                 .map((d) => d.data() as MemberUser)
                 .filter((m) => m && m.id && !delSet.has(m.id));
               globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
-              scheduleDebouncedNotify();
+              scheduleDebouncedNotify(150, true);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'members')
           );

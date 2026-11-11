@@ -819,6 +819,69 @@ function saveDatabase(state: any) {
   }
 }
 
+// Inbound Synchronizer from Cloud Firestore to Server State
+// Ensures members and data registered from newly installed devices are immediately merged into server state
+async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembersCount?: number }> {
+  try {
+    const { initializeApp, getApps } = await import('firebase/app');
+    const { getFirestore, collection, getDocs } = await import('firebase/firestore');
+    const configPath = path.join(__dirname, 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) return { success: false };
+    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
+    const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+
+    // 1. Fetch remote members from Firestore
+    const memSnap = await getDocs(collection(db, 'members'));
+    const remoteMembers: any[] = [];
+    memSnap.forEach((d) => {
+      const data = d.data();
+      if (data && data.id) {
+        remoteMembers.push(data);
+      }
+    });
+
+    // 2. Fetch remote transactions
+    const txSnap = await getDocs(collection(db, 'transactions'));
+    const remoteTx: any[] = [];
+    txSnap.forEach((d) => {
+      const data = d.data();
+      if (data && data.id) {
+        remoteTx.push(data);
+      }
+    });
+
+    // 3. Fetch remote setoran
+    const setoranSnap = await getDocs(collection(db, 'setoran'));
+    const remoteSetoran: any[] = [];
+    setoranSnap.forEach((d) => {
+      const data = d.data();
+      if (data && data.id) {
+        remoteSetoran.push(data);
+      }
+    });
+
+    if (remoteMembers.length > 0 || remoteTx.length > 0 || remoteSetoran.length > 0) {
+      const beforeCount = (currentState.members || []).length;
+      currentState = mergeServerState(currentState, {
+        members: remoteMembers,
+        memberTransactions: remoteTx,
+        setoranList: remoteSetoran,
+      });
+      const afterCount = (currentState.members || []).length;
+      if (afterCount !== beforeCount) {
+        console.log(`[Firestore Inbound Sync] Synchronized ${afterCount - beforeCount} members from Firestore (Total: ${afterCount})`);
+        saveDatabase(currentState);
+        broadcastEvent('STATE_UPDATED', currentState);
+      }
+      return { success: true, newMembersCount: Math.max(0, afterCount - beforeCount) };
+    }
+    return { success: true, newMembersCount: 0 };
+  } catch (err: any) {
+    return { success: false };
+  }
+}
+
 // Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
 function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCount: number; addedKasCount: number; addedTxCount: number } {
   if (!state || typeof state !== 'object') {
@@ -1311,6 +1374,41 @@ async function startServer() {
       totalMembers: (currentState.members || []).length,
       totalSetoran: (currentState.setoranList || []).length,
       totalChats: (currentState.chatMessages || []).length,
+    });
+  });
+
+  // Dedicated Inbound Sync Endpoint from Cloud Firestore (Memastikan semua anggota terdaftar di device lain langsung tersinkron)
+  app.get('/api/sync/firestore', async (req: Request, res: Response) => {
+    const result = await pullFromFirestoreServer();
+    res.json({
+      success: result.success,
+      newMembersCount: result.newMembersCount || 0,
+      totalMembers: (currentState.members || []).length,
+      members: (currentState.members || []).map((m: any) => ({
+        id: m.id,
+        nama: m.nama,
+        nomorAnggota: m.nomorAnggota,
+        nomorRekening: m.nomorRekening,
+        wilayah: m.wilayah,
+        status: m.status,
+      })),
+    });
+  });
+
+  app.post('/api/sync/firestore', async (req: Request, res: Response) => {
+    const result = await pullFromFirestoreServer();
+    res.json({
+      success: result.success,
+      newMembersCount: result.newMembersCount || 0,
+      totalMembers: (currentState.members || []).length,
+      members: (currentState.members || []).map((m: any) => ({
+        id: m.id,
+        nama: m.nama,
+        nomorAnggota: m.nomorAnggota,
+        nomorRekening: m.nomorRekening,
+        wilayah: m.wilayah,
+        status: m.status,
+      })),
     });
   });
 
@@ -4477,6 +4575,10 @@ exit
 
   server.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Koperasi HWS Realtime Server running on http://0.0.0.0:${PORT}`);
+    // Tarik langsung data anggota & transaksi dari Cloud Firestore saat server aktif
+    pullFromFirestoreServer().catch(() => {});
+    // Polling berkala setiap 10 detik agar anggota baru yang mendaftar dari device lain otomatis sinkron
+    setInterval(pullFromFirestoreServer, 10000);
   });
 }
 
