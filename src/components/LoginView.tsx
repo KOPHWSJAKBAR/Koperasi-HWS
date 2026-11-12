@@ -6,6 +6,7 @@ import { detectPlatform } from '../lib/activityLogger';
 import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
+import { ConnectionStatusBadge, useNetworkStatus } from './NetworkStatusGuard';
 import {
   Fingerprint,
   Lock,
@@ -43,6 +44,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
   onLoginMember,
   onLoginAdmin,
 }) => {
+  const { isOnline } = useNetworkStatus();
   const [activeTab, setActiveTab] = useState<'member' | 'admin'>('member');
 
   // Anggota login fields
@@ -788,6 +790,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
         <p className="text-[11px] text-amber-400 font-bold tracking-wide text-center mt-1">
           Cengkareng • Kalideres • Kembangan • Kebon Jeruk
         </p>
+
+        {/* Status Koneksi Internet */}
+        <div className="mt-3 flex justify-center">
+          <ConnectionStatusBadge isOnline={isOnline} />
+        </div>
 
         {/* Tab Switcher */}
         <div className="w-full mt-6 bg-[#162035] p-1.5 rounded-2xl flex gap-1 border border-slate-700/60 shadow-inner">

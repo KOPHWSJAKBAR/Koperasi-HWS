@@ -971,6 +971,19 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
   }
 
   const deletedMemSet = new Set<string>(state.deletedMemberIds || []);
+
+  // Sort members chronologically: earlier/senior members maintain their numbers first, newly registered members evaluated later
+  const getScore = (m: any) => {
+    const idTs = String(m.id || '').match(/(\d{10,})/);
+    if (idTs) return Number(idTs[1]);
+    if (m.createdAt) return new Date(m.createdAt).getTime();
+    if (m.terdaftarSejak) return new Date(m.terdaftarSejak).getTime();
+    return 0;
+  };
+  state.members.sort((a: any, b: any) => getScore(a) - getScore(b));
+
+  const assignedMemberNos = new Set<string>();
+  const assignedAccountNos = new Set<string>();
   const usedNoSet = new Set<string>(state.usedMemberNumbers || []);
   const usedRekSet = new Set<string>(state.usedAccountNumbers || []);
 
@@ -983,11 +996,12 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
     let changed = false;
     const oldNo = m.nomorAnggota ? String(m.nomorAnggota).trim() : '';
 
-    // Check if member number needs migration to 115 + DD + KW + YY + NNN format
+    // Check if member number is duplicate (already assigned to an earlier member) or not 115 format
+    // User requirement: "apabila terjadi nomer anggota dan nomer rekening doble, ganti nomer anggota dan nomer rekening yang baru mendaftar"
+    const isDuplicateNo = oldNo && assignedMemberNos.has(oldNo);
     const isValid115 = /^115\d{9}$/.test(oldNo);
-    const isDuplicate = oldNo && usedNoSet.has(oldNo) && state.members.findIndex((x: any) => x.nomorAnggota === oldNo) !== index;
 
-    if (!isValid115 || isDuplicate) {
+    if (!isValid115 || isDuplicateNo) {
       if (oldNo && !m.legacyNomorAnggota) {
         m.legacyNomorAnggota = oldNo;
       }
@@ -999,39 +1013,38 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
 
       let seq = index + 1;
       let candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
-      while (usedNoSet.has(candidate)) {
+      while (assignedMemberNos.has(candidate) || usedNoSet.has(candidate)) {
         seq++;
         candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
       }
 
       m.nomorAnggota = candidate;
-      usedNoSet.add(candidate);
       changed = true;
       migratedCount++;
-    } else if (oldNo) {
-      usedNoSet.add(oldNo);
     }
+    assignedMemberNos.add(m.nomorAnggota);
+    usedNoSet.add(m.nomorAnggota);
 
-    // Ensure unique 10-digit account number (anti-meniban)
+    // Ensure unique 10-digit account number (ganti nomer rekening yang baru mendaftar jika dobel)
     const oldRek = m.nomorRekening ? String(m.nomorRekening).trim() : '';
     const cleanHp = m.whatsapp ? String(m.whatsapp).replace(/\D/g, '') : '';
     const hp3 = cleanHp.slice(-3).padStart(3, '0');
     const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
 
-    const isDupRek = !oldRek || (usedRekSet.has(oldRek) && state.members.findIndex((x: any) => x.nomorRekening === oldRek) !== index);
+    const isDupRek = !oldRek || !/^\d{10}$/.test(oldRek) || assignedAccountNos.has(oldRek);
     if (isDupRek) {
       running++;
       let candidateRek = `${kw}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
-      while (usedRekSet.has(candidateRek)) {
+      while (assignedAccountNos.has(candidateRek) || usedRekSet.has(candidateRek)) {
         running++;
         candidateRek = `${kw}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
       }
       m.nomorRekening = candidateRek;
-      usedRekSet.add(candidateRek);
       changed = true;
-    } else if (oldRek) {
-      usedRekSet.add(oldRek);
+      migratedCount++;
     }
+    assignedAccountNos.add(m.nomorRekening);
+    usedRekSet.add(m.nomorRekening);
 
     if (changed) {
       // Update any setoran referencing this member
@@ -1051,8 +1064,8 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
   });
 
   state.lastRunningNumber = running;
-  state.usedMemberNumbers = Array.from(usedNoSet);
-  state.usedAccountNumbers = Array.from(usedRekSet);
+  state.usedMemberNumbers = Array.from(new Set([...usedNoSet, ...assignedMemberNos]));
+  state.usedAccountNumbers = Array.from(new Set([...usedRekSet, ...assignedAccountNos]));
 
   return { state, migratedCount };
 }
@@ -1503,6 +1516,13 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/api/uploads', express.static(UPLOADS_DIR));
+
+  // Active Connection Ping Endpoint for Client Internet Status Guard
+  app.all('/api/ping', (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.status(200).json({ status: 'online', time: Date.now() });
+  });
 
   // SSE Realtime Channel with 15s keep-alive heartbeat for production resilience (Cloud Run & proxies)
   app.get('/api/events', (req: Request, res: Response) => {

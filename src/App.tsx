@@ -19,6 +19,7 @@ import {
 } from 'firebase/auth';
 
 import { detectPlatform } from './lib/activityLogger';
+import { useNetworkStatus, ConnectionStatusBadge, NetworkStatusGuard } from './components/NetworkStatusGuard';
 
 const SESSION_KEY = 'koperasi_hws_active_session';
 const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Req 12: Buat aplikasi ini auto logout dalam 2 menit apabila tidak tertutup)
@@ -92,6 +93,12 @@ export default function App() {
       alert(reason);
     }
   };
+
+  // Status Koneksi Internet & Auto-Logout 30 Detik Guard (Req 2)
+  const { isOnline, countdown, isChecking, checkNow } = useNetworkStatus(
+    handleLogout,
+    !!activeSession
+  );
 
   // Helper to safely trigger optional Firebase Auth in the background
   const safeConnectFirebaseAuth = () => {
@@ -365,6 +372,16 @@ export default function App() {
           <span>{backToastMessage}</span>
         </div>
       )}
+
+      {/* Fullscreen Guard & Alert when Internet Connection is Lost (Req 2) */}
+      <NetworkStatusGuard
+        isOnline={isOnline}
+        countdown={countdown}
+        isChecking={isChecking}
+        onCheckNow={checkNow}
+        onLogout={handleLogout}
+        isSessionActive={!!activeSession}
+      />
     </>
   );
 }

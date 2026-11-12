@@ -18,6 +18,7 @@ import { KtaDigitalModal } from './KtaDigitalModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
+import { ConnectionStatusBadge, useNetworkStatus } from './NetworkStatusGuard';
 import {
   CreditCard,
   ArrowUpRight,
@@ -71,6 +72,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 }) => {
   // Sync member with latest state in case balance updated in real-time
   const currentMember = state.members.find((m) => m.id === member.id) || member;
+  const { isOnline } = useNetworkStatus();
 
   const [activeMenu, setActiveMenu] = useState<
     'dashboard' | 'setoran' | 'kta' | 'mutasi' | 'zakat' | 'surat' | 'chat'
@@ -618,6 +620,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
             {/* Desktop Only Right Action Buttons */}
             <div className="hidden sm:flex items-center gap-2">
+              <ConnectionStatusBadge isOnline={isOnline} />
               <button
                 type="button"
                 onClick={() => setActiveMenu('chat')}
@@ -660,6 +663,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           {/* Requirement A.1 & A.2: Tampilan tombol setting dan chat di mobile pindahkan ke bawah logo koperasi dan nama anggota */}
           {/* Tombol setting pada dashboard anggota JANGAN dibuat melebar kesamping pada mobile, tempatkan di bawah chat atau hanya logo icon */}
           <div className="flex sm:hidden items-center gap-2 pt-1 border-t border-slate-800/60">
+            <ConnectionStatusBadge isOnline={isOnline} compact />
             <button
               type="button"
               onClick={() => setActiveMenu('chat')}

@@ -23,6 +23,7 @@ import { SettingModal } from './SettingModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
+import { ConnectionStatusBadge, useNetworkStatus } from './NetworkStatusGuard';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { initFCM } from '../lib/fcm';
 import {
@@ -127,6 +128,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       hour12: false,
     }).format(new Date());
   });
+
+  // Internet Connection Status (Req 2)
+  const { isOnline } = useNetworkStatus();
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -617,6 +621,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
           {/* Right Action Buttons: Only Setting per User Req 9 ("Menu setting pada dashboard hilangkan hanya ada setting") */}
           <div className="flex items-center gap-2">
+            {/* Status Koneksi Internet: Hijau terkoneksi, Merah terputus (Req 2) */}
+            <ConnectionStatusBadge isOnline={isOnline} />
+
             {/* Realtime Notification Center Bell */}
             <div className="relative">
               <button
