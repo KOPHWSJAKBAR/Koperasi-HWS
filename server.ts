@@ -287,9 +287,17 @@ function mergeServerState(current: any, incoming: any): any {
         existingId = nikToIdMap.get(cleanNik)!;
       }
       const existing = memberMap.get(existingId);
+      const isSamePerson = existing && (
+        existing.nama.toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
+        (existing.whatsapp && m.whatsapp && existing.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, ''))
+      );
       if (!existing) {
         memberMap.set(m.id, { ...m });
         if (cleanNik) nikToIdMap.set(cleanNik, m.id);
+      } else if (!isSamePerson) {
+        // Different member who had duplicate ID, NIK, or nomor rekening: KEEP BOTH, NEVER OVERWRITE!
+        const distinctId = `${m.id}-dup-${Math.random().toString(36).substring(2, 6)}`;
+        memberMap.set(distinctId, { ...m, id: distinctId });
       } else {
         memberMap.set(existingId, {
           ...existing,

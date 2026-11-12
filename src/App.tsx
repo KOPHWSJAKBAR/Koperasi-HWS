@@ -94,8 +94,8 @@ export default function App() {
     }
   };
 
-  // Status Koneksi Internet & Auto-Logout 30 Detik Guard (Req 2)
-  const { isOnline, countdown, isChecking, checkNow } = useNetworkStatus(
+  // Status Koneksi Internet & Peringatan 10 Detik Offline / Auto-Logout (Req 2)
+  const { isOnline, showWarning, countdown, offlineSeconds, isChecking, checkNow } = useNetworkStatus(
     handleLogout,
     !!activeSession
   );
@@ -376,7 +376,9 @@ export default function App() {
       {/* Fullscreen Guard & Alert when Internet Connection is Lost (Req 2) */}
       <NetworkStatusGuard
         isOnline={isOnline}
+        showWarning={showWarning}
         countdown={countdown}
+        offlineSeconds={offlineSeconds}
         isChecking={isChecking}
         onCheckNow={checkNow}
         onLogout={handleLogout}

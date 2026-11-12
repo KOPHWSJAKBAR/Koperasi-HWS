@@ -1,29 +1,39 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Wifi, WifiOff, AlertTriangle, RefreshCw, LogOut, CheckCircle2 } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, LogOut, CheckCircle2 } from 'lucide-react';
 
-interface NetworkStatusState {
+export interface NetworkStatusState {
   isOnline: boolean;
+  showWarning: boolean;
+  offlineSeconds: number;
   countdown: number;
   isChecking: boolean;
   checkNow: () => Promise<boolean>;
 }
 
-export function useNetworkStatus(onAutoLogout?: (reason: string) => void, isSessionActive: boolean = false): NetworkStatusState {
+export function useNetworkStatus(
+  onAutoLogout?: (reason: string) => void,
+  isSessionActive: boolean = false
+): NetworkStatusState {
   const [isOnline, setIsOnline] = useState<boolean>(() => {
     return typeof navigator !== 'undefined' ? navigator.onLine : true;
   });
-  const [countdown, setCountdown] = useState<number>(30);
+  const [showWarning, setShowWarning] = useState<boolean>(false);
+  const [offlineSeconds, setOfflineSeconds] = useState<number>(0);
+  const [countdown, setCountdown] = useState<number>(20); // 20 detik sisa peringatan (total 30 detik offline)
   const [isChecking, setIsChecking] = useState<boolean>(false);
-  const countdownTimerRef = useRef<any>(null);
+
+  const timerRef = useRef<any>(null);
   const onAutoLogoutRef = useRef(onAutoLogout);
   onAutoLogoutRef.current = onAutoLogout;
+  const isSessionActiveRef = useRef(isSessionActive);
+  isSessionActiveRef.current = isSessionActive;
 
   // Active ping function to verify real connectivity
   const checkNow = useCallback(async (): Promise<boolean> => {
     setIsChecking(true);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
       const res = await fetch(`/api/ping?t=${Date.now()}`, {
         method: 'GET',
         cache: 'no-store',
@@ -32,18 +42,22 @@ export function useNetworkStatus(onAutoLogout?: (reason: string) => void, isSess
       clearTimeout(timeoutId);
       const online = res.ok;
       setIsOnline(online);
+      if (online) {
+        setShowWarning(false);
+        setOfflineSeconds(0);
+        setCountdown(20);
+      }
       setIsChecking(false);
       return online;
     } catch {
-      // Fallback check to navigator.onLine
-      const navOnline = typeof navigator !== 'undefined' ? navigator.onLine : false;
-      setIsOnline(navOnline);
+      // Offline confirmed
+      setIsOnline(false);
       setIsChecking(false);
-      return navOnline;
+      return false;
     }
   }, []);
 
-  // Window online/offline event listeners
+  // Window online/offline event listeners & periodic ping
   useEffect(() => {
     const handleOnline = () => {
       checkNow();
@@ -56,10 +70,10 @@ export function useNetworkStatus(onAutoLogout?: (reason: string) => void, isSess
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Periodic heartbeat ping every 10 seconds to detect silent connection loss
+    // Periodic heartbeat ping every 5 seconds to detect silent connection loss
     const pingInterval = setInterval(() => {
       checkNow();
-    }, 10000);
+    }, 5000);
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -68,46 +82,70 @@ export function useNetworkStatus(onAutoLogout?: (reason: string) => void, isSess
     };
   }, [checkNow]);
 
-  // 30 seconds countdown when disconnected (Req 2)
+  // Requirement: "apabila dalam 10 detik tidak terkoneksi pada internet muncul peringatan"
+  // 10 detik pertama: status badge merah
+  // Setelah 10 detik berturut-turut offline: muncul peringatan modal & countdown menuju auto-logout pada detik ke-30
   useEffect(() => {
     if (!isOnline) {
-      setCountdown(30);
+      if (timerRef.current) clearInterval(timerRef.current);
 
-      if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+      timerRef.current = setInterval(() => {
+        setOfflineSeconds((prevSec) => {
+          const newSec = prevSec + 1;
 
-      countdownTimerRef.current = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) {
-            clearInterval(countdownTimerRef.current);
-            if (isSessionActive && onAutoLogoutRef.current) {
+          // Muncul peringatan apabila dalam 10 detik tidak terkoneksi
+          if (newSec >= 10) {
+            setShowWarning(true);
+            const remaining = Math.max(0, 30 - newSec);
+            setCountdown(remaining);
+          } else {
+            setShowWarning(false);
+          }
+
+          // Auto-logout setelah 30 detik total offline
+          if (newSec >= 30) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+            if (isSessionActiveRef.current && onAutoLogoutRef.current) {
               onAutoLogoutRef.current(
-                'Sesi Anda telah di-logout otomatis karena tidak terkoneksi ke jaringan internet selama 30 detik demi menjaga keamanan akun dan transaksi perbankan Anda.'
+                'Sesi Anda telah di-logout otomatis karena perangkat tidak terkoneksi ke jaringan internet selama 30 detik demi menjaga keamanan akun dan transaksi perbankan Anda.'
               );
             }
-            return 0;
           }
-          return prev - 1;
+
+          return newSec;
         });
       }, 1000);
     } else {
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-        countdownTimerRef.current = null;
+      // Kembali online
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
       }
-      setCountdown(30);
+      setShowWarning(false);
+      setOfflineSeconds(0);
+      setCountdown(20);
     }
 
     return () => {
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
       }
     };
-  }, [isOnline, isSessionActive]);
+  }, [isOnline]);
 
-  return { isOnline, countdown, isChecking, checkNow };
+  return {
+    isOnline,
+    showWarning,
+    offlineSeconds,
+    countdown,
+    isChecking,
+    checkNow,
+  };
 }
 
-// Visual Connection Status Badge (Hijau = Terkoneksi Internet, Merah = Tidak Terkoneksi Internet per Req 2)
+// Visual Connection Status Badge
+// Hijau = Terkoneksi Internet, Merah = Tidak Terkoneksi Internet
 export const ConnectionStatusBadge: React.FC<{
   isOnline: boolean;
   className?: string;
@@ -144,10 +182,13 @@ export const ConnectionStatusBadge: React.FC<{
   );
 };
 
-// Fullscreen Blocking Modal Guard when Connection is Lost (Req 2)
-interface NetworkStatusGuardProps {
+// Fullscreen Blocking Modal Guard
+// Muncul peringatan apabila dalam 10 detik tidak terkoneksi ke internet
+export interface NetworkStatusGuardProps {
   isOnline: boolean;
+  showWarning: boolean;
   countdown: number;
+  offlineSeconds?: number;
   isChecking: boolean;
   onCheckNow: () => Promise<boolean>;
   onLogout?: (reason: string) => void;
@@ -156,7 +197,9 @@ interface NetworkStatusGuardProps {
 
 export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
   isOnline,
+  showWarning,
   countdown,
+  offlineSeconds = 10,
   isChecking,
   onCheckNow,
   onLogout,
@@ -185,8 +228,8 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
         </div>
       )}
 
-      {/* Unclosable Full-Screen Blocking Modal when Disconnected (Req 2: Merah, tidak bisa digunakan, 30 detik ter-logout) */}
-      {!isOnline && (
+      {/* Unclosable Full-Screen Blocking Modal when Disconnected for 10 seconds */}
+      {showWarning && (
         <div
           className="fixed inset-0 z-[9999] bg-[#070b14]/95 backdrop-blur-md flex items-center justify-center p-4 select-none animate-in fade-in"
           style={{ pointerEvents: 'auto' }}
@@ -210,14 +253,14 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
                 Periksa Jaringan Koneksi Anda
               </h2>
               <p className="text-xs text-rose-200/90 leading-relaxed max-w-sm mx-auto">
-                Aplikasi dibekukan sementara dan <b>tidak bisa digunakan</b> karena perangkat Anda kehilangan koneksi internet. Demi keamanan saldo perbankan & keaslian transaksi, akses dibatasi.
+                Perangkat Anda telah <b>tidak terkoneksi ke internet selama lebih dari 10 detik</b>. Aplikasi dibekukan dan <b>tidak bisa digunakan</b> demi melindungi keamanan data saldo perbankan & keaslian transaksi.
               </p>
             </div>
 
-            {/* 30 Seconds Countdown Box */}
+            {/* Countdown Box */}
             <div className="p-4 bg-slate-900/90 rounded-2xl border border-rose-500/40 text-center space-y-2">
               <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                Waktu Menunggu Pemulihan Jaringan:
+                Waktu Tersisa Menuju Auto-Logout:
               </div>
               <div className="flex items-center justify-center gap-2">
                 <span className="font-mono text-4xl sm:text-5xl font-black text-rose-400 tracking-tight">
@@ -231,18 +274,18 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div
                   className="bg-rose-500 h-full transition-all duration-1000 ease-linear rounded-full"
-                  style={{ width: `${(countdown / 30) * 100}%` }}
+                  style={{ width: `${(countdown / 20) * 100}%` }}
                 />
               </div>
               <p className="text-[11px] text-slate-400">
                 {isSessionActive ? (
                   <>
                     Aplikasi akan otomatis <b className="text-rose-400">ter-logout</b> dalam{' '}
-                    <span className="font-mono font-bold text-white">{countdown}</span> detik jika koneksi tidak kembali.
+                    <span className="font-mono font-bold text-white">{countdown}</span> detik jika koneksi tidak pulih.
                   </>
                 ) : (
                   <>
-                    Menunggu jaringan internet kembali terhubung untuk melanjutkan aktivitas...
+                    Menunggu jaringan internet kembali terhubung untuk melanjutkan aktivitas koperasi...
                   </>
                 )}
               </p>
