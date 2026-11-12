@@ -820,11 +820,11 @@ function saveDatabase(state: any) {
 }
 
 // Inbound Synchronizer from Cloud Firestore to Server State
-// Ensures members and data registered from newly installed devices are immediately merged into server state
+// Ensures members, admins, and data registered from newly installed devices are immediately merged into server state
 async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembersCount?: number }> {
   try {
     const { initializeApp, getApps } = await import('firebase/app');
-    const { getFirestore, collection, getDocs } = await import('firebase/firestore');
+    const { getFirestore, collection, getDocs, doc, getDoc } = await import('firebase/firestore');
     const configPath = path.join(__dirname, 'firebase-applet-config.json');
     if (!fs.existsSync(configPath)) return { success: false };
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -841,7 +841,28 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     });
 
-    // 2. Fetch remote transactions
+    // 2. Fetch remote admins from Firestore (collection 'admins' and document 'settings/admins')
+    const remoteAdmins: any[] = [];
+    try {
+      const adminSnap = await getDocs(collection(db, 'admins'));
+      adminSnap.forEach((d) => {
+        const data = d.data();
+        if (data && (data.id || data.username)) {
+          remoteAdmins.push(data);
+        }
+      });
+      const settingsAdminDoc = await getDoc(doc(db, 'settings', 'admins'));
+      if (settingsAdminDoc.exists()) {
+        const sData = settingsAdminDoc.data();
+        if (Array.isArray(sData?.admins)) {
+          sData.admins.forEach((a: any) => {
+            if (a && (a.id || a.username)) remoteAdmins.push(a);
+          });
+        }
+      }
+    } catch {}
+
+    // 3. Fetch remote transactions
     const txSnap = await getDocs(collection(db, 'transactions'));
     const remoteTx: any[] = [];
     txSnap.forEach((d) => {
@@ -851,7 +872,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     });
 
-    // 3. Fetch remote setoran
+    // 4. Fetch remote setoran
     const setoranSnap = await getDocs(collection(db, 'setoran'));
     const remoteSetoran: any[] = [];
     setoranSnap.forEach((d) => {
@@ -861,16 +882,72 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     });
 
-    if (remoteMembers.length > 0 || remoteTx.length > 0 || remoteSetoran.length > 0) {
+    // 5. Fetch remote kas
+    const kasSnap = await getDocs(collection(db, 'kas'));
+    const remoteKas: any[] = [];
+    kasSnap.forEach((d) => {
+      const data = d.data();
+      if (data && data.id) {
+        remoteKas.push(data);
+      }
+    });
+
+    // 6. Fetch remote sedekah
+    const sedekahSnap = await getDocs(collection(db, 'sedekah'));
+    const remoteSedekah: any[] = [];
+    sedekahSnap.forEach((d) => {
+      const data = d.data();
+      if (data && data.id) {
+        remoteSedekah.push(data);
+      }
+    });
+
+    // 7. Fetch settings/general for numbers synchronization
+    try {
+      const genSnap = await getDoc(doc(db, 'settings', 'general'));
+      if (genSnap.exists()) {
+        const genData = genSnap.data();
+        if (genData) {
+          if (genData.lastRunningNumber && genData.lastRunningNumber > (currentState.lastRunningNumber || 66666)) {
+            currentState.lastRunningNumber = genData.lastRunningNumber;
+          }
+          if (Array.isArray(genData.usedMemberNumbers)) {
+            currentState.usedMemberNumbers = Array.from(
+              new Set([...(currentState.usedMemberNumbers || []), ...genData.usedMemberNumbers])
+            );
+          }
+          if (Array.isArray(genData.usedAccountNumbers)) {
+            currentState.usedAccountNumbers = Array.from(
+              new Set([...(currentState.usedAccountNumbers || []), ...genData.usedAccountNumbers])
+            );
+          }
+        }
+      }
+    } catch {}
+
+    if (
+      remoteMembers.length > 0 ||
+      remoteAdmins.length > 0 ||
+      remoteTx.length > 0 ||
+      remoteSetoran.length > 0 ||
+      remoteKas.length > 0 ||
+      remoteSedekah.length > 0
+    ) {
       const beforeCount = (currentState.members || []).length;
+      const beforeAdminCount = (currentState.admins || []).length;
       currentState = mergeServerState(currentState, {
         members: remoteMembers,
+        admins: remoteAdmins,
         memberTransactions: remoteTx,
         setoranList: remoteSetoran,
+        kasList: remoteKas,
+        sedekahList: remoteSedekah,
       });
+      const reconResult = reconcileLegacyMemberNumbers(currentState);
       const afterCount = (currentState.members || []).length;
-      if (afterCount !== beforeCount) {
-        console.log(`[Firestore Inbound Sync] Synchronized ${afterCount - beforeCount} members from Firestore (Total: ${afterCount})`);
+      const afterAdminCount = (currentState.admins || []).length;
+      if (afterCount !== beforeCount || afterAdminCount !== beforeAdminCount || reconResult.migratedCount > 0) {
+        console.log(`[Firestore Inbound Sync] Synchronized ${afterCount - beforeCount} members, ${afterAdminCount - beforeAdminCount} admins from Firestore (Total: ${afterCount} members, ${afterAdminCount} admins, ${reconResult.migratedCount} migrated)`);
         saveDatabase(currentState);
         broadcastEvent('STATE_UPDATED', currentState);
       }
@@ -880,6 +957,104 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
   } catch (err: any) {
     return { success: false };
   }
+}
+
+// Authoritative Member Number & Account Number Reconciliation
+// Rules:
+// 1. Nomor anggota: 115 (depan) + 2 angka DD (tanggal mendaftar) + 2 angka KW (kode wilayah) + 2 angka YY (tahun) + 3 angka NNN (nomor anggota urut). E.g.: 115117726001
+// 2. Anti-Meniban: Nomor anggota & rekening tidak bisa saling meniban. Jika pernah dipakai, otomatis diganti nomor baru yang belum pernah dipakai.
+// 3. Rekening: 10 digit unik (KW + 3 digit HP + 5 digit running).
+// 4. Koreksi otomatis & sinkronisasikan anggota pending / legacy ke online database.
+function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: number } {
+  if (!state || typeof state !== 'object' || !Array.isArray(state.members)) {
+    return { state, migratedCount: 0 };
+  }
+
+  const deletedMemSet = new Set<string>(state.deletedMemberIds || []);
+  const usedNoSet = new Set<string>(state.usedMemberNumbers || []);
+  const usedRekSet = new Set<string>(state.usedAccountNumbers || []);
+
+  let migratedCount = 0;
+  let running = Math.max(state.lastRunningNumber || 66666, 66755);
+
+  state.members.forEach((m: any, index: number) => {
+    if (!m || !m.id || deletedMemSet.has(m.id)) return;
+
+    let changed = false;
+    const oldNo = m.nomorAnggota ? String(m.nomorAnggota).trim() : '';
+
+    // Check if member number needs migration to 115 + DD + KW + YY + NNN format
+    const isValid115 = /^115\d{9}$/.test(oldNo);
+    const isDuplicate = oldNo && usedNoSet.has(oldNo) && state.members.findIndex((x: any) => x.nomorAnggota === oldNo) !== index;
+
+    if (!isValid115 || isDuplicate) {
+      if (oldNo && !m.legacyNomorAnggota) {
+        m.legacyNomorAnggota = oldNo;
+      }
+
+      const regDate = m.terdaftarSejak ? new Date(m.terdaftarSejak) : new Date();
+      const dd = String(isNaN(regDate.getDate()) ? 11 : regDate.getDate()).padStart(2, '0');
+      const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
+      const yy = String(isNaN(regDate.getFullYear()) ? 2026 : regDate.getFullYear()).slice(-2);
+
+      let seq = index + 1;
+      let candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
+      while (usedNoSet.has(candidate)) {
+        seq++;
+        candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
+      }
+
+      m.nomorAnggota = candidate;
+      usedNoSet.add(candidate);
+      changed = true;
+      migratedCount++;
+    } else if (oldNo) {
+      usedNoSet.add(oldNo);
+    }
+
+    // Ensure unique 10-digit account number (anti-meniban)
+    const oldRek = m.nomorRekening ? String(m.nomorRekening).trim() : '';
+    const cleanHp = m.whatsapp ? String(m.whatsapp).replace(/\D/g, '') : '';
+    const hp3 = cleanHp.slice(-3).padStart(3, '0');
+    const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
+
+    const isDupRek = !oldRek || (usedRekSet.has(oldRek) && state.members.findIndex((x: any) => x.nomorRekening === oldRek) !== index);
+    if (isDupRek) {
+      running++;
+      let candidateRek = `${kw}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
+      while (usedRekSet.has(candidateRek)) {
+        running++;
+        candidateRek = `${kw}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
+      }
+      m.nomorRekening = candidateRek;
+      usedRekSet.add(candidateRek);
+      changed = true;
+    } else if (oldRek) {
+      usedRekSet.add(oldRek);
+    }
+
+    if (changed) {
+      // Update any setoran referencing this member
+      (state.setoranList || []).forEach((s: any) => {
+        if (s && s.memberId === m.id) {
+          s.memberNomorAnggota = m.nomorAnggota;
+          s.memberRekening = m.nomorRekening;
+        }
+      });
+      // Update any transactions referencing this member
+      (state.memberTransactions || []).forEach((tx: any) => {
+        if (tx && tx.memberId === m.id) {
+          tx.nomorAnggota = m.nomorAnggota;
+        }
+      });
+    }
+  });
+
+  state.lastRunningNumber = running;
+  state.usedMemberNumbers = Array.from(usedNoSet);
+  state.usedAccountNumbers = Array.from(usedRekSet);
+
+  return { state, migratedCount };
 }
 
 // Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
@@ -1274,6 +1449,12 @@ let currentState = loadDatabase();
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
+const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
+currentState = startupMemRecon.state;
+if (startupMemRecon.migratedCount > 0) {
+  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members to official 115... format.`);
+  saveDatabase(currentState);
+}
 // Enforce 10-day chat retention on startup
 const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
 const chatCutoff = Date.now() - TEN_DAYS_MS;
@@ -2631,22 +2812,25 @@ async function startServer() {
           }
         }
 
-        // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Anti-Meniban & Anti-Reuse)
+        // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Ketentuan: 115 depan, 2 angka DD tanggal mendaftar, 2 angka KW kode wilayah, 2 angka YY tahun, 3 angka NNN nomer anggota)
         // Nomor anggota yang pernah dipakai TIDAK DAPAT digunakan kembali meskipun anggota sudah dihapus
-        const abbr = WILAYAH_ABBR_MAP[member.wilayah] || 'CKR';
-        const year = new Date().getFullYear();
+        const regDate = member.terdaftarSejak ? new Date(member.terdaftarSejak) : new Date();
+        const dd = String(isNaN(regDate.getDate()) ? new Date().getDate() : regDate.getDate()).padStart(2, '0');
+        const kw = WILAYAH_CODE_MAP[member.wilayah] || '77';
+        const yy = String(isNaN(regDate.getFullYear()) ? new Date().getFullYear() : regDate.getFullYear()).slice(-2);
         const usedNoSet = new Set<string>([
           ...(currentState.usedMemberNumbers || []),
           ...currentState.members.map((m: any) => m.nomorAnggota).filter(Boolean),
+          ...currentState.members.map((m: any) => m.legacyNomorAnggota).filter(Boolean),
         ]);
 
         let candidateNo = member.nomorAnggota;
-        if (!candidateNo || usedNoSet.has(candidateNo)) {
+        if (!candidateNo || !/^115\d{9}$/.test(candidateNo) || usedNoSet.has(candidateNo)) {
           let seq = Math.max(currentState.members.length + 1, usedNoSet.size + 1);
-          candidateNo = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+          candidateNo = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
           while (usedNoSet.has(candidateNo)) {
             seq++;
-            candidateNo = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+            candidateNo = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
           }
         }
 
@@ -2724,6 +2908,35 @@ async function startServer() {
 
       saveDatabase(currentState);
 
+      // Asynchronous direct write to Cloud Firestore doc 'members/{id}' and 'settings/general'
+      (async () => {
+        try {
+          const { initializeApp, getApps } = await import('firebase/app');
+          const { getFirestore, doc, setDoc } = await import('firebase/firestore');
+          const configPath = path.join(__dirname, 'firebase-applet-config.json');
+          if (fs.existsSync(configPath)) {
+            const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+            const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
+            const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+            const cleanDoc = { ...finalMember, updatedAt: new Date().toISOString() };
+            delete cleanDoc.biometricActive;
+            await setDoc(doc(db, 'members', finalMember.id), cleanDoc, { merge: true });
+            await setDoc(
+              doc(db, 'settings', 'general'),
+              {
+                lastRunningNumber: currentState.lastRunningNumber,
+                usedMemberNumbers: currentState.usedMemberNumbers,
+                usedAccountNumbers: currentState.usedAccountNumbers,
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            );
+          }
+        } catch (e) {
+          console.warn('Firestore direct write on register notice:', e);
+        }
+      })();
+
       // Realtime online broadcast to ALL connected devices (Android, iOS, PC, Web, AI Studio)
       broadcastEvent('MEMBER_REGISTERED', { member: finalMember });
       broadcastEvent('STATE_UPDATED', currentState);
@@ -2778,6 +2991,54 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error in /api/admins/register:', err);
       res.status(500).json({ error: 'Gagal mendaftarkan admin: ' + (err.message || 'Server error') });
+    }
+  });
+
+  // Manual / On-demand Member & Number Reconciliation Endpoint (Otomatis Koreksi 115... & Realtime Online Sync)
+  app.post('/api/sync/reconcile-members', async (req: Request, res: Response) => {
+    try {
+      await pullFromFirestoreServer();
+      const recon = reconcileLegacyMemberNumbers(currentState);
+      saveDatabase(currentState);
+
+      // Direct write to Cloud Firestore
+      try {
+        const { initializeApp, getApps } = await import('firebase/app');
+        const { getFirestore, doc, setDoc } = await import('firebase/firestore');
+        const configPath = path.join(__dirname, 'firebase-applet-config.json');
+        if (fs.existsSync(configPath)) {
+          const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+          const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
+          const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+          for (const m of currentState.members) {
+            const clean = { ...m, updatedAt: new Date().toISOString() };
+            delete clean.biometricActive;
+            await setDoc(doc(db, 'members', m.id), clean, { merge: true });
+          }
+          await setDoc(
+            doc(db, 'settings', 'general'),
+            {
+              lastRunningNumber: currentState.lastRunningNumber,
+              usedMemberNumbers: currentState.usedMemberNumbers,
+              usedAccountNumbers: currentState.usedAccountNumbers,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        }
+      } catch (e) {
+        console.warn('Notice pushing reconciled members to firestore:', e);
+      }
+
+      broadcastEvent('STATE_UPDATED', currentState);
+      res.json({
+        success: true,
+        migratedCount: recon.migratedCount,
+        membersCount: currentState.members.length,
+        state: currentState,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal rekonsiliasi anggota: ' + err.message });
     }
   });
 
@@ -4577,8 +4838,8 @@ exit
     console.log(`Koperasi HWS Realtime Server running on http://0.0.0.0:${PORT}`);
     // Tarik langsung data anggota & transaksi dari Cloud Firestore saat server aktif
     pullFromFirestoreServer().catch(() => {});
-    // Polling berkala setiap 10 detik agar anggota baru yang mendaftar dari device lain otomatis sinkron
-    setInterval(pullFromFirestoreServer, 10000);
+    // Polling berkala setiap 4 detik agar anggota baru yang mendaftar dari device lain otomatis sinkron
+    setInterval(pullFromFirestoreServer, 4000);
   });
 }
 

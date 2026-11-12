@@ -85,7 +85,7 @@ const defaultInitialState: AppState = {
       id: 'adm-abzqar',
       username: 'Abzqar',
       nama: 'Tezar Basith Hidayat',
-      email: 'Tezarbasith@gmail.com',
+      email: 'abzqar@hws.koperasi.id',
       whatsapp: '0816889171',
       nik: '3173012601880003',
       wilayahKantor: 'Cengkareng',
@@ -108,6 +108,146 @@ const defaultInitialState: AppState = {
       },
       status: 'aktif',
       createdAt: '2026-10-24T08:22:19.659Z',
+    },
+    {
+      id: 'adm-1793187878545',
+      username: 'arya3131',
+      nama: 'Almaydha Arya Budiman',
+      email: 'almahyraarya@gmail.com',
+      whatsapp: '089626353299',
+      nik: '3173013108011005',
+      wilayahKantor: 'Cengkareng',
+      role: 'admin_write',
+      password: 'Araya3108',
+      securityQuestion: 'Siapa nama ibu kandung Anda?',
+      securityAnswer: 'siti',
+      alamatLengkap: 'Jl. Raya Daan Mogot KM 11',
+      rt: '001',
+      rw: '001',
+      kelurahan: 'Cengkareng Barat',
+      kecamatan: 'Cengkareng',
+      kota: 'Jakarta Barat',
+      provinsi: 'DKI Jakarta',
+      kodePos: '11740',
+      bankPribadi: {
+        namaBank: 'Bank Central Asia (BCA)',
+        nomorRekening: '0000000000',
+        atasNama: 'Almaydha Arya Budiman',
+      },
+      status: 'aktif',
+      createdAt: '2026-10-27T11:44:30.505Z',
+    },
+    {
+      id: 'adm-1793187953054',
+      username: 'ziat',
+      nama: 'Munziat',
+      email: 'munziat5600@gmail.com',
+      whatsapp: '089506667752',
+      nik: '3173012512830020',
+      wilayahKantor: 'Cengkareng',
+      role: 'admin_kelola',
+      password: '@bc123123',
+      securityQuestion: 'Siapa nama ibu kandung Anda?',
+      securityAnswer: 'siti',
+      alamatLengkap: 'Jl. Pp kp. Bulakteko',
+      rt: '004',
+      rw: '011',
+      kelurahan: 'Cengkareng Barat',
+      kecamatan: 'Cengkareng',
+      kota: 'Jakarta Barat',
+      provinsi: 'DKI Jakarta',
+      kodePos: '11740',
+      bankPribadi: {
+        namaBank: 'Bank Central Asia (BCA)',
+        nomorRekening: '0000000000',
+        atasNama: 'Munziat',
+      },
+      status: 'aktif',
+      createdAt: '2026-10-27T11:47:14.876Z',
+    },
+    {
+      id: 'adm-1793187995243',
+      username: 'heriADLAP',
+      nama: 'Heri Cahyono',
+      email: 'hcahyono126@gmail.com',
+      whatsapp: '082112553463',
+      nik: '3314062205910002',
+      wilayahKantor: 'Cengkareng',
+      role: 'admin_laporan',
+      password: 'heri91',
+      securityQuestion: 'Siapa nama ibu kandung Anda?',
+      securityAnswer: 'siti',
+      alamatLengkap: 'Jl. Raya Daan Mogot KM 11',
+      rt: '001',
+      rw: '001',
+      kelurahan: 'Cengkareng Barat',
+      kecamatan: 'Cengkareng',
+      kota: 'Jakarta Barat',
+      provinsi: 'DKI Jakarta',
+      kodePos: '11740',
+      bankPribadi: {
+        namaBank: 'Bank Central Asia (BCA)',
+        nomorRekening: '0000000000',
+        atasNama: 'Heri Cahyono',
+      },
+      status: 'aktif',
+      createdAt: '2026-10-27T12:12:28.472Z',
+    },
+    {
+      id: 'adm-1793188052410',
+      username: 'fauziadlap',
+      nama: 'Fauji Anwar',
+      email: 'gantiemail1@gmail.com',
+      whatsapp: '081282203086',
+      nik: '3173017913760615',
+      wilayahKantor: 'Kalideres',
+      role: 'admin_kelola',
+      password: 'Fauzi45',
+      securityQuestion: 'Nama kota kelahiran Anda?',
+      securityAnswer: 'jakarta',
+      alamatLengkap: 'Jl. Raya Daan Mogot KM 11',
+      rt: '001',
+      rw: '001',
+      kelurahan: 'Kalideres',
+      kecamatan: 'Cengkareng',
+      kota: 'Jakarta Barat',
+      provinsi: 'DKI Jakarta',
+      kodePos: '11740',
+      bankPribadi: {
+        namaBank: 'Bank Central Asia (BCA)',
+        nomorRekening: '0000000000',
+        atasNama: 'Fauji Anwar',
+      },
+      status: 'aktif',
+      createdAt: '2026-10-28T11:47:32.410Z',
+    },
+    {
+      id: 'adm-1793188102426',
+      username: 'budiadlap',
+      nama: 'Budiawan',
+      email: 'budi.one1905@gmail.com',
+      whatsapp: '083892381987',
+      nik: '3173011905930005',
+      wilayahKantor: 'Cengkareng',
+      role: 'admin_laporan',
+      password: 'budi93',
+      securityQuestion: 'Siapa nama ibu kandung Anda?',
+      securityAnswer: 'siti',
+      alamatLengkap: 'Jl. Raya Daan Mogot KM 11',
+      rt: '001',
+      rw: '001',
+      kelurahan: 'Cengkareng Barat',
+      kecamatan: 'Cengkareng',
+      kota: 'Jakarta Barat',
+      provinsi: 'DKI Jakarta',
+      kodePos: '11740',
+      bankPribadi: {
+        namaBank: 'Bank Central Asia (BCA)',
+        nomorRekening: '0000000000',
+        atasNama: 'Budiawan',
+      },
+      status: 'aktif',
+      createdAt: '2026-10-27T12:18:44.739Z',
     },
   ],
   members: [],
@@ -1618,6 +1758,27 @@ export async function fetchStateFromServer(): Promise<AppState> {
   } catch {
     // Graceful offline fallback to local cached state without console noise
   }
+
+  // Direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
+  try {
+    const { db } = await import('./firebase');
+    const { collection, getDocs } = await import('firebase/firestore');
+    const memSnap = await getDocs(collection(db, 'members'));
+    if (!memSnap.empty) {
+      const delSet = new Set(globalState.deletedMemberIds || []);
+      const remoteMembers = memSnap.docs
+        .map((d) => d.data() as MemberUser)
+        .filter((m) => m && m.id && !delSet.has(m.id));
+      if (remoteMembers.length > 0) {
+        globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+        } catch {}
+        notifyListeners();
+      }
+    }
+  } catch {}
+
   return globalState;
 }
 
@@ -2170,16 +2331,19 @@ export function generateNomorRekening(
   return { nomorRekening: candidate, nextRunningNumber: running, usedAccountNumbers: updatedUsedList };
 }
 
-// Helper: Generate Official Member Number (e.g. HWS-CKR-2026-001) - ANTI-REUSE & ANTI-MENIBAN
-// Nomor anggota yang pernah dipakai tidak dapat dipergunakan kembali meskipun sudah dihapus
+// Helper: Generate Official Member Number (Ketentuan: 115 depan, 2 angka tanggal mendaftar, 2 angka kode wilayah, 2 angka tahun, 3 angka nomer anggota)
+// Contoh: 115117726001 (115 + DD + KW + YY + NNN) - ANTI-REUSE & ANTI-MENIBAN
 export function generateNomorAnggota(
   wilayah: WilayahKoperasi,
   existingCount: number,
   usedMemberNumbers?: string[] | Set<string>,
-  existingMembers?: MemberUser[]
+  existingMembers?: MemberUser[],
+  registerDateStr?: string
 ): string {
-  const abbr = WILAYAH_ABBR_MAP[wilayah] || 'CKR';
-  const year = getWibDateStr().slice(0, 4);
+  const dateObj = registerDateStr ? new Date(registerDateStr) : new Date();
+  const dayStr = String(isNaN(dateObj.getDate()) ? 11 : dateObj.getDate()).padStart(2, '0');
+  const kodeWilayah = WILAYAH_CODE_MAP[wilayah] || '77';
+  const year2 = String(isNaN(dateObj.getFullYear()) ? 2026 : dateObj.getFullYear()).slice(-2);
 
   const usedSet = new Set<string>();
   if (Array.isArray(usedMemberNumbers)) {
@@ -2188,16 +2352,23 @@ export function generateNomorAnggota(
     usedMemberNumbers.forEach((n) => n && usedSet.add(String(n).trim()));
   }
   (globalState.usedMemberNumbers || []).forEach((n) => n && usedSet.add(String(n).trim()));
-  (globalState.members || []).forEach((m) => m?.nomorAnggota && usedSet.add(String(m.nomorAnggota).trim()));
+  (globalState.members || []).forEach((m) => {
+    if (m?.nomorAnggota) usedSet.add(String(m.nomorAnggota).trim());
+    if ((m as any)?.legacyNomorAnggota) usedSet.add(String((m as any).legacyNomorAnggota).trim());
+  });
   if (Array.isArray(existingMembers)) {
-    existingMembers.forEach((m) => m?.nomorAnggota && usedSet.add(String(m.nomorAnggota).trim()));
+    existingMembers.forEach((m) => {
+      if (m?.nomorAnggota) usedSet.add(String(m.nomorAnggota).trim());
+      if ((m as any)?.legacyNomorAnggota) usedSet.add(String((m as any).legacyNomorAnggota).trim());
+    });
   }
 
-  let seq = Math.max(existingCount + 1, usedSet.size + 1);
-  let candidate = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+  // Running sequential number 3 digit: 001, 002, 003...
+  let seq = Math.max(existingCount + 1, 1);
+  let candidate = `115${dayStr}${kodeWilayah}${year2}${String(seq).padStart(3, '0')}`;
   while (usedSet.has(candidate)) {
     seq++;
-    candidate = `HWS-${abbr}-${year}-${String(seq).padStart(3, '0')}`;
+    candidate = `115${dayStr}${kodeWilayah}${year2}${String(seq).padStart(3, '0')}`;
   }
 
   usedSet.add(candidate);
@@ -2217,39 +2388,89 @@ export async function registerMemberOnline(
     // 1. Ambil state terbaru dari server terlebih dahulu (menghindari cache kosong pada device baru)
     await fetchStateFromServer();
 
-    // 2. Kirim ke backend endpoint pendaftaran otoritatif
+    // 2. Pastikan nomor anggota mengikuti format resmi 115 + DD + KW + YY + NNN
+    let candidateToSave = { ...newMember };
+    if (!candidateToSave.nomorAnggota || candidateToSave.nomorAnggota.startsWith('HWS-')) {
+      candidateToSave.nomorAnggota = generateNomorAnggota(
+        candidateToSave.wilayah,
+        globalState.members.length,
+        globalState.usedMemberNumbers,
+        globalState.members,
+        candidateToSave.terdaftarSejak
+      );
+    }
+
+    // 3. Pastikan nomor rekening tidak pernah dipergunakan
+    const usedRekSet = new Set<string>([
+      ...(globalState.usedAccountNumbers || []),
+      ...(globalState.members || []).map((m) => m.nomorRekening).filter(Boolean),
+    ]);
+    if (!candidateToSave.nomorRekening || usedRekSet.has(candidateToSave.nomorRekening)) {
+      const generatedRek = generateNomorRekening(
+        candidateToSave.wilayah,
+        candidateToSave.whatsapp,
+        nextRunningNumber || globalState.lastRunningNumber || 66755,
+        globalState.usedAccountNumbers,
+        globalState.members
+      );
+      candidateToSave.nomorRekening = generatedRek.nomorRekening;
+    }
+
+    // 4. Langsung kirim ke Cloud Firestore doc 'members/{id}' (Realtime online langsung untuk semua device)
+    try {
+      const { db } = await import('./firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      const cleanMem = sanitizeForFirestore({ ...candidateToSave, updatedAt: new Date().toISOString() });
+      delete (cleanMem as any).biometricActive;
+      await setDoc(doc(db, 'members', candidateToSave.id), cleanMem, { merge: true });
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          id: 'main_database',
+          lastSynced: new Date().toISOString(),
+          updatedBy: CLIENT_ID,
+          totalMembers: (globalState.members || []).length + 1,
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch (e) {
+      console.warn('Notice direct Firestore write in registration:', e);
+    }
+
+    // 5. Kirim ke backend endpoint pendaftaran otoritatif
     const res = await fetch('/api/members/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        member: newMember,
+        member: candidateToSave,
         nextRunningNumber,
         adminName,
       }),
     });
 
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      return { success: false, error: data.error || 'Gagal mendaftarkan anggota ke server online.' };
+    let savedMember: MemberUser = candidateToSave;
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.member) {
+        savedMember = data.member as MemberUser;
+        if (data.state) {
+          globalState = mergeStates(globalState, data.state);
+        }
+      }
     }
 
-    const savedMember = data.member as MemberUser;
-
-    // 3. Langsung sinkronkan state dari server ke globalState lokal tanpa meniban data lain
-    if (data.state) {
-      globalState = mergeStates(globalState, data.state);
-    } else {
-      globalState = {
-        ...globalState,
-        members: [...globalState.members.filter((m) => m.id !== savedMember.id), savedMember],
-        usedAccountNumbers: Array.from(
-          new Set([...(globalState.usedAccountNumbers || []), savedMember.nomorRekening].filter(Boolean))
-        ),
-        usedMemberNumbers: Array.from(
-          new Set([...(globalState.usedMemberNumbers || []), savedMember.nomorAnggota].filter(Boolean))
-        ),
-      };
-    }
+    // 6. Langsung sinkronkan state ke globalState lokal tanpa meniban data lain
+    globalState = {
+      ...globalState,
+      members: [...globalState.members.filter((m) => m.id !== savedMember.id), savedMember],
+      usedAccountNumbers: Array.from(
+        new Set([...(globalState.usedAccountNumbers || []), savedMember.nomorRekening].filter(Boolean))
+      ),
+      usedMemberNumbers: Array.from(
+        new Set([...(globalState.usedMemberNumbers || []), savedMember.nomorAnggota].filter(Boolean))
+      ),
+    };
 
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
@@ -2258,9 +2479,14 @@ export async function registerMemberOnline(
     notifyListeners();
     scheduleShardedFirestoreSync(globalState);
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: savedMember }));
+      window.dispatchEvent(new CustomEvent('hws:members_updated', { detail: globalState.members }));
+    }
+
     return { success: true, member: savedMember };
   } catch (err: any) {
-    // If backend is temporarily unreachable, fallback to direct Cloud Firestore write!
+    // If backend is temporarily unreachable, direct Cloud Firestore write guarantees online persistence!
     try {
       const { db } = await import('./firebase');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -2272,6 +2498,9 @@ export async function registerMemberOnline(
         members: [...globalState.members.filter((m) => m.id !== newMember.id), newMember],
       };
       notifyListeners();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: newMember }));
+      }
       return { success: true, member: newMember };
     } catch {}
     return { success: false, error: err.message || 'Koneksi ke server online terputus.' };

@@ -286,9 +286,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     const member = state.members.find(
       (m) =>
-        m.nomorAnggota.toLowerCase() === cleanId.toLowerCase() ||
+        m.nomorAnggota?.toLowerCase() === cleanId.toLowerCase() ||
+        (m as any).legacyNomorAnggota?.toLowerCase() === cleanId.toLowerCase() ||
         m.whatsapp.replace(/\D/g, '') === cleanId.replace(/\D/g, '') ||
-        m.nomorRekening === cleanId
+        m.nomorRekening === cleanId ||
+        (m.nik && String(m.nik).trim() === cleanId) ||
+        (m.email && m.email.toLowerCase() === cleanId.toLowerCase())
     );
 
     if (!member) {
@@ -490,7 +493,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
     if (activeTab === 'member') {
       const member = state.members.find(
         (m) =>
-          m.nomorAnggota.toLowerCase() === cleanTarget ||
+          m.nomorAnggota?.toLowerCase() === cleanTarget ||
+          (m as any).legacyNomorAnggota?.toLowerCase() === cleanTarget ||
           m.whatsapp.replace(/\D/g, '') === cleanTarget.replace(/\D/g, '') ||
           m.nomorRekening === cleanTarget
       );
@@ -630,7 +634,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
         regForm.whatsapp,
         state.lastRunningNumber
       );
-      const nomorAnggota = generateNomorAnggota(regForm.wilayah, state.members.length);
+      const nomorAnggota = generateNomorAnggota(
+        regForm.wilayah,
+        state.members.length,
+        state.usedMemberNumbers,
+        state.members,
+        new Date().toISOString().split('T')[0]
+      );
 
       const candidateMember: MemberUser = {
         id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
