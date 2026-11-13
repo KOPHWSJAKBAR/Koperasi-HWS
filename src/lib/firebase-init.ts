@@ -70,7 +70,7 @@ export function getFirebaseFirestore(): Firestore {
 
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, isSupported as isAnalyticsSupported, logEvent, Analytics } from 'firebase/analytics';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, enableNetwork, getDocFromServer } from 'firebase/firestore';
 
 export function getFirebaseAuth(): Auth {
   if (!cachedAuth) {
@@ -140,6 +140,17 @@ export const db: Firestore = getFirebaseFirestore();
 export const auth: Auth = getFirebaseAuth();
 export const storage: FirebaseStorage = getFirebaseStorage();
 
+// Verify and keep Firestore live-connected whenever app is open (never stay stuck in offline cache)
+export async function ensureFirestoreOnline(): Promise<boolean> {
+  try {
+    await enableNetwork(db);
+    await getDocFromServer(doc(db, 'koperasi_state', 'main_database'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default {
   app,
   db,
@@ -152,4 +163,5 @@ export default {
   getFirebaseStorage,
   getFirebaseAnalyticsSafe,
   logAnalyticsEvent,
+  ensureFirestoreOnline,
 };

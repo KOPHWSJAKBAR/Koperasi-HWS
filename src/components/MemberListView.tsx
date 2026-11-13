@@ -317,31 +317,44 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     alert(`Status akun ${member.nama} telah aktif kembali.`);
   };
 
-  // Filter members
-  const filteredMembers = state.members.filter((m) => {
-    if (selectedWilayah !== 'semua' && m.wilayah !== selectedWilayah) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const match =
-        m.nama.toLowerCase().includes(q) ||
-        m.nomorAnggota.toLowerCase().includes(q) ||
-        m.nomorRekening.includes(q) ||
-        m.whatsapp.includes(q) ||
-        m.nik.includes(q);
-      if (!match) return false;
-    }
-    // Period filter
-    const joinDate = m.terdaftarSejak || '2026-01-01';
-    if (periodeTipe === 'harian') {
-      if (filterStartDate && joinDate < filterStartDate) return false;
-      if (filterEndDate && joinDate > filterEndDate) return false;
-    } else if (periodeTipe === 'bulanan' && filterMonth) {
-      if (!joinDate.startsWith(filterMonth)) return false;
-    } else if (periodeTipe === 'tahunan' && filterYear) {
-      if (!joinDate.startsWith(filterYear)) return false;
-    }
-    return true;
-  });
+  // Filter and sort members: largest member number on top, smallest at bottom
+  const getMemberSeqNum = (nomorAnggota?: string) => {
+    const clean = String(nomorAnggota || '').trim();
+    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
+    const match = clean.match(/(\d+)$/);
+    return match ? parseInt(match[1], 10) || 0 : 0;
+  };
+
+  const filteredMembers = state.members
+    .filter((m) => {
+      if (selectedWilayah !== 'semua' && m.wilayah !== selectedWilayah) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const match =
+          m.nama.toLowerCase().includes(q) ||
+          m.nomorAnggota.toLowerCase().includes(q) ||
+          m.nomorRekening.includes(q) ||
+          m.whatsapp.includes(q) ||
+          m.nik.includes(q);
+        if (!match) return false;
+      }
+      // Period filter
+      const joinDate = m.terdaftarSejak || '2026-01-01';
+      if (periodeTipe === 'harian') {
+        if (filterStartDate && joinDate < filterStartDate) return false;
+        if (filterEndDate && joinDate > filterEndDate) return false;
+      } else if (periodeTipe === 'bulanan' && filterMonth) {
+        if (!joinDate.startsWith(filterMonth)) return false;
+      } else if (periodeTipe === 'tahunan' && filterYear) {
+        if (!joinDate.startsWith(filterYear)) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
+      if (seqDiff !== 0) return seqDiff;
+      return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+    });
 
   // Open Lock/Unlock Tabungan Pokok Modal (Req 7)
   const handleOpenLockPokok = (member: MemberUser) => {

@@ -267,6 +267,40 @@ export default function App() {
     return () => clearInterval(interval);
   }, [currentMember, currentAdmin]);
 
+  // Keep device network & screen awake whenever app is open and visible (Req 1: Selalu terhubung internet saat aplikasi terbuka)
+  useEffect(() => {
+    let wakeLockSentinel: any = null;
+
+    const keepConnectedAndAwake = async () => {
+      if (document.visibilityState === 'visible') {
+        checkNow().catch(() => {});
+        try {
+          const nav = navigator as any;
+          if (nav?.wakeLock?.request && !wakeLockSentinel) {
+            wakeLockSentinel = await nav.wakeLock.request('screen');
+            wakeLockSentinel?.addEventListener?.('release', () => {
+              wakeLockSentinel = null;
+            });
+          }
+        } catch {}
+      }
+    };
+
+    keepConnectedAndAwake();
+    document.addEventListener('visibilitychange', keepConnectedAndAwake);
+    window.addEventListener('focus', keepConnectedAndAwake);
+    window.addEventListener('online', keepConnectedAndAwake);
+
+    return () => {
+      document.removeEventListener('visibilitychange', keepConnectedAndAwake);
+      window.removeEventListener('focus', keepConnectedAndAwake);
+      window.removeEventListener('online', keepConnectedAndAwake);
+      try {
+        wakeLockSentinel?.release?.();
+      } catch {}
+    };
+  }, [checkNow]);
+
   // Capture PWA install prompt and notification permission
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {

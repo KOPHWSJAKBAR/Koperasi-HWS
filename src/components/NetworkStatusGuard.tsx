@@ -50,7 +50,15 @@ export function useNetworkStatus(
       });
       clearTimeout(timeoutId);
       const online = res.ok;
-      setIsOnline(online);
+      setIsOnline((prevOnline) => {
+        if (!prevOnline && online) {
+          import('../lib/firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('hws:network_restored'));
+          }
+        }
+        return online;
+      });
       if (online) {
         setShowWarning(false);
         setOfflineSeconds(0);
@@ -65,7 +73,7 @@ export function useNetworkStatus(
     }
   }, []);
 
-  // Window online/offline event listeners & periodic heartbeat ping
+  // Window online/offline event listeners & continuous live heartbeat ping (3s online, 2s offline retry)
   useEffect(() => {
     const handleOnline = () => {
       checkNow();
@@ -81,23 +89,31 @@ export function useNetworkStatus(
       }
     };
 
+    const handleFocus = () => {
+      checkNow();
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
 
-    // Check immediately on mount & heartbeat ping every 5 seconds
+    // Check immediately on mount & keep active heartbeat ping while app is open
     checkNow();
     const pingInterval = setInterval(() => {
       checkNow();
-    }, 5000);
+    }, isOnline ? 3000 : 2000);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
       clearInterval(pingInterval);
     };
-  }, [checkNow]);
+  }, [checkNow, isOnline]);
 
   // Track offline duration:
   // - Status badge immediately turns RED when disconnected
@@ -243,6 +259,15 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           <span>✓ Koneksi internet berhasil tersambung kembali. Sistem aktif realtime.</span>
+        </div>
+      )}
+
+      {/* Immediate Reconnecting Notice whenever Internet Drops while app is open */}
+      {!isOnline && !showWarning && (
+        <div className="fixed top-3 inset-x-0 mx-auto w-fit max-w-[92vw] z-[9998] px-4 py-2 bg-rose-950/95 text-rose-100 border border-rose-500/80 rounded-2xl shadow-2xl text-[11px] font-bold flex items-center gap-2.5 backdrop-blur">
+          <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />
+          <WifiOff className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span>Aplikasi harus terhubung internet. Menyambung ulang ({offlineSeconds}/{OFFLINE_WARNING_THRESHOLD_SEC} dtk)...</span>
         </div>
       )}
 

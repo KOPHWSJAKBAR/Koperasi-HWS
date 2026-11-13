@@ -306,10 +306,114 @@ const defaultInitialState: AppState = {
   usedMemberNumbers: [],
 };
 
+function deterministicMemberHashClient(seed: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+export function deduplicateMembersClient(members: MemberUser[], deletedIds: string[] = []): MemberUser[] {
+  const deletedSet = new Set<string>(deletedIds || []);
+  const cleanList = (Array.isArray(members) ? members : []).filter(
+    (m) => m && m.id && !deletedSet.has(m.id)
+  );
+
+  cleanList.sort((a, b) => {
+    const aDup = String(a.id).includes('-dup-') ? 1 : 0;
+    const bDup = String(b.id).includes('-dup-') ? 1 : 0;
+    if (aDup !== bDup) return aDup - bDup;
+    const aPh = (a as any).isRestoredPlaceholder ? 1 : 0;
+    const bPh = (b as any).isRestoredPlaceholder ? 1 : 0;
+    if (aPh !== bPh) return aPh - bPh;
+    return (Number(b.totalSimpanan) || 0) - (Number(a.totalSimpanan) || 0);
+  });
+
+  const result: MemberUser[] = [];
+  const byId = new Map<string, MemberUser>();
+
+  for (const raw of cleanList) {
+    const m: any = { ...raw };
+    delete m.biometricActive;
+    const isDupId = String(m.id).includes('-dup-');
+    const cleanName = String(m.nama || '').toLowerCase().trim();
+    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+    const cleanEmail = String(m.email || '').toLowerCase().trim();
+    const cleanNik = String(m.nik || '').trim();
+
+    let match = byId.get(m.id);
+    if (!match) {
+      match = result.find((existing) => {
+        const exName = String(existing.nama || '').toLowerCase().trim();
+        const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
+        const exEmail = String(existing.email || '').toLowerCase().trim();
+        const exNik = String(existing.nik || '').trim();
+        if (!cleanName || exName !== cleanName) return false;
+        if (isDupId || String(existing.id).includes('-dup-')) return true;
+        if (cleanHp && exHp && cleanHp === exHp) return true;
+        if (cleanEmail && exEmail && cleanEmail === exEmail) return true;
+        if (cleanNik && exNik && cleanNik === exNik) return true;
+        if (!cleanHp && !cleanEmail && !cleanNik && !exHp && !exEmail && !exNik) return true;
+        return false;
+      });
+    }
+
+    if (match) {
+      if (!match.nik && cleanNik) match.nik = cleanNik;
+      if (!match.whatsapp && m.whatsapp) match.whatsapp = m.whatsapp;
+      if (!match.email && m.email) match.email = m.email;
+      if (!match.password && m.password) match.password = m.password;
+      if (!match.pinTransaksi && m.pinTransaksi) match.pinTransaksi = m.pinTransaksi;
+      if (!match.alamatLengkap && m.alamatLengkap) match.alamatLengkap = m.alamatLengkap;
+      if (!match.ktpPhotoUrl && m.ktpPhotoUrl) match.ktpPhotoUrl = m.ktpPhotoUrl;
+      if (!match.avatarUrl && m.avatarUrl) match.avatarUrl = m.avatarUrl;
+      if ((match as any).isRestoredPlaceholder && match.nik && match.whatsapp) {
+        (match as any).isRestoredPlaceholder = false;
+      }
+      continue;
+    }
+
+    if (isDupId) {
+      const baseSlug = cleanName.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'ang';
+      const stableId = `mem-${baseSlug}-${deterministicMemberHashClient(`${cleanName}|${cleanHp}|${cleanEmail}`)}`;
+      if (deletedSet.has(stableId)) continue;
+      m.id = stableId;
+    }
+
+    byId.set(m.id, m);
+    result.push(m);
+  }
+
+  const getMemberSeqNum = (nomorAnggota?: string) => {
+    const clean = String(nomorAnggota || '').trim();
+    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
+    const match = clean.match(/(\d+)$/);
+    return match ? parseInt(match[1], 10) || 0 : 0;
+  };
+  result.sort((a, b) => {
+    const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
+    if (seqDiff !== 0) return seqDiff;
+    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+  });
+
+  return result;
+}
+
 let globalState: AppState = (() => {
   try {
     const cached = localStorage.getItem(STORAGE_KEY);
-    if (cached) return JSON.parse(cached);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && Array.isArray(parsed.members)) {
+        parsed.members = deduplicateMembersClient(parsed.members, parsed.deletedMemberIds || []);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+        } catch {}
+      }
+      return parsed;
+    }
   } catch {}
   return defaultInitialState;
 })();
@@ -478,62 +582,107 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   if (!base) return incoming;
   if (!incoming) return base;
 
-  // 1. Members: UNION of all members by id so registered members NEVER disappear!
-  // Preserves any member present in base OR incoming, unless explicitly in deletedMemberIds.
-  const memberMap = new Map<string, MemberUser>();
-  (base.members || []).forEach((m) => {
-    if (m && m.id) memberMap.set(m.id, { ...m });
-  });
-  (incoming.members || []).forEach((m) => {
-    if (m && m.id) {
-      const existing = memberMap.get(m.id);
-      const isSamePerson =
-        existing &&
-        (existing.nama.toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
-          (existing.whatsapp &&
-            m.whatsapp &&
-            existing.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
-
-      if (!existing) {
-        memberMap.set(m.id, { ...m });
-      } else if (!isSamePerson) {
-        const distinctId = `${m.id}-dup-${Math.random().toString(36).substring(2, 6)}`;
-        memberMap.set(distinctId, { ...m, id: distinctId });
-      } else {
-        memberMap.set(m.id, {
-          ...existing,
-          ...m,
-          nik: m.nik || existing.nik || '',
-          whatsapp: m.whatsapp || existing.whatsapp || '',
-          email: m.email || existing.email || '',
-          password: m.password || existing.password || '',
-          pinTransaksi: m.pinTransaksi || existing.pinTransaksi || '',
-          alamatLengkap: m.alamatLengkap || existing.alamatLengkap || '',
-          ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
-          avatarUrl: m.avatarUrl || existing.avatarUrl,
-          bankPribadi: {
-            ...existing.bankPribadi,
-            ...(m.bankPribadi || {}),
-            nomorRekening:
-              m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
-                ? m.bankPribadi.nomorRekening
-                : existing.bankPribadi?.nomorRekening || '-',
-          },
-        });
-      }
-    }
-  });
-
   const allDeletedMemIds = new Set<string>([
     ...(base.deletedMemberIds || []),
     ...(incoming.deletedMemberIds || []),
   ]);
-  allDeletedMemIds.forEach((id) => memberMap.delete(id));
-  const mergedMembers = Array.from(memberMap.values()).map((m) => {
-    const clean = { ...m };
-    delete (clean as any).biometricActive;
-    return clean;
+
+  // 1. Members: UNION without generating random -dup- clones!
+  const memberMap = new Map<string, MemberUser>();
+  const findMemberByIdentity = (m: MemberUser): MemberUser | undefined => {
+    const cleanName = String(m.nama || '').toLowerCase().trim();
+    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+    const cleanEmail = String(m.email || '').toLowerCase().trim();
+    for (const existing of memberMap.values()) {
+      const exName = String(existing.nama || '').toLowerCase().trim();
+      const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
+      const exEmail = String(existing.email || '').toLowerCase().trim();
+      if (cleanName && exName === cleanName) {
+        if (cleanHp && exHp && cleanHp === exHp) return existing;
+        if (cleanEmail && exEmail && cleanEmail === exEmail) return existing;
+        if (String(m.id).includes('-dup-')) return existing;
+      }
+    }
+    return undefined;
+  };
+
+  deduplicateMembersClient(base.members || [], Array.from(allDeletedMemIds)).forEach((m) => {
+    if (m && m.id) memberMap.set(m.id, { ...m });
   });
+
+  (incoming.members || []).forEach((m) => {
+    if (!m || !m.id || allDeletedMemIds.has(m.id)) return;
+    const isIncomingDup = String(m.id).includes('-dup-');
+
+    const bySameId = memberMap.get(m.id);
+    const isSamePersonOnId =
+      bySameId &&
+      ((bySameId.nama || '').toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
+        (bySameId.whatsapp &&
+          m.whatsapp &&
+          bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
+
+    if (bySameId && isSamePersonOnId) {
+      memberMap.set(m.id, {
+        ...bySameId,
+        ...m,
+        id: bySameId.id,
+        nik: m.nik || bySameId.nik || '',
+        whatsapp: m.whatsapp || bySameId.whatsapp || '',
+        email: m.email || bySameId.email || '',
+        password: m.password || bySameId.password || '',
+        pinTransaksi: m.pinTransaksi || bySameId.pinTransaksi || '',
+        alamatLengkap: m.alamatLengkap || bySameId.alamatLengkap || '',
+        ktpPhotoUrl: m.ktpPhotoUrl || bySameId.ktpPhotoUrl,
+        avatarUrl: m.avatarUrl || bySameId.avatarUrl,
+        bankPribadi: {
+          ...bySameId.bankPribadi,
+          ...(m.bankPribadi || {}),
+          nomorRekening:
+            m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
+              ? m.bankPribadi.nomorRekening
+              : bySameId.bankPribadi?.nomorRekening || '-',
+        },
+      });
+      return;
+    }
+
+    const identityMatch = findMemberByIdentity(m);
+    if (identityMatch) {
+      memberMap.set(identityMatch.id, {
+        ...identityMatch,
+        nik: identityMatch.nik || m.nik || '',
+        whatsapp: identityMatch.whatsapp || m.whatsapp || '',
+        email: identityMatch.email || m.email || '',
+        password: identityMatch.password || m.password || '',
+        pinTransaksi: identityMatch.pinTransaksi || m.pinTransaksi || '',
+        alamatLengkap: identityMatch.alamatLengkap || m.alamatLengkap || '',
+        ktpPhotoUrl: identityMatch.ktpPhotoUrl || m.ktpPhotoUrl,
+        avatarUrl: identityMatch.avatarUrl || m.avatarUrl,
+      });
+      return;
+    }
+
+    if (isIncomingDup) return;
+
+    if (!bySameId) {
+      memberMap.set(m.id, { ...m });
+    } else {
+      const cleanName = String(m.nama || '').toLowerCase().trim();
+      const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+      const cleanEmail = String(m.email || '').toLowerCase().trim();
+      const baseSlug = cleanName.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'alt';
+      const deterministicId = `mem-${baseSlug}-${deterministicMemberHashClient(`${cleanName}|${cleanHp}|${cleanEmail}`)}`;
+      if (!allDeletedMemIds.has(deterministicId) && !memberMap.has(deterministicId)) {
+        memberMap.set(deterministicId, { ...m, id: deterministicId });
+      }
+    }
+  });
+
+  const mergedMembers = deduplicateMembersClient(
+    Array.from(memberMap.values()),
+    Array.from(allDeletedMemIds)
+  );
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl, protect approved status)
   const allDeletedSetoranIds = new Set<string>([
@@ -1562,9 +1711,10 @@ export async function syncShardedToFirestore(state: AppState) {
       await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
     }
 
-    // 3. Sharded Members collection (each member is an isolated ~1KB doc, stripped of any undefined fields)
-    for (const m of state.members || []) {
-      if (m && m.id) {
+    // 3. Sharded Members collection (each member is an isolated ~1KB doc, strictly deduplicated and free of -dup- artifacts)
+    const cleanMembersForFs = deduplicateMembersClient(state.members || [], state.deletedMemberIds || []);
+    for (const m of cleanMembersForFs) {
+      if (m && m.id && !String(m.id).includes('-dup-')) {
         const key = `members/${m.id}`;
         const cleanMember = sanitizeForFirestore({ ...m, updatedAt: now });
         const mStr = JSON.stringify(cleanMember);
@@ -1780,6 +1930,7 @@ export async function fetchStateFromServer(): Promise<AppState> {
               (lm: MemberUser) =>
                 lm &&
                 lm.id &&
+                !String(lm.id).includes('-dup-') &&
                 !serverDelSet.has(lm.id) &&
                 (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
             );
@@ -1821,14 +1972,15 @@ export async function fetchStateFromServer(): Promise<AppState> {
 
   // Direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
   try {
-    const { db } = await import('./firebase');
+    const { db, ensureFirestoreOnline } = await import('./firebase-init');
+    await ensureFirestoreOnline();
     const { collection, getDocs } = await import('firebase/firestore');
     const memSnap = await getDocs(collection(db, 'members'));
     if (!memSnap.empty) {
       const delSet = new Set(globalState.deletedMemberIds || []);
       const remoteMembers = memSnap.docs
         .map((d) => d.data() as MemberUser)
-        .filter((m) => m && m.id && !delSet.has(m.id));
+        .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
       if (remoteMembers.length > 0) {
         globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
         try {
@@ -1853,22 +2005,31 @@ export function useKoperasiState() {
     };
     listeners.add(handler);
 
-    // Initial fetch
+    // Initial fetch + live Firestore network activation whenever app opens
+    import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
     fetchStateFromServer();
 
-    // Foregrounding & network re-sync handlers for installed mobile & desktop apps
+    // Foregrounding & network re-sync handlers so app always stays connected to internet when open
     const handleDeviceResume = () => {
       if (document.visibilityState === 'visible' || navigator.onLine) {
+        import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
         fetchStateFromServer();
       }
     };
+    const handleNetworkRestored = () => {
+      import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+      fetchStateFromServer();
+      connectSSE();
+    };
     if (typeof window !== 'undefined') {
       window.addEventListener('visibilitychange', handleDeviceResume);
-      window.addEventListener('online', handleDeviceResume);
+      window.addEventListener('online', handleNetworkRestored);
       window.addEventListener('focus', handleDeviceResume);
+      window.addEventListener('pageshow', handleDeviceResume);
+      window.addEventListener('hws:network_restored', handleNetworkRestored);
     }
 
-    // Regular polling fallback every 3 seconds to keep all devices & mobile in sync
+    // Regular polling fallback every 3 seconds to keep all devices & mobile in sync & online
     const pollInterval = setInterval(() => {
       fetchStateFromServer();
     }, 3000);
@@ -2014,7 +2175,7 @@ export function useKoperasiState() {
         import('firebase/firestore').then(({ collection, doc, onSnapshot }) => {
           if (!isMounted) return;
 
-          // A. Members Collection (Debounced UI sync to prevent excessive re-renders)
+          // A. Members Collection (Debounced UI sync, strictly skip legacy -dup- artifacts)
           const unsubMembers = onSnapshot(
             collection(db, 'members'),
             (snapshot) => {
@@ -2022,7 +2183,7 @@ export function useKoperasiState() {
               const delSet = new Set(globalState.deletedMemberIds || []);
               const remoteMembers = snapshot.docs
                 .map((d) => d.data() as MemberUser)
-                .filter((m) => m && m.id && !delSet.has(m.id));
+                .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
               globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
               scheduleDebouncedNotify(150, true);
             },
@@ -2213,8 +2374,10 @@ export function useKoperasiState() {
       });
       if (typeof window !== 'undefined') {
         window.removeEventListener('visibilitychange', handleDeviceResume);
-        window.removeEventListener('online', handleDeviceResume);
+        window.removeEventListener('online', handleNetworkRestored);
         window.removeEventListener('focus', handleDeviceResume);
+        window.removeEventListener('pageshow', handleDeviceResume);
+        window.removeEventListener('hws:network_restored', handleNetworkRestored);
       }
     };
   }, []);

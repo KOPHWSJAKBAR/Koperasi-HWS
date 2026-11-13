@@ -264,76 +264,228 @@ const WILAYAH_ABBR_MAP: Record<string, string> = {
   Tambora: 'TMB',
 };
 
+function deterministicMemberHash(seed: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function deduplicateMembersServer(members: any[], deletedIds: string[] = []): any[] {
+  const deletedSet = new Set<string>(deletedIds || []);
+  const cleanList = (Array.isArray(members) ? members : []).filter(
+    (m: any) => m && m.id && !deletedSet.has(m.id)
+  );
+
+  // Prefer canonical non-dup IDs, non-placeholder records, and non-zero balances
+  cleanList.sort((a: any, b: any) => {
+    const aDup = String(a.id).includes('-dup-') ? 1 : 0;
+    const bDup = String(b.id).includes('-dup-') ? 1 : 0;
+    if (aDup !== bDup) return aDup - bDup;
+    const aPh = a.isRestoredPlaceholder ? 1 : 0;
+    const bPh = b.isRestoredPlaceholder ? 1 : 0;
+    if (aPh !== bPh) return aPh - bPh;
+    return (Number(b.totalSimpanan) || 0) - (Number(a.totalSimpanan) || 0);
+  });
+
+  const result: any[] = [];
+  const byId = new Map<string, any>();
+
+  for (const raw of cleanList) {
+    const m = { ...raw };
+    delete m.biometricActive;
+    const isDupId = String(m.id).includes('-dup-');
+    const cleanName = String(m.nama || '').toLowerCase().trim();
+    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+    const cleanEmail = String(m.email || '').toLowerCase().trim();
+    const cleanNik = String(m.nik || '').trim();
+
+    let match = byId.get(m.id);
+    if (!match) {
+      match = result.find((existing) => {
+        const exName = String(existing.nama || '').toLowerCase().trim();
+        const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
+        const exEmail = String(existing.email || '').toLowerCase().trim();
+        const exNik = String(existing.nik || '').trim();
+        if (!cleanName || exName !== cleanName) return false;
+        if (isDupId || String(existing.id).includes('-dup-')) return true;
+        if (cleanHp && exHp && cleanHp === exHp) return true;
+        if (cleanEmail && exEmail && cleanEmail === exEmail) return true;
+        if (cleanNik && exNik && cleanNik === exNik) return true;
+        if (!cleanHp && !cleanEmail && !cleanNik && !exHp && !exEmail && !exNik) return true;
+        return false;
+      });
+    }
+
+    if (match) {
+      // Only enrich missing fields on canonical record without overwriting valid fields
+      if (!match.nik && cleanNik) match.nik = cleanNik;
+      if (!match.whatsapp && m.whatsapp) match.whatsapp = m.whatsapp;
+      if (!match.email && m.email) match.email = m.email;
+      if (!match.password && m.password) match.password = m.password;
+      if (!match.pinTransaksi && m.pinTransaksi) match.pinTransaksi = m.pinTransaksi;
+      if (!match.alamatLengkap && m.alamatLengkap) match.alamatLengkap = m.alamatLengkap;
+      if (!match.ktpPhotoUrl && m.ktpPhotoUrl) match.ktpPhotoUrl = m.ktpPhotoUrl;
+      if (!match.avatarUrl && m.avatarUrl) match.avatarUrl = m.avatarUrl;
+      if (match.isRestoredPlaceholder && match.nik && match.whatsapp) {
+        match.isRestoredPlaceholder = false;
+      }
+      continue;
+    }
+
+    if (isDupId) {
+      const baseSlug = cleanName.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'ang';
+      const stableId = `mem-${baseSlug}-${deterministicMemberHash(`${cleanName}|${cleanHp}|${cleanEmail}`)}`;
+      if (deletedSet.has(stableId)) continue;
+      m.id = stableId;
+    }
+
+    byId.set(m.id, m);
+    result.push(m);
+  }
+
+  const getMemberSeqNum = (nomorAnggota?: string) => {
+    const clean = String(nomorAnggota || '').trim();
+    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
+    const match = clean.match(/(\d+)$/);
+    return match ? parseInt(match[1], 10) || 0 : 0;
+  };
+  result.sort((a, b) => {
+    const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
+    if (seqDiff !== 0) return seqDiff;
+    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+  });
+
+  return result;
+}
+
 // Smart Server State Merger (JANGAN HAPUS FILE ATAU DATA YANG TELAH DIINPUT DATABASE)
 function mergeServerState(current: any, incoming: any): any {
   if (!current) return incoming;
   if (!incoming) return current;
 
-  // 1. Members: Union of current and incoming members by ID & NIK so registered members NEVER disappear or duplicate!
-  // Members are only removed if explicitly present in deletedMemberIds.
-  const memberMap = new Map<string, any>();
-  const nikToIdMap = new Map<string, string>();
-  (current.members || []).forEach((m: any) => {
-    if (m && m.id) {
-      memberMap.set(m.id, { ...m });
-      if (m.nik) nikToIdMap.set(String(m.nik).trim(), m.id);
-    }
-  });
-  (incoming.members || []).forEach((m: any) => {
-    if (m && m.id) {
-      const cleanNik = m.nik ? String(m.nik).trim() : '';
-      let existingId = m.id;
-      if (cleanNik && nikToIdMap.has(cleanNik)) {
-        existingId = nikToIdMap.get(cleanNik)!;
-      }
-      const existing = memberMap.get(existingId);
-      const isSamePerson = existing && (
-        existing.nama.toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
-        (existing.whatsapp && m.whatsapp && existing.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, ''))
-      );
-      if (!existing) {
-        memberMap.set(m.id, { ...m });
-        if (cleanNik) nikToIdMap.set(cleanNik, m.id);
-      } else if (!isSamePerson) {
-        // Different member who had duplicate ID, NIK, or nomor rekening: KEEP BOTH, NEVER OVERWRITE!
-        const distinctId = `${m.id}-dup-${Math.random().toString(36).substring(2, 6)}`;
-        memberMap.set(distinctId, { ...m, id: distinctId });
-      } else {
-        memberMap.set(existingId, {
-          ...existing,
-          ...m,
-          id: existingId,
-          nik: m.nik || existing.nik || '',
-          whatsapp: m.whatsapp || existing.whatsapp || '',
-          email: m.email || existing.email || '',
-          password: m.password || existing.password || '',
-          pinTransaksi: m.pinTransaksi || existing.pinTransaksi || '',
-          alamatLengkap: m.alamatLengkap || existing.alamatLengkap || '',
-          ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
-          avatarUrl: m.avatarUrl || existing.avatarUrl,
-          isRestoredPlaceholder: m.nik && m.whatsapp ? false : existing.isRestoredPlaceholder,
-          bankPribadi: {
-            ...existing.bankPribadi,
-            ...(m.bankPribadi || {}),
-            nomorRekening: m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
-              ? m.bankPribadi.nomorRekening
-              : existing.bankPribadi?.nomorRekening || '-',
-          },
-        });
-      }
-    }
-  });
-
   const allDeletedMemIds = new Set<string>([
     ...(current.deletedMemberIds || []),
     ...(incoming.deletedMemberIds || []),
   ]);
-  allDeletedMemIds.forEach((id) => memberMap.delete(id));
-  const mergedMembers = Array.from(memberMap.values()).map((m: any) => {
-    const clean = { ...m };
-    delete clean.biometricActive;
-    return clean;
+
+  // 1. Members: Union of current and incoming members without creating random -dup- clones!
+  const memberMap = new Map<string, any>();
+  const findMemberByIdentity = (m: any) => {
+    const cleanName = String(m.nama || '').toLowerCase().trim();
+    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+    const cleanEmail = String(m.email || '').toLowerCase().trim();
+    for (const existing of memberMap.values()) {
+      const exName = String(existing.nama || '').toLowerCase().trim();
+      const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
+      const exEmail = String(existing.email || '').toLowerCase().trim();
+      if (cleanName && exName === cleanName) {
+        if (cleanHp && exHp && cleanHp === exHp) return existing;
+        if (cleanEmail && exEmail && cleanEmail === exEmail) return existing;
+        if (String(m.id).includes('-dup-')) return existing;
+      }
+    }
+    return undefined;
+  };
+
+  deduplicateMembersServer(current.members || [], Array.from(allDeletedMemIds)).forEach((m: any) => {
+    if (m && m.id) {
+      memberMap.set(m.id, { ...m });
+    }
   });
+
+  (incoming.members || []).forEach((m: any) => {
+    if (!m || !m.id || allDeletedMemIds.has(m.id)) return;
+    const isIncomingDup = String(m.id).includes('-dup-');
+
+    const bySameId = memberMap.get(m.id);
+    const isSamePersonOnId =
+      bySameId &&
+      ((bySameId.nama || '').toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
+        (bySameId.whatsapp &&
+          m.whatsapp &&
+          bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
+
+    if (bySameId && isSamePersonOnId) {
+      // Exact ID + same person match
+      memberMap.set(m.id, {
+        ...bySameId,
+        ...m,
+        id: bySameId.id,
+        nomorAnggota:
+          /^115\d{9}$/.test(String(bySameId.nomorAnggota || ''))
+            ? bySameId.nomorAnggota
+            : m.nomorAnggota || bySameId.nomorAnggota,
+        nomorRekening:
+          /^\d{10}$/.test(String(bySameId.nomorRekening || ''))
+            ? bySameId.nomorRekening
+            : m.nomorRekening || bySameId.nomorRekening,
+        nik: m.nik || bySameId.nik || '',
+        whatsapp: m.whatsapp || bySameId.whatsapp || '',
+        email: m.email || bySameId.email || '',
+        password: m.password || bySameId.password || '',
+        pinTransaksi: m.pinTransaksi || bySameId.pinTransaksi || '',
+        alamatLengkap: m.alamatLengkap || bySameId.alamatLengkap || '',
+        ktpPhotoUrl: m.ktpPhotoUrl || bySameId.ktpPhotoUrl,
+        avatarUrl: m.avatarUrl || bySameId.avatarUrl,
+        isRestoredPlaceholder: m.nik && m.whatsapp ? false : bySameId.isRestoredPlaceholder,
+        bankPribadi: {
+          ...bySameId.bankPribadi,
+          ...(m.bankPribadi || {}),
+          nomorRekening:
+            m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
+              ? m.bankPribadi.nomorRekening
+              : bySameId.bankPribadi?.nomorRekening || '-',
+        },
+      });
+      return;
+    }
+
+    // Check if this person already exists under another ID (e.g., mem-1791894382052 Fauji vs mem-fauji-anwar-1791894382052, or -dup- artifact)
+    const identityMatch = findMemberByIdentity(m);
+    if (identityMatch) {
+      // Preserve canonical record fields; only enrich missing fields so stale caches never overwrite valid data
+      memberMap.set(identityMatch.id, {
+        ...identityMatch,
+        nik: identityMatch.nik || m.nik || '',
+        whatsapp: identityMatch.whatsapp || m.whatsapp || '',
+        email: identityMatch.email || m.email || '',
+        password: identityMatch.password || m.password || '',
+        pinTransaksi: identityMatch.pinTransaksi || m.pinTransaksi || '',
+        alamatLengkap: identityMatch.alamatLengkap || m.alamatLengkap || '',
+        ktpPhotoUrl: identityMatch.ktpPhotoUrl || m.ktpPhotoUrl,
+        avatarUrl: identityMatch.avatarUrl || m.avatarUrl,
+        isRestoredPlaceholder: identityMatch.nik && identityMatch.whatsapp ? false : identityMatch.isRestoredPlaceholder,
+      });
+      return;
+    }
+
+    if (isIncomingDup) {
+      // Never re-introduce a -dup- clone
+      return;
+    }
+
+    if (!bySameId) {
+      memberMap.set(m.id, { ...m });
+    } else {
+      // Genuine distinct person sharing an old ID, not yet present anywhere in memberMap: deterministic ID (NEVER random!)
+      const cleanName = String(m.nama || '').toLowerCase().trim();
+      const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+      const cleanEmail = String(m.email || '').toLowerCase().trim();
+      const baseSlug = cleanName.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'alt';
+      const deterministicId = `mem-${baseSlug}-${deterministicMemberHash(`${cleanName}|${cleanHp}|${cleanEmail}`)}`;
+      if (!allDeletedMemIds.has(deterministicId) && !memberMap.has(deterministicId)) {
+        memberMap.set(deterministicId, { ...m, id: deterministicId });
+      }
+    }
+  });
+
+  const mergedMembers = deduplicateMembersServer(
+    Array.from(memberMap.values()),
+    Array.from(allDeletedMemIds)
+  );
   const mergedDeletedMemIds = Array.from(allDeletedMemIds);
 
   // 2. Setoran List (Preserve all deposits & filter deletedSetoranIds)
@@ -653,8 +805,9 @@ async function syncStateToFirestoreServer(state: any) {
 
     // 1. Synchronize Members to Firestore (Strictly strip biometricActive - User Req: biometric tidak tersimpan di database)
     if (Array.isArray(state.members)) {
-      for (const m of state.members) {
-        if (m && m.id) {
+      const cleanMembers = deduplicateMembersServer(state.members, state.deletedMemberIds || []);
+      for (const m of cleanMembers) {
+        if (m && m.id && !String(m.id).includes('-dup-')) {
           const cleanMem = JSON.parse(JSON.stringify(m));
           delete cleanMem.biometricActive;
           await setDoc(doc(serverFirestoreInstance, 'members', m.id), cleanMem, { merge: true }).catch(() => {});
@@ -842,22 +995,30 @@ function saveDatabase(state: any) {
 async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembersCount?: number }> {
   try {
     const { initializeApp, getApps } = await import('firebase/app');
-    const { getFirestore, collection, getDocs, doc, getDoc } = await import('firebase/firestore');
+    const { getFirestore, collection, getDocs, doc, getDoc, deleteDoc } = await import('firebase/firestore');
     const configPath = path.join(__dirname, 'firebase-applet-config.json');
     if (!fs.existsSync(configPath)) return { success: false };
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
     const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
 
-    // 1. Fetch remote members from Firestore
+    // 1. Fetch remote members from Firestore (ignore legacy -dup- artifacts and purge them immediately)
     const memSnap = await getDocs(collection(db, 'members'));
     const remoteMembers: any[] = [];
+    const dupDocsToDelete: string[] = [];
     memSnap.forEach((d) => {
       const data = d.data();
+      if (String(d.id).includes('-dup-') || (data && data.id && String(data.id).includes('-dup-'))) {
+        dupDocsToDelete.push(d.id);
+        return;
+      }
       if (data && data.id) {
         remoteMembers.push(data);
       }
     });
+    if (dupDocsToDelete.length > 0) {
+      Promise.all(dupDocsToDelete.map((id) => deleteDoc(doc(db, 'members', id)).catch(() => {}))).catch(() => {});
+    }
 
     // 2. Fetch remote admins from Firestore (collection 'admins' and document 'settings/admins')
     const remoteAdmins: any[] = [];
@@ -989,6 +1150,7 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
   }
 
   const deletedMemSet = new Set<string>(state.deletedMemberIds || []);
+  state.members = deduplicateMembersServer(state.members, state.deletedMemberIds || []);
 
   // Sort members chronologically: earlier/senior members maintain their numbers first, newly registered members evaluated later
   const getScore = (m: any) => {
@@ -1079,6 +1241,19 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
         }
       });
     }
+  });
+
+  // Sort final active members from largest member number on top to smallest at bottom
+  const getMemberSeqNum = (nomorAnggota?: string) => {
+    const clean = String(nomorAnggota || '').trim();
+    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
+    const match = clean.match(/(\d+)$/);
+    return match ? parseInt(match[1], 10) || 0 : 0;
+  };
+  state.members.sort((a: any, b: any) => {
+    const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
+    if (seqDiff !== 0) return seqDiff;
+    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
   });
 
   state.lastRunningNumber = running;
@@ -1635,16 +1810,17 @@ async function startServer() {
   app.get('/api/version', (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.json({
-      version: '2.5.0',
+      version: '2.6.1',
       platforms: ['android', 'ios', 'web', 'pc', 'aistudio'],
       preserveDataOnUpdate: true,
+      alwaysOnline: true,
       totalMembers: (currentState.members || []).length,
       lastSynced: currentState.serverSyncStatus?.lastSynced || new Date().toISOString(),
     });
   });
 
   // Restore non-deleted registered members from any connected device (Android, iOS, Web, PC, AI Studio)
-  // Strictly ignores any member whose ID is in deletedMemberIds so deleted members NEVER reappear.
+  // Strictly ignores any member whose ID is in deletedMemberIds or legacy -dup- artifacts.
   app.post('/api/members/sync-restore', (req: Request, res: Response) => {
     try {
       const { members: clientMembers } = req.body || {};
@@ -1671,8 +1847,8 @@ async function startServer() {
 
       clientMembers.forEach((cm: any) => {
         if (!cm || !cm.id || !cm.nama) return;
-        // Strictly ignore deleted members!
-        if (deletedSet.has(cm.id)) return;
+        // Strictly ignore deleted members and -dup- clones!
+        if (deletedSet.has(cm.id) || String(cm.id).includes('-dup-')) return;
 
         const cleanNik = cm.nik ? String(cm.nik).trim() : '';
         const cleanHp = cm.whatsapp ? String(cm.whatsapp).replace(/\D/g, '') : '';
