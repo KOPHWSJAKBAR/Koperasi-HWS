@@ -1,5 +1,5 @@
-// Service Worker for Koperasi HWS PWA
-const CACHE_NAME = 'koperasi-hws-v1';
+// Service Worker for Koperasi HWS PWA (Android, iOS, Web, PC, AI Studio)
+const CACHE_NAME = 'koperasi-hws-v2.5';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
@@ -28,18 +28,34 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Network-First for app shell & static assets so updates sync seamlessly across Android, iOS, Web, PC, and AI Studio
+// Never intercept or cache /api/* or Firestore network traffic so database data is never stale or altered
 self.addEventListener('fetch', (event) => {
-  if (event.request.url.includes('/api/') || event.request.method !== 'GET') {
+  const url = event.request.url;
+  if (
+    url.includes('/api/') ||
+    url.includes('firestore.googleapis.com') ||
+    url.includes('firebase') ||
+    event.request.method !== 'GET'
+  ) {
     return;
   }
   event.respondWith(
-    fetch(event.request).catch(() => {
-      return caches.match(event.request);
-    })
+    fetch(event.request)
+      .then((response) => {
+        if (response && response.status === 200 && response.type === 'basic') {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone)).catch(() => {});
+        }
+        return response;
+      })
+      .catch(() => {
+        return caches.match(event.request);
+      })
   );
 });
 
-// Real-time Push notifications listener (Req 1)
+// Real-time Push notifications listener
 self.addEventListener('push', (event) => {
   if (!event.data) return;
   try {

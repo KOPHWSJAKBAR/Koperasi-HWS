@@ -487,17 +487,37 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   (incoming.members || []).forEach((m) => {
     if (m && m.id) {
       const existing = memberMap.get(m.id);
+      const isSamePerson =
+        existing &&
+        (existing.nama.toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
+          (existing.whatsapp &&
+            m.whatsapp &&
+            existing.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
+
       if (!existing) {
         memberMap.set(m.id, { ...m });
+      } else if (!isSamePerson) {
+        const distinctId = `${m.id}-dup-${Math.random().toString(36).substring(2, 6)}`;
+        memberMap.set(distinctId, { ...m, id: distinctId });
       } else {
         memberMap.set(m.id, {
           ...existing,
           ...m,
+          nik: m.nik || existing.nik || '',
+          whatsapp: m.whatsapp || existing.whatsapp || '',
+          email: m.email || existing.email || '',
+          password: m.password || existing.password || '',
+          pinTransaksi: m.pinTransaksi || existing.pinTransaksi || '',
+          alamatLengkap: m.alamatLengkap || existing.alamatLengkap || '',
           ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
           avatarUrl: m.avatarUrl || existing.avatarUrl,
           bankPribadi: {
             ...existing.bankPribadi,
             ...(m.bankPribadi || {}),
+            nomorRekening:
+              m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
+                ? m.bankPribadi.nomorRekening
+                : existing.bankPribadi?.nomorRekening || '-',
           },
         });
       }
@@ -1745,11 +1765,51 @@ export async function fetchStateFromServer(): Promise<AppState> {
         if (text && text.trim().startsWith('{')) {
           const data = JSON.parse(text);
           if (data && typeof data === 'object' && (data.profile || data.members)) {
+            // Check if local device cache has any non-deleted registered members missing from server
+            const serverDelSet = new Set<string>([
+              ...(data.deletedMemberIds || []),
+              ...(globalState.deletedMemberIds || []),
+            ]);
+            const serverIds = new Set<string>((data.members || []).map((m: MemberUser) => m.id));
+            const serverPlaceholderIds = new Set<string>(
+              (data.members || [])
+                .filter((m: any) => m && m.isRestoredPlaceholder)
+                .map((m: MemberUser) => m.id)
+            );
+            const missingLocalMembers = (globalState.members || []).filter(
+              (lm: MemberUser) =>
+                lm &&
+                lm.id &&
+                !serverDelSet.has(lm.id) &&
+                (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
+            );
+
             globalState = mergeStates(globalState, data);
             try {
               localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
             } catch {}
             notifyListeners();
+
+            // Non-blocking restore of any missing non-deleted local members to server & Firestore
+            if (missingLocalMembers.length > 0) {
+              fetch('/api/members/sync-restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ members: missingLocalMembers }),
+              })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((resData) => {
+                  if (resData?.restoredCount > 0 && resData?.state) {
+                    globalState = mergeStates(globalState, resData.state);
+                    try {
+                      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+                    } catch {}
+                    notifyListeners();
+                  }
+                })
+                .catch(() => {});
+            }
+
             return globalState;
           }
         }

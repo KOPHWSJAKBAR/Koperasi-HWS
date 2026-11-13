@@ -10,6 +10,9 @@ export interface NetworkStatusState {
   checkNow: () => Promise<boolean>;
 }
 
+const OFFLINE_WARNING_THRESHOLD_SEC = 60; // Muncul peringatan apabila dalam 60 detik tidak terkoneksi ke internet
+const AUTO_LOGOUT_GRACE_SEC = 30; // 30 detik hitung mundur setelah peringatan muncul (total 90 detik)
+
 export function useNetworkStatus(
   onAutoLogout?: (reason: string) => void,
   isSessionActive: boolean = false
@@ -19,7 +22,7 @@ export function useNetworkStatus(
   });
   const [showWarning, setShowWarning] = useState<boolean>(false);
   const [offlineSeconds, setOfflineSeconds] = useState<number>(0);
-  const [countdown, setCountdown] = useState<number>(20); // 20 detik sisa peringatan (total 30 detik offline)
+  const [countdown, setCountdown] = useState<number>(AUTO_LOGOUT_GRACE_SEC);
   const [isChecking, setIsChecking] = useState<boolean>(false);
 
   const timerRef = useRef<any>(null);
@@ -28,8 +31,14 @@ export function useNetworkStatus(
   const isSessionActiveRef = useRef(isSessionActive);
   isSessionActiveRef.current = isSessionActive;
 
-  // Active ping function to verify real connectivity
+  // Active ping function to verify real internet/server connectivity
   const checkNow = useCallback(async (): Promise<boolean> => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setIsOnline(false);
+      setIsChecking(false);
+      return false;
+    }
+
     setIsChecking(true);
     try {
       const controller = new AbortController();
@@ -45,19 +54,18 @@ export function useNetworkStatus(
       if (online) {
         setShowWarning(false);
         setOfflineSeconds(0);
-        setCountdown(20);
+        setCountdown(AUTO_LOGOUT_GRACE_SEC);
       }
       setIsChecking(false);
       return online;
     } catch {
-      // Offline confirmed
       setIsOnline(false);
       setIsChecking(false);
       return false;
     }
   }, []);
 
-  // Window online/offline event listeners & periodic ping
+  // Window online/offline event listeners & periodic heartbeat ping
   useEffect(() => {
     const handleOnline = () => {
       checkNow();
@@ -67,10 +75,18 @@ export function useNetworkStatus(
       setIsOnline(false);
     };
 
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkNow();
+      }
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
 
-    // Periodic heartbeat ping every 5 seconds to detect silent connection loss
+    // Check immediately on mount & heartbeat ping every 5 seconds
+    checkNow();
     const pingInterval = setInterval(() => {
       checkNow();
     }, 5000);
@@ -78,13 +94,15 @@ export function useNetworkStatus(
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibility);
       clearInterval(pingInterval);
     };
   }, [checkNow]);
 
-  // Requirement: "apabila dalam 10 detik tidak terkoneksi pada internet muncul peringatan"
-  // 10 detik pertama: status badge merah
-  // Setelah 10 detik berturut-turut offline: muncul peringatan modal & countdown menuju auto-logout pada detik ke-30
+  // Track offline duration:
+  // - Status badge immediately turns RED when disconnected
+  // - After 60 seconds disconnected -> show blocking warning modal
+  // - 30 seconds grace countdown while warning is displayed -> auto-logout
   useEffect(() => {
     if (!isOnline) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -93,22 +111,23 @@ export function useNetworkStatus(
         setOfflineSeconds((prevSec) => {
           const newSec = prevSec + 1;
 
-          // Muncul peringatan apabila dalam 10 detik tidak terkoneksi
-          if (newSec >= 10) {
+          if (newSec >= OFFLINE_WARNING_THRESHOLD_SEC) {
             setShowWarning(true);
-            const remaining = Math.max(0, 30 - newSec);
+            const remaining = Math.max(
+              0,
+              OFFLINE_WARNING_THRESHOLD_SEC + AUTO_LOGOUT_GRACE_SEC - newSec
+            );
             setCountdown(remaining);
           } else {
             setShowWarning(false);
           }
 
-          // Auto-logout setelah 30 detik total offline
-          if (newSec >= 30) {
+          if (newSec >= OFFLINE_WARNING_THRESHOLD_SEC + AUTO_LOGOUT_GRACE_SEC) {
             clearInterval(timerRef.current);
             timerRef.current = null;
             if (isSessionActiveRef.current && onAutoLogoutRef.current) {
               onAutoLogoutRef.current(
-                'Sesi Anda telah di-logout otomatis karena perangkat tidak terkoneksi ke jaringan internet selama 30 detik demi menjaga keamanan akun dan transaksi perbankan Anda.'
+                'Sesi Anda telah di-logout otomatis karena perangkat tidak terkoneksi ke jaringan internet demi menjaga keamanan akun dan transaksi perbankan Anda.'
               );
             }
           }
@@ -117,14 +136,13 @@ export function useNetworkStatus(
         });
       }, 1000);
     } else {
-      // Kembali online
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
       setShowWarning(false);
       setOfflineSeconds(0);
-      setCountdown(20);
+      setCountdown(AUTO_LOGOUT_GRACE_SEC);
     }
 
     return () => {
@@ -183,7 +201,7 @@ export const ConnectionStatusBadge: React.FC<{
 };
 
 // Fullscreen Blocking Modal Guard
-// Muncul peringatan apabila dalam 10 detik tidak terkoneksi ke internet
+// Muncul peringatan apabila dalam 60 detik tidak terkoneksi ke internet
 export interface NetworkStatusGuardProps {
   isOnline: boolean;
   showWarning: boolean;
@@ -199,7 +217,7 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
   isOnline,
   showWarning,
   countdown,
-  offlineSeconds = 10,
+  offlineSeconds = 60,
   isChecking,
   onCheckNow,
   onLogout,
@@ -228,7 +246,7 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
         </div>
       )}
 
-      {/* Unclosable Full-Screen Blocking Modal when Disconnected for 10 seconds */}
+      {/* Unclosable Full-Screen Blocking Modal when Disconnected for 60 seconds */}
       {showWarning && (
         <div
           className="fixed inset-0 z-[9999] bg-[#070b14]/95 backdrop-blur-md flex items-center justify-center p-4 select-none animate-in fade-in"
@@ -247,13 +265,13 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
             <div className="space-y-2">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/50 text-[11px] font-black uppercase tracking-wider">
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-                <span>Merah: Tidak Terkoneksi Internet</span>
+                <span>Merah: Tidak Terkoneksi Internet ({offlineSeconds} dtk)</span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-white leading-tight">
                 Periksa Jaringan Koneksi Anda
               </h2>
               <p className="text-xs text-rose-200/90 leading-relaxed max-w-sm mx-auto">
-                Perangkat Anda telah <b>tidak terkoneksi ke internet selama lebih dari 10 detik</b>. Aplikasi dibekukan dan <b>tidak bisa digunakan</b> demi melindungi keamanan data saldo perbankan & keaslian transaksi.
+                Perangkat Anda telah <b>tidak terkoneksi ke internet selama 60 detik</b>. Aplikasi dibekukan dan <b>tidak bisa digunakan</b> demi menjaga keamanan data saldo & transaksi koperasi.
               </p>
             </div>
 
@@ -274,7 +292,7 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div
                   className="bg-rose-500 h-full transition-all duration-1000 ease-linear rounded-full"
-                  style={{ width: `${(countdown / 20) * 100}%` }}
+                  style={{ width: `${(countdown / AUTO_LOGOUT_GRACE_SEC) * 100}%` }}
                 />
               </div>
               <p className="text-[11px] text-slate-400">

@@ -303,11 +303,21 @@ function mergeServerState(current: any, incoming: any): any {
           ...existing,
           ...m,
           id: existingId,
+          nik: m.nik || existing.nik || '',
+          whatsapp: m.whatsapp || existing.whatsapp || '',
+          email: m.email || existing.email || '',
+          password: m.password || existing.password || '',
+          pinTransaksi: m.pinTransaksi || existing.pinTransaksi || '',
+          alamatLengkap: m.alamatLengkap || existing.alamatLengkap || '',
           ktpPhotoUrl: m.ktpPhotoUrl || existing.ktpPhotoUrl,
           avatarUrl: m.avatarUrl || existing.avatarUrl,
+          isRestoredPlaceholder: m.nik && m.whatsapp ? false : existing.isRestoredPlaceholder,
           bankPribadi: {
             ...existing.bankPribadi,
             ...(m.bankPribadi || {}),
+            nomorRekening: m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
+              ? m.bankPribadi.nomorRekening
+              : existing.bankPribadi?.nomorRekening || '-',
           },
         });
       }
@@ -1619,6 +1629,88 @@ async function startServer() {
         status: m.status,
       })),
     });
+  });
+
+  // Cross-platform version & update sync check (Android, iOS, Web, PC, AI Studio) without mutating any data
+  app.get('/api/version', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.json({
+      version: '2.5.0',
+      platforms: ['android', 'ios', 'web', 'pc', 'aistudio'],
+      preserveDataOnUpdate: true,
+      totalMembers: (currentState.members || []).length,
+      lastSynced: currentState.serverSyncStatus?.lastSynced || new Date().toISOString(),
+    });
+  });
+
+  // Restore non-deleted registered members from any connected device (Android, iOS, Web, PC, AI Studio)
+  // Strictly ignores any member whose ID is in deletedMemberIds so deleted members NEVER reappear.
+  app.post('/api/members/sync-restore', (req: Request, res: Response) => {
+    try {
+      const { members: clientMembers } = req.body || {};
+      if (!Array.isArray(clientMembers) || clientMembers.length === 0) {
+        return res.json({ success: true, restoredCount: 0, state: currentState });
+      }
+
+      const deletedSet = new Set<string>(currentState.deletedMemberIds || []);
+      const existingById = new Map<string, any>();
+      const existingByNik = new Map<string, any>();
+      const existingByNamePhone = new Map<string, any>();
+
+      (currentState.members || []).forEach((m: any) => {
+        if (m && m.id) {
+          existingById.set(m.id, m);
+          if (m.nik) existingByNik.set(String(m.nik).trim(), m);
+          const np = `${(m.nama || '').toLowerCase().trim()}|${(m.whatsapp || '').replace(/\D/g, '')}`;
+          if (m.nama && m.whatsapp) existingByNamePhone.set(np, m);
+        }
+      });
+
+      let restoredCount = 0;
+      const toMerge: any[] = [];
+
+      clientMembers.forEach((cm: any) => {
+        if (!cm || !cm.id || !cm.nama) return;
+        // Strictly ignore deleted members!
+        if (deletedSet.has(cm.id)) return;
+
+        const cleanNik = cm.nik ? String(cm.nik).trim() : '';
+        const cleanHp = cm.whatsapp ? String(cm.whatsapp).replace(/\D/g, '') : '';
+        const npKey = `${cm.nama.toLowerCase().trim()}|${cleanHp}`;
+
+        const existing =
+          existingById.get(cm.id) ||
+          (cleanNik ? existingByNik.get(cleanNik) : undefined) ||
+          (cleanHp ? existingByNamePhone.get(npKey) : undefined);
+
+        if (!existing) {
+          // Brand new non-deleted member from device cache -> restore!
+          toMerge.push({ ...cm });
+          restoredCount++;
+        } else if (existing.isRestoredPlaceholder && (cleanNik || cleanHp || cm.password)) {
+          // Enrich placeholder record with full details from member's own device cache
+          toMerge.push({ ...cm, id: existing.id, nomorAnggota: existing.nomorAnggota, nomorRekening: existing.nomorRekening });
+          restoredCount++;
+        }
+      });
+
+      if (restoredCount > 0) {
+        currentState = mergeServerState(currentState, { members: toMerge });
+        const recon = reconcileLegacyMemberNumbers(currentState);
+        currentState = recon.state;
+        saveDatabase(currentState);
+        broadcastEvent('STATE_UPDATED', currentState);
+      }
+
+      res.json({
+        success: true,
+        restoredCount,
+        totalMembers: (currentState.members || []).length,
+        state: currentState,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Gagal sinkronisasi restore anggota' });
+    }
   });
 
   // 10-Day Chat Retention Helper: Otomatis hapus pesan chat lebih dari 10 hari
