@@ -1624,7 +1624,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <div>
                         <div className="text-xs font-extrabold">2. Verifikasi Setoran</div>
                         <div className="text-[10px] text-slate-400">
-                          Verifikasi bukti setor transfer anggota
+                          Verifikasi bukti setor QRIS anggota
                         </div>
                       </div>
                     </div>

@@ -18,8 +18,6 @@ import {
   XCircle,
   Clock,
   QrCode,
-  Building,
-  Building2,
   Calendar,
   Eye,
   FileDown,
@@ -56,7 +54,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [jenisSetoran, setJenisSetoran] = useState<'kewajiban' | 'umum'>('kewajiban');
   const [jumlahHari, setJumlahHari] = useState<string>('');
   const [nominalUmum, setNominalUmum] = useState<string>('50000');
-  const [rekeningTujuan, setRekeningTujuan] = useState<string>('QRIS Resmi Koperasi HWS');
+  const [rekeningTujuan] = useState<string>('QRIS Resmi Koperasi HWS');
   const [metode] = useState<'qris'>('qris');
   const [buktiUrl, setBuktiUrl] = useState<string>('');
   const [catatan, setCatatan] = useState<string>('');
@@ -474,7 +472,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       ? 'SETORAN DITOLAK'
       : 'PENDING VERIFIKASI SETORAN';
 
-    drawRow('Rekening Tujuan / Metode:', `${deposit.rekeningTujuan} (${(deposit.metode || 'TRANSFER').toUpperCase()})`, 530);
+    drawRow('Metode Pembayaran:', `${deposit.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} (${(deposit.metode || 'QRIS').toUpperCase()})`, 530);
     drawRow('Status Verifikasi:', statusLabel, 570, true);
 
     ctx.fillStyle = isApproved ? '#ecfdf5' : isRejected ? '#fef2f2' : '#fffbeb';
@@ -939,7 +937,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   // ADMIN: Reject Deposit
   const handleRejectDeposit = async (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
-    const reason = prompt('Masukkan alasan penolakan setoran:') || 'Bukti transfer tidak valid/dana belum masuk';
+    const reason = prompt('Masukkan alasan penolakan setoran:') || 'Bukti pembayaran QRIS tidak valid/dana belum masuk';
 
     try {
       await fetch('/api/setoran/verify', {
@@ -1357,7 +1355,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 </div>
               </div>
 
-              {/* Upload Bukti Transfer */}
+              {/* Upload Bukti Pembayaran QRIS */}
               <div className="bg-slate-800/60 p-3.5 rounded-2xl border border-dashed border-slate-600">
                 <div className="flex justify-between items-center mb-1">
                   <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
@@ -1414,7 +1412,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             </form>
           </div>
 
-          {/* Right Column: QRIS Bank & Rekening Koperasi Preview */}
+          {/* Right Column: QRIS Resmi Koperasi Preview */}
           <div className="lg:col-span-5 space-y-4">
             {/* Dynamic QRIS Card */}
             <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 shadow-xl text-center">
@@ -1898,7 +1896,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                             type="button"
                             onClick={() => setPreviewBukti(dep.buktiTransferUrl || null)}
                             className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-sky-500/30 cursor-pointer"
-                            title="Lihat foto bukti transfer anggota"
+                            title="Lihat foto bukti resi QRIS anggota"
                           >
                             <Eye className="w-3 h-3" />
                             Foto Bukti
@@ -2018,7 +2016,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               </button>
             </div>
             <div className="p-4 flex items-center justify-center max-h-[75vh] overflow-auto">
-              <img src={previewBukti} alt="Bukti Transfer" className="max-w-full rounded-lg object-contain shadow-lg" />
+              <img src={previewBukti} alt="Bukti Resi QRIS" className="max-w-full rounded-lg object-contain shadow-lg" />
             </div>
           </div>
         </div>
@@ -2082,9 +2080,9 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                     </span>
                   </div>
                   <div className="flex justify-between py-0.5 border-b border-slate-100">
-                    <span className="text-slate-500">Tujuan / Jalur:</span>
+                    <span className="text-slate-500">Metode Pembayaran:</span>
                     <span className="font-semibold text-slate-800 truncate max-w-[200px]">
-                      {buktiSetorSuccess.rekeningTujuan} ({(buktiSetorSuccess.metode || 'TRANSFER').toUpperCase()})
+                      {buktiSetorSuccess.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} ({(buktiSetorSuccess.metode || 'QRIS').toUpperCase()})
                     </span>
                   </div>
                 </div>

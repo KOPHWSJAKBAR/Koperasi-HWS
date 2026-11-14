@@ -2336,7 +2336,7 @@ async function startServer() {
     });
   });
 
-  // Online Realtime Setoran Submission Endpoint (Req 2 & 4 & 5)
+  // Online Realtime Setoran Submission Endpoint (Khusus QRIS Resmi Koperasi)
   app.post('/api/setoran/submit', (req: Request, res: Response) => {
     try {
       const { deposit, sedekahEntry } = req.body;
@@ -2344,13 +2344,25 @@ async function startServer() {
         return res.status(400).json({ error: 'Data setoran tidak lengkap' });
       }
 
-      // User Req 3: Bukti setoran wajib di-upload saat anggota melakukan setoran tabungan pokok, tabungan umum, dan sedekah
-      if (deposit.metode !== 'tabungan_umum' && (!deposit.buktiTransferUrl || !deposit.buktiTransferUrl.trim())) {
-        return res.status(400).json({ error: 'Foto bukti transfer / setoran wajib di-upload.' });
+      // Hanya izinkan metode QRIS untuk semua setoran & sedekah
+      if (deposit.metode && deposit.metode !== 'qris') {
+        return res.status(400).json({
+          error: 'Metode transfer bank & potong saldo dinonaktifkan. Penyetoran dan sedekah hanya dapat menggunakan QRIS Resmi Koperasi.',
+        });
       }
+
+      // Bukti pembayaran / resi QRIS wajib di-upload
+      if (!deposit.buktiTransferUrl || !deposit.buktiTransferUrl.trim()) {
+        return res.status(400).json({ error: 'Foto bukti pembayaran / resi QRIS wajib di-upload.' });
+      }
+
+      deposit.metode = 'qris';
+      deposit.rekeningTujuan =
+        deposit.jenis === 'sedekah' ? 'QRIS Resmi Kas Berbagi' : 'QRIS Resmi Koperasi HWS';
 
       currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
       if (sedekahEntry && sedekahEntry.id) {
+        sedekahEntry.sumberDana = 'qris';
         currentState.sedekahList = [
           sedekahEntry,
           ...(currentState.sedekahList || []).filter((s: any) => s.id !== sedekahEntry.id),
@@ -2365,8 +2377,8 @@ async function startServer() {
         adminId: deposit.memberId,
         adminNama: deposit.memberNama,
         adminRole: 'member',
-        action: 'Pengajuan Setoran Online',
-        detail: `Mengajukan setoran ${deposit.jenis} sebesar Rp ${Number(deposit.nominal).toLocaleString('id-ID')} (${deposit.metode})`,
+        action: 'Pengajuan Setoran Online (QRIS)',
+        detail: `Mengajukan setoran ${deposit.jenis} sebesar Rp ${Number(deposit.nominal).toLocaleString('id-ID')} via QRIS Resmi`,
         targetId: deposit.id,
       });
 

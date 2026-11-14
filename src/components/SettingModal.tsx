@@ -5,7 +5,6 @@ import {
   AdminRole,
   MemberUser,
   WilayahKoperasi,
-  BankAccount,
   PengurusItem,
 } from '../types';
 import { formatRupiah, createAuditLog, syncStateToServer, validateMemberBiodata, sortMembersDesc } from '../lib/storage';
@@ -24,7 +23,6 @@ import {
   Server,
   Cloud,
   FileText,
-  DollarSign,
   Plus,
   Trash2,
   Upload,
@@ -45,7 +43,6 @@ import {
   Wrench,
   Eye,
   EyeOff,
-  Copy,
   Check,
   Zap,
   AlertCircle,
@@ -151,7 +148,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [backupError, setBackupError] = useState<string>('');
   const [isRestoringBackup, setIsRestoringBackup] = useState<boolean>(false);
 
-  // State Pengaturan Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum, No Rekening, QRIS)
+  // State Pengaturan Berbagi (Sedekah Subuh, Sedekah Jumat, Sedekah Umum, Nama Pemilik QRIS & QRIS)
   const [berbagiSubuh, setBerbagiSubuh] = useState<string>(
     state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh'
   );
@@ -160,12 +157,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   );
   const [berbagiUmum, setBerbagiUmum] = useState<string>(
     state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum'
-  );
-  const [berbagiBank, setBerbagiBank] = useState<string>(
-    state.pengaturanBerbagi?.bankName || 'Bank Syariah Indonesia (BSI)'
-  );
-  const [berbagiNoRek, setBerbagiNoRek] = useState<string>(
-    state.pengaturanBerbagi?.noRekening || '7123-4567-8901'
   );
   const [berbagiNamaPemilik, setBerbagiNamaPemilik] = useState<string>(
     state.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS'
@@ -182,8 +173,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       setBerbagiSubuh(state.pengaturanBerbagi.namaSubuh || 'Sedekah Subuh');
       setBerbagiJumat(state.pengaturanBerbagi.namaJumat || 'Sedekah Jumat');
       setBerbagiUmum(state.pengaturanBerbagi.namaUmum || 'Sedekah Umum');
-      setBerbagiBank(state.pengaturanBerbagi.bankName || 'Bank Syariah Indonesia (BSI)');
-      setBerbagiNoRek(state.pengaturanBerbagi.noRekening || '7123-4567-8901');
       setBerbagiNamaPemilik(state.pengaturanBerbagi.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS');
       setBerbagiQrisUrl(state.pengaturanBerbagi.qrisImageUrl || '');
     }
@@ -198,16 +187,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       }
     }
   }, [initialSubModal, isSuperAdmin, isMember]);
-
-  // Copy Rekening State for Non-Superadmin (Req 3, 4, 5)
-  const [copiedRekId, setCopiedRekId] = useState<string | null>(null);
-  const handleCopyRek = (id: string, text: string) => {
-    if (navigator?.clipboard?.writeText) {
-      navigator.clipboard.writeText(text);
-      setCopiedRekId(id);
-      setTimeout(() => setCopiedRekId(null), 2000);
-    }
-  };
 
   // Installer Wizard State with SDK Verification & Terms (Req 6, 9, 16)
   const [installWizardApp, setInstallWizardApp] = useState<'apk' | 'exe' | 'ios' | null>(null);
@@ -430,16 +409,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   // Multiplatform Audit Log Filter & Firestore Sync State (Req 2)
   const [auditPlatformFilter, setAuditPlatformFilter] = useState<'all' | 'web' | 'mobile_android' | 'mobile_ios' | 'desktop_pc'>('all');
   const [syncingFirestoreLogs, setSyncingFirestoreLogs] = useState(false);
-
-  // Rekening Penampungan Management
-  const [newBankName, setNewBankName] = useState('Bank Central Asia (BCA)');
-  const [newBankRek, setNewBankRek] = useState('');
-  const [newBankHolder, setNewBankHolder] = useState('KOPERASI HWS');
-  const [editingRekId, setEditingRekId] = useState<string | null>(null);
-  const [editRekName, setEditRekName] = useState('');
-  const [editRekNomor, setEditRekNomor] = useState('');
-  const [editRekHolder, setEditRekHolder] = useState('');
-  const [editRekIsPrimary, setEditRekIsPrimary] = useState(false);
 
   // Daftar Pengurus Management
   const [newPengurusJabatan, setNewPengurusJabatan] = useState('');
@@ -1033,7 +1002,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const handleSavePengaturanBerbagi = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEditPengaturanBerbagi) {
-      alert('Akses Ditolak: Hanya Admin Write, Admin Approval, dan Super Admin yang memiliki wewenang untuk mengubah pengaturan nama & rekening berbagi.');
+      alert('Akses Ditolak: Hanya Admin Write, Admin Approval, dan Super Admin yang memiliki wewenang untuk mengubah pengaturan nama & QRIS berbagi.');
       return;
     }
 
@@ -1043,15 +1012,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       const namaSubuhClean = berbagiSubuh.trim() || 'Sedekah Subuh';
       const namaJumatClean = berbagiJumat.trim() || 'Sedekah Jumat';
       const namaUmumClean = berbagiUmum.trim() || 'Sedekah Umum';
-      const bankClean = berbagiBank.trim() || 'Bank Syariah Indonesia (BSI)';
-      const noRekClean = berbagiNoRek.trim() || '7123-4567-8901';
       const namaPemilikClean = berbagiNamaPemilik.trim() || 'Koperasi Berbagi Mandiri HWS';
 
       await updateState((prev) => {
         const audit = createAuditLog(
           currentAdmin || ({ nama: 'Admin', role: 'admin_write' } as any),
           'Ubah Pengaturan Berbagi',
-          `${currentAdmin?.nama || 'Admin'} (${currentAdmin?.role || 'Admin'}) memperbarui nama program berbagi: [${namaSubuhClean}, ${namaJumatClean}, ${namaUmumClean}] dan Rekening Kas Berbagi: ${bankClean} ${noRekClean} a.n ${namaPemilikClean}.`
+          `${currentAdmin?.nama || 'Admin'} (${currentAdmin?.role || 'Admin'}) memperbarui nama program berbagi: [${namaSubuhClean}, ${namaJumatClean}, ${namaUmumClean}] & QRIS Resmi a.n ${namaPemilikClean}.`
         );
 
         return {
@@ -1060,8 +1027,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             namaSubuh: namaSubuhClean,
             namaJumat: namaJumatClean,
             namaUmum: namaUmumClean,
-            bankName: bankClean,
-            noRekening: noRekClean,
+            bankName: prev.pengaturanBerbagi?.bankName || 'QRIS Resmi Koperasi',
+            noRekening: prev.pengaturanBerbagi?.noRekening || 'QRIS-ONLY',
             namaPemilikRekening: namaPemilikClean,
             qrisImageUrl: berbagiQrisUrl.trim() || undefined,
           },
@@ -1069,7 +1036,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         };
       });
 
-      setBerbagiSaveMsg('✓ Pengaturan nama program berbagi & rekening kas koperasi berhasil diperbarui!');
+      setBerbagiSaveMsg('✓ Pengaturan nama program berbagi & QRIS resmi berhasil diperbarui!');
       setTimeout(() => {
         setBerbagiSaveMsg('');
         setSubModal(null);
@@ -1239,147 +1206,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     } catch {}
 
     alert('✓ Biodata, susunan kepengurusan & legalitas koperasi berhasil disimpan permanen di server dan database!');
-  };
-
-  // Add Rekening Penampungan
-  // Add Rekening Penampungan
-  const handleAddRekPenampungan = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newBankRek.trim()) {
-      alert('Nomor rekening penampungan wajib diisi.');
-      return;
-    }
-
-    const isFirst = (state.profile?.rekeningPenampungan || []).length === 0;
-    const newAccount: BankAccount = {
-      id: `rek-${Date.now()}`,
-      bankName: newBankName.trim() || 'Bank Central Asia (BCA)',
-      accountNumber: newBankRek.trim(),
-      accountHolder: newBankHolder.trim() || 'KOPERASI HWS',
-      isPrimary: isFirst,
-    };
-
-    const updatedList = [...(state.profile?.rekeningPenampungan || []), newAccount];
-
-    try {
-      await fetch('/api/profile/rekening-penampungan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rekeningPenampungan: updatedList,
-          adminName: currentAdmin?.nama || 'Super Admin',
-        }),
-      });
-    } catch (err) {
-      console.warn('Server add rekening notice:', err);
-    }
-
-    await updateState((prev) => ({
-      ...prev,
-      profile: {
-        ...prev.profile,
-        rekeningPenampungan: updatedList,
-      },
-    }));
-
-    setNewBankRek('');
-    alert('✓ Rekening penampungan koperasi berhasil ditambahkan!');
-  };
-
-  // Edit Rekening Penampungan
-  const handleSaveEditRek = async (rekId: string) => {
-    if (!editRekNomor.trim()) {
-      alert('Nomor rekening penampungan wajib diisi!');
-      return;
-    }
-
-    const finalBank = editRekName.trim() || 'Bank Central Asia (BCA)';
-    const finalNomor = editRekNomor.trim();
-    const finalHolder = editRekHolder.trim() || 'KOPERASI HWS';
-
-    const updatedList = (state.profile?.rekeningPenampungan || []).map((r) => {
-      if (r.id === rekId) {
-        return {
-          ...r,
-          bankName: finalBank,
-          accountNumber: finalNomor,
-          accountHolder: finalHolder,
-          isPrimary: editRekIsPrimary,
-        };
-      }
-      return editRekIsPrimary ? { ...r, isPrimary: false } : r;
-    });
-
-    try {
-      await fetch('/api/profile/rekening-penampungan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rekeningPenampungan: updatedList,
-          adminName: currentAdmin?.nama || 'Super Admin',
-        }),
-      });
-    } catch (err) {
-      console.warn('Server edit rekening notice:', err);
-    }
-
-    await updateState((prev) => ({
-      ...prev,
-      profile: {
-        ...prev.profile,
-        rekeningPenampungan: updatedList,
-      },
-    }));
-
-    setEditingRekId(null);
-    alert('✓ Rekening penampungan koperasi berhasil diperbarui!');
-  };
-
-  // Delete Rekening Penampungan (Req 1: Super admin dapat menghapus rekening penampungan)
-  const handleDeleteRekPenampungan = async (rekId: string) => {
-    const targetRek = (state.profile?.rekeningPenampungan || []).find((r) => r.id === rekId);
-    const confirmDelete = confirm(
-      `Hapus rekening penampungan ${targetRek?.bankName || ''} (${targetRek?.accountNumber || ''}) a/n ${targetRek?.accountHolder || ''}?`
-    );
-    if (!confirmDelete) return;
-
-    const filtered = (state.profile?.rekeningPenampungan || []).filter((r) => r.id !== rekId);
-    // If deleted account was primary, designate the first remaining account as primary
-    if (targetRek?.isPrimary && filtered.length > 0) {
-      filtered[0].isPrimary = true;
-    }
-
-    try {
-      await fetch('/api/profile/rekening-penampungan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rekeningPenampungan: filtered,
-          adminName: currentAdmin?.nama || 'Super Admin',
-        }),
-      });
-    } catch (err) {
-      console.warn('Server delete rekening notice:', err);
-    }
-
-    await updateState((prev) => {
-      const audit = createAuditLog(
-        currentAdmin || ({ id: 'admin', nama: 'Super Admin', username: 'Abzqar', role: 'super_admin' } as any),
-        'Hapus Rekening Penampungan',
-        `Menghapus rekening penampungan ${targetRek?.bankName || ''} ${targetRek?.accountNumber || ''} a/n ${targetRek?.accountHolder || ''}`,
-        rekId
-      );
-      return {
-        ...prev,
-        profile: {
-          ...prev.profile,
-          rekeningPenampungan: filtered,
-        },
-        auditLogs: [audit, ...(prev.auditLogs || [])],
-      };
-    });
-
-    alert('✓ Rekening penampungan berhasil dihapus!');
   };
 
   // Add Pengurus Koperasi
@@ -2652,7 +2478,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span>›</span>
               </button>
 
-              {/* Biodata & Rekening Penampungan Koperasi */}
+              {/* Biodata & QRIS Resmi Koperasi */}
               <button
                 onClick={() => setSubModal('profil_koperasi')}
                 className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
@@ -2660,9 +2486,9 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <div className="flex items-center gap-2.5">
                   <Building className="w-4 h-4 text-emerald-400" />
                   <div className="text-left">
-                    <div className="font-extrabold text-white">Biodata & Rekening Penampungan Koperasi</div>
+                    <div className="font-extrabold text-white">Biodata & QRIS Resmi Koperasi</div>
                     <div className="text-[10px] text-slate-400 font-normal">
-                      Kelola legalitas, susunan pengurus, dan rekening bank
+                      Kelola legalitas, susunan pengurus, dan barcode QRIS koperasi
                     </div>
                   </div>
                 </div>
@@ -2786,7 +2612,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <span>›</span>
               </button>
 
-              {/* Req 1 & 8: Pengaturan Menu Berbagi (Nama Sedekah, No Rekening & QRIS) */}
+              {/* Req 1 & 8: Pengaturan Menu Berbagi (Nama Sedekah & QRIS) */}
               <button
                 type="button"
                 onClick={() => setSubModal('pengaturan_berbagi')}
@@ -2798,10 +2624,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                   <div className="text-left">
                     <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
-                      Pengaturan Menu Berbagi (Nama Sedekah, Rekening & QRIS)
+                      Pengaturan Menu Berbagi (Nama Sedekah & QRIS)
                     </div>
                     <div className="text-[10px] text-rose-300 font-normal">
-                      Ubah nama program ({berbagiSubuh}, {berbagiJumat}, {berbagiUmum}) & no rekening
+                      Ubah nama program ({berbagiSubuh}, {berbagiJumat}, {berbagiUmum}) & barcode QRIS
                     </div>
                   </div>
                 </div>
@@ -2848,7 +2674,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </button>
             </div>
           ) : (
-            /* Admin Write, Approval, Laporan Biodata & Rekening Penampungan Options */
+            /* Admin Write, Approval, Laporan Biodata & Pengaturan Menu Berbagi Options */
             <div className="space-y-3">
               <div className="p-3 bg-emerald-950/40 rounded-2xl border border-emerald-500/40 text-emerald-300 text-xs flex items-start gap-2.5">
                 <span className="text-base leading-none">🏢</span>
@@ -2857,7 +2683,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     Hak Akses Pengaturan: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_approval' ? 'Admin Approval' : currentAdmin?.role === 'admin_kelola' ? 'Admin Kelola' : 'Admin Laporan'}
                   </div>
                   <div className="text-[11px] text-emerald-400/90 mt-0.5">
-                    Sesuai wewenang sistem, Anda dapat <strong>merubah Biodata Koperasi</strong> serta <strong>Nama & Rekening Menu Berbagi</strong>.
+                    Sesuai wewenang sistem, Anda dapat <strong>merubah Biodata Koperasi</strong> serta <strong>Nama & QRIS Menu Berbagi</strong>.
                   </div>
                 </div>
               </div>
@@ -2877,7 +2703,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       Biodata & Legalitas Resmi Koperasi
                     </div>
                     <div className="text-[10px] text-slate-400 font-normal mt-0.5">
-                      Ubah data SK Kemenkumham, NPWP, NIK, alamat kantor, dan susunan pengurus
+                      Ubah data SK Kemenkumham, NPWP, NIK, alamat kantor, susunan pengurus & QRIS
                     </div>
                   </div>
                 </div>
@@ -2897,69 +2723,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     </div>
                     <div className="text-left">
                       <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
-                        Pengaturan Menu Berbagi (Nama Sedekah & Rekening)
+                        Pengaturan Menu Berbagi (Nama Sedekah & QRIS)
                       </div>
                       <div className="text-[10px] text-rose-300 font-normal mt-0.5">
-                        Wewenang {currentAdmin?.role === 'admin_write' ? 'Admin Write' : 'Admin Approval'}: Ubah nama {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & no rekening
+                        Wewenang {currentAdmin?.role === 'admin_write' ? 'Admin Write' : 'Admin Approval'}: Ubah nama {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & barcode QRIS
                       </div>
                     </div>
                   </div>
                   <span className="text-rose-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
                 </button>
               )}
-
-              {/* Kartu Rekening Penampungan Resmi (View Only dengan tombol Salin) */}
-              <div className="p-3.5 bg-[#162035] rounded-2xl border border-slate-700/80 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <DollarSign className="w-4 h-4 text-amber-400" />
-                    <span className="font-extrabold text-white text-xs">
-                      Rekening Penampungan Resmi ({state.profile.rekeningPenampungan.length})
-                    </span>
-                  </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
-                    Mode Lihat Saja
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  {state.profile.rekeningPenampungan.map((rek) => (
-                    <div
-                      key={rek.id}
-                      className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-750 flex items-center justify-between"
-                    >
-                      <div>
-                        <div className="text-xs font-extrabold text-white">{rek.bankName}</div>
-                        <div className="font-mono text-xs font-bold text-amber-400 tracking-wider">
-                          {rek.accountNumber}
-                        </div>
-                        <div className="text-[10px] text-slate-400">a/n {rek.accountHolder}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyRek(rek.id, rek.accountNumber)}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all ${
-                          copiedRekId === rek.id
-                            ? 'bg-emerald-500 text-slate-950 font-black'
-                            : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
-                        }`}
-                        title="Salin Nomor Rekening"
-                      >
-                        {copiedRekId === rek.id ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-slate-950" />
-                            <span>Tersalin!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Salin</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
           )}
 
@@ -3614,22 +3387,22 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         </div>
       )}
 
-      {/* ================= SUB-MODAL: PROFIL, BIODATA & REKENING PENAMPUNGAN ================= */}
+      {/* ================= SUB-MODAL: PROFIL, BIODATA & QRIS RESMI KOPERASI ================= */}
       {subModal === 'profil_koperasi' && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
               <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
                 <div>
                   <h3 className="text-sm font-extrabold text-white">
-                    Biodata & Rekening Penampungan Koperasi HWS
+                    Biodata & QRIS Resmi Koperasi HWS
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Data legalitas, alamat, visi misi, dan rekening penampungan koperasi
+                    Data legalitas, alamat, visi misi, dan QRIS resmi koperasi
                   </p>
                   {!canEditBiodata && (
                     <div className="mt-2 p-2 bg-emerald-950/60 border border-emerald-500/40 rounded-xl text-emerald-300 text-[11px] font-medium flex items-center gap-1.5">
                       <span>👁️</span>
-                      <span>Mode Lihat Saja: Akun Anda hanya dapat melihat biodata & rekening penampungan resmi.</span>
+                      <span>Mode Lihat Saja: Akun Anda hanya dapat melihat biodata & QRIS resmi koperasi.</span>
                     </div>
                   )}
                   {canEditBiodata && !isSuperAdmin && (
@@ -3943,295 +3716,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                 )}
               </form>
-
-              {/* SECTION: REKENING BANK PENAMPUNGAN (BISA TAMBAH, KURANG & EDIT NOMOR / ATAS NAMA) */}
-              <div className="space-y-3">
-                <div className="font-bold text-sky-400 text-xs">
-                  Rekening Bank Penampungan Koperasi ({state.profile.rekeningPenampungan.length})
-                </div>
-
-                <div className="space-y-2">
-                  {(state.profile?.rekeningPenampungan || []).map((rek) => (
-                    <div
-                      key={rek.id}
-                      className={`p-3 bg-slate-800 rounded-2xl border transition-all flex flex-col gap-2 ${
-                        rek.isPrimary ? 'border-amber-500/50 bg-slate-850' : 'border-slate-700'
-                      }`}
-                    >
-                      {editingRekId === rek.id ? (
-                        <div className="space-y-3 p-1">
-                          <div className="flex items-center justify-between pb-1.5 border-b border-slate-700">
-                            <span className="font-bold text-amber-400 text-xs flex items-center gap-1.5">
-                              <Edit2 className="w-3.5 h-3.5" /> Edit Rekening Penampungan
-                            </span>
-                            {rek.isPrimary && (
-                              <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold">
-                                Rekening Utama Saat Ini
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                            <div>
-                              <label className="block text-[10px] text-slate-400 mb-1 font-semibold">Nama Bank</label>
-                              <select
-                                value={[
-                                  'Bank Central Asia (BCA)',
-                                  'Bank Mandiri',
-                                  'Bank Rakyat Indonesia (BRI)',
-                                  'Bank Negara Indonesia (BNI)',
-                                  'Bank Syariah Indonesia (BSI)',
-                                  'Bank CIMB Niaga',
-                                  'Bank Permata',
-                                  'Bank Danamon',
-                                  'Bank Tabungan Negara (BTN)',
-                                  'Bank DKI',
-                                  'Bank BJB',
-                                  'Bank Neo Commerce',
-                                  'Bank Jago',
-                                  'Seabank',
-                                ].includes(editRekName) ? editRekName : 'lainnya'}
-                                onChange={(e) => {
-                                  if (e.target.value !== 'lainnya') {
-                                    setEditRekName(e.target.value);
-                                  } else {
-                                    setEditRekName('');
-                                  }
-                                }}
-                                className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
-                              >
-                                <option value="Bank Central Asia (BCA)">Bank Central Asia (BCA)</option>
-                                <option value="Bank Mandiri">Bank Mandiri</option>
-                                <option value="Bank Rakyat Indonesia (BRI)">Bank Rakyat Indonesia (BRI)</option>
-                                <option value="Bank Negara Indonesia (BNI)">Bank Negara Indonesia (BNI)</option>
-                                <option value="Bank Syariah Indonesia (BSI)">Bank Syariah Indonesia (BSI)</option>
-                                <option value="Bank CIMB Niaga">Bank CIMB Niaga</option>
-                                <option value="Bank Permata">Bank Permata</option>
-                                <option value="Bank Danamon">Bank Danamon</option>
-                                <option value="Bank Tabungan Negara (BTN)">Bank Tabungan Negara (BTN)</option>
-                                <option value="Bank DKI">Bank DKI</option>
-                                <option value="Bank BJB">Bank BJB</option>
-                                <option value="Bank Neo Commerce">Bank Neo Commerce</option>
-                                <option value="Bank Jago">Bank Jago</option>
-                                <option value="Seabank">Seabank</option>
-                                <option value="lainnya">Bank Lainnya (Ketik Manual)...</option>
-                              </select>
-                              {![
-                                'Bank Central Asia (BCA)',
-                                'Bank Mandiri',
-                                'Bank Rakyat Indonesia (BRI)',
-                                'Bank Negara Indonesia (BNI)',
-                                'Bank Syariah Indonesia (BSI)',
-                                'Bank CIMB Niaga',
-                                'Bank Permata',
-                                'Bank Danamon',
-                                'Bank Tabungan Negara (BTN)',
-                                'Bank DKI',
-                                'Bank BJB',
-                                'Bank Neo Commerce',
-                                'Bank Jago',
-                                'Seabank',
-                              ].includes(editRekName) && (
-                                <input
-                                  type="text"
-                                  value={editRekName}
-                                  onChange={(e) => setEditRekName(e.target.value)}
-                                  placeholder="Ketik nama bank..."
-                                  className="w-full mt-1.5 p-2 bg-slate-900 border border-amber-500/50 rounded-xl text-white text-xs focus:outline-none"
-                                />
-                              )}
-                            </div>
-
-                            <div>
-                              <label className="block text-[10px] text-slate-400 mb-1 font-semibold">Nomor Rekening</label>
-                              <input
-                                type="text"
-                                required
-                                value={editRekNomor}
-                                onChange={(e) => setEditRekNomor(e.target.value)}
-                                placeholder="Contoh: 5490706161"
-                                className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs font-bold focus:border-amber-400 focus:outline-none"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-[10px] text-slate-400 mb-1 font-semibold">Atas Nama (Pemilik Rekening)</label>
-                              <input
-                                type="text"
-                                required
-                                value={editRekHolder}
-                                onChange={(e) => setEditRekHolder(e.target.value)}
-                                placeholder="Contoh: KOPERASI HWS"
-                                className="w-full p-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-700/60">
-                            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
-                              <input
-                                type="checkbox"
-                                checked={editRekIsPrimary}
-                                onChange={(e) => setEditRekIsPrimary(e.target.checked)}
-                                className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
-                              />
-                              <span className="font-semibold text-slate-200">
-                                Jadikan Rekening Utama (Primary) untuk Pembayaran
-                              </span>
-                            </label>
-
-                            <div className="flex gap-2 justify-end">
-                              <button
-                                type="button"
-                                onClick={() => setEditingRekId(null)}
-                                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-xs font-bold transition-all"
-                              >
-                                Batal
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveEditRek(rek.id)}
-                                className="px-4 py-1.5 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 font-black rounded-xl text-xs transition-all shadow-md flex items-center gap-1.5"
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                                <span>Simpan Perubahan</span>
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-white text-xs">{rek.bankName}</span>
-                              {rek.isPrimary && (
-                                <span className="text-[9px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-black tracking-wide">
-                                  UTAMA
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-mono text-amber-400 font-bold text-sm tracking-wider mt-0.5">
-                              {rek.accountNumber}
-                            </div>
-                            <div className="text-[10px] text-slate-400">a/n {rek.accountHolder}</div>
-                          </div>
-
-                          {isSuperAdmin ? (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingRekId(rek.id);
-                                  setEditRekName(rek.bankName);
-                                  setEditRekNomor(rek.accountNumber);
-                                  setEditRekHolder(rek.accountHolder);
-                                  setEditRekIsPrimary(!!rek.isPrimary);
-                                }}
-                                className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-amber-400 rounded-xl font-bold text-xs flex items-center gap-1 transition-all"
-                                title="Edit Nomor Rekening / Atas Nama"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                                <span>Edit</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteRekPenampungan(rek.id)}
-                                className="p-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-400 rounded-xl border border-red-500/30 transition-all"
-                                title="Hapus Rekening"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleCopyRek(rek.id, rek.accountNumber)}
-                              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-all ${
-                                copiedRekId === rek.id
-                                  ? 'bg-emerald-500 text-slate-950 font-black'
-                                  : 'bg-slate-700 hover:bg-slate-600 text-slate-200'
-                              }`}
-                              title="Salin Nomor Rekening"
-                            >
-                              {copiedRekId === rek.id ? (
-                                <>
-                                  <Check className="w-3.5 h-3.5 text-slate-950" />
-                                  <span>Tersalin!</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="w-3.5 h-3.5" />
-                                  <span>Salin</span>
-                                </>
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Form Tambah Rekening Penampungan Baru */}
-                {isSuperAdmin && (
-                  <form onSubmit={handleAddRekPenampungan} className="p-3 bg-[#162035] rounded-2xl border border-slate-700 space-y-2">
-                    <div className="font-bold text-white">+ Tambah Rekening Penampungan Baru</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[10px] text-slate-400 font-semibold mb-1">Nama Bank</label>
-                        <select
-                          value={newBankName}
-                          onChange={(e) => setNewBankName(e.target.value)}
-                          className="w-full p-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
-                        >
-                          <option>Bank Central Asia (BCA)</option>
-                          <option>Bank Mandiri</option>
-                          <option>Bank Rakyat Indonesia (BRI)</option>
-                          <option>Bank Negara Indonesia (BNI)</option>
-                          <option>Bank Syariah Indonesia (BSI)</option>
-                          <option>Bank CIMB Niaga</option>
-                          <option>Bank Permata</option>
-                          <option>Bank Danamon</option>
-                          <option>Bank Tabungan Negara (BTN)</option>
-                          <option>Bank DKI</option>
-                          <option>Bank BJB</option>
-                          <option>Bank Neo Commerce</option>
-                          <option>Bank Jago</option>
-                          <option>Seabank</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] text-slate-400 font-semibold mb-1">Nomor Rekening</label>
-                        <input
-                          type="text"
-                          required
-                          value={newBankRek}
-                          onChange={(e) => setNewBankRek(e.target.value)}
-                          placeholder="Nomor rekening"
-                          className="w-full p-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs font-bold focus:border-amber-400 focus:outline-none"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 font-semibold mb-1">Atas Nama</label>
-                      <input
-                        type="text"
-                        required
-                        value={newBankHolder}
-                        onChange={(e) => setNewBankHolder(e.target.value)}
-                        placeholder="Nama pemilik rekening (Contoh: KOPERASI HWS)"
-                        className="w-full p-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-semibold focus:border-amber-400 focus:outline-none"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      className="w-full py-2 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 font-black text-xs rounded-xl shadow-md transition-all cursor-pointer"
-                    >
-                      + Simpan Rekening Baru
-                    </button>
-                  </form>
-                )}
-              </div>
 
               {/* QRIS Upload */}
               <div className="bg-slate-800/80 p-3.5 rounded-2xl border border-slate-700 space-y-2">
@@ -5758,7 +5242,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         </div>
       )}
 
-      {/* ================= SUB-MODAL: PENGATURAN MENU BERBAGI (NAMA SEDEKAH, REKENING & QRIS) ================= */}
+      {/* ================= SUB-MODAL: PENGATURAN MENU BERBAGI (NAMA SEDEKAH & QRIS) ================= */}
       {subModal === 'pengaturan_berbagi' && canEditPengaturanBerbagi && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <div className="bg-[#0f172a] text-slate-100 border border-rose-500/50 w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-auto relative animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col">
@@ -5838,50 +5322,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
               </div>
 
-              <div className="p-3 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2">
-                <span className="font-extrabold text-amber-300 text-xs block">
-                  2. Informasi Rekening Bank Kas Berbagi Koperasi:
-                </span>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Nama Bank</label>
-                  <input
-                    type="text"
-                    required
-                    value={berbagiBank}
-                    onChange={(e) => setBerbagiBank(e.target.value)}
-                    placeholder="Contoh: Bank Syariah Indonesia (BSI)"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Nomor Rekening Kas Berbagi</label>
-                  <input
-                    type="text"
-                    required
-                    value={berbagiNoRek}
-                    onChange={(e) => setBerbagiNoRek(e.target.value)}
-                    placeholder="Contoh: 7123-4567-8901"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-amber-400 font-mono font-bold focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-300 mb-1">Atas Nama Rekening</label>
-                  <input
-                    type="text"
-                    required
-                    value={berbagiNamaPemilik}
-                    onChange={(e) => setBerbagiNamaPemilik(e.target.value)}
-                    placeholder="Contoh: Koperasi Berbagi Mandiri HWS"
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
               {/* Upload Gambar Barcode QRIS Khusus Sedekah / Menu Berbagi */}
               <div className="p-3 bg-slate-900/90 rounded-2xl border border-rose-500/40 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="font-extrabold text-rose-300 text-xs block">
-                    3. Upload Barcode QRIS Khusus Menu Berbagi / Sedekah:
+                    2. Upload Barcode QRIS Khusus Menu Berbagi / Sedekah:
                   </span>
                   {berbagiQrisUrl && (
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-400 font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30">
@@ -5889,8 +5334,21 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     </span>
                   )}
                 </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Nama Merchant / Pemilik QRIS Kas Berbagi
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={berbagiNamaPemilik}
+                    onChange={(e) => setBerbagiNamaPemilik(e.target.value)}
+                    placeholder="Contoh: Koperasi Berbagi Mandiri HWS"
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-bold focus:border-rose-500 focus:outline-none"
+                  />
+                </div>
                 <p className="text-[10px] text-slate-400">
-                  Barcode QRIS ini akan otomatis tampil pada Menu Berbagi / Sedekah di dashboard anggota saat memilih metode QRIS.
+                  Barcode QRIS ini akan otomatis tampil pada Menu Berbagi / Sedekah di dashboard anggota sebagai satu-satunya metode pembayaran sedekah resmi.
                 </p>
 
                 {berbagiQrisUrl ? (
@@ -5933,8 +5391,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                                   namaSubuh: prev.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh',
                                   namaJumat: prev.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat',
                                   namaUmum: prev.pengaturanBerbagi?.namaUmum || 'Sedekah Umum',
-                                  bankName: prev.pengaturanBerbagi?.bankName || 'Bank Syariah Indonesia (BSI)',
-                                  noRekening: prev.pengaturanBerbagi?.noRekening || '7123-4567-8901',
+                                  bankName: prev.pengaturanBerbagi?.bankName || 'QRIS Resmi Koperasi',
+                                  noRekening: prev.pengaturanBerbagi?.noRekening || 'QRIS-ONLY',
                                   namaPemilikRekening: prev.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS',
                                   qrisImageUrl: '',
                                 },
@@ -5977,8 +5435,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     setBerbagiSubuh('Sedekah Subuh');
                     setBerbagiJumat('Sedekah Jumat');
                     setBerbagiUmum('Sedekah Umum');
-                    setBerbagiBank('Bank Syariah Indonesia (BSI)');
-                    setBerbagiNoRek('7123-4567-8901');
                     setBerbagiNamaPemilik('Koperasi Berbagi Mandiri HWS');
                   }}
                   className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
@@ -5991,7 +5447,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-black rounded-xl text-xs shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   <Check className="w-4 h-4" />
-                  <span>{isSavingBerbagi ? 'Menyimpan...' : 'Simpan Nama & Rekening Berbagi'}</span>
+                  <span>{isSavingBerbagi ? 'Menyimpan...' : 'Simpan Nama & QRIS Berbagi'}</span>
                 </button>
               </div>
             </form>

@@ -26,7 +26,6 @@ import {
   Clock,
   ShieldCheck,
   Send,
-  Copy,
   Check,
   QrCode,
   Upload,
@@ -66,8 +65,6 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const namaSubuh = state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh';
   const namaJumat = state.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat';
   const namaUmum = state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum';
-  const bankName = state.pengaturanBerbagi?.bankName || 'Bank Syariah Indonesia (BSI)';
-  const noRekening = state.pengaturanBerbagi?.noRekening || '7123-4567-8901';
   const namaPemilikRekening = state.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS';
   // Gambar QRIS khusus sedekah dari pengaturan berbagi atau fallback profil koperasi
   const sedekahQrisUrl = state.pengaturanBerbagi?.qrisImageUrl || state.profile.qrisImageUrl;
@@ -164,14 +161,11 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const [selectedJenis, setSelectedJenis] = useState<JenisSedekahBerbagi>('sedekah_subuh');
   // User Req: hapuskan nominal angka berbagi hanya input nominal manual
   const [customNominal, setCustomNominal] = useState<string>('');
-  const [sumberDana] = useState<'qris' | 'tabungan_umum'>('qris');
+  const sumberDana = 'qris' as const;
   const [doaPesan, setDoaPesan] = useState<string>('');
   const [buktiTransferUrl, setBuktiTransferUrl] = useState<string>('');
   const [isSubmittingDonasi, setIsSubmittingDonasi] = useState(false);
   const [donasiSuccessEntry, setDonasiSuccessEntry] = useState<SedekahBerbagiEntry | null>(null);
-  const [copiedRekening, setCopiedRekening] = useState(false);
-  // Default tampilkan preview QRIS agar anggota langsung dapat melihat barcode ketika membuka sedekah
-  const [showQrisPreview, setShowQrisPreview] = useState(true);
   const [previewBukti, setPreviewBukti] = useState<string | null>(null);
 
   // ================= STATE ADMIN PENYALURAN =================
@@ -257,16 +251,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     .reduce((sum, e) => sum + e.nominal, 0);
   const umumSaldo = Math.max(0, umumMasuk - umumKeluar);
 
-  // Salin No Rekening
-  const handleCopyNoRek = () => {
-    if (navigator?.clipboard?.writeText) {
-      navigator.clipboard.writeText(noRekening.replace(/\D/g, ''));
-      setCopiedRekening(true);
-      setTimeout(() => setCopiedRekening(false), 2500);
-    }
-  };
-
-  // Upload Bukti Transfer JPG/PNG
+  // Upload Bukti Pembayaran QRIS JPG/PNG
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -324,19 +309,10 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       return;
     }
 
-    // User Req 3: Bukti setoran wajib di upload saat anggota melakukan setoran tabungan pokok, tabungan umum, dan sedekah
-    if (sumberDana !== 'tabungan_umum' && (!buktiTransferUrl || !buktiTransferUrl.trim())) {
-      alert('Foto bukti transfer atau resi QRIS wajib di-upload saat melakukan sedekah.');
+    // User Req: Sedekah hanya dapat menggunakan QRIS dan wajib melampirkan foto bukti/resi QRIS
+    if (!buktiTransferUrl || !buktiTransferUrl.trim()) {
+      alert('Foto bukti pembayaran / resi QRIS wajib di-upload saat melakukan sedekah.');
       return;
-    }
-
-    if (sumberDana === 'tabungan_umum' && currentMember) {
-      if (currentMember.saldoUmum < nominal) {
-        alert(
-          `Saldo Tabungan Umum Anda (${formatRupiah(currentMember.saldoUmum)}) tidak mencukupi untuk nominal ${formatRupiah(nominal)}. Silakan gunakan metode QRIS atau sesuaikan nominal.`
-        );
-        return;
-      }
     }
 
     const jenisLabel = getJenisLabel(selectedJenis);
@@ -561,7 +537,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   // Tolak Donasi Berbagi (Admin Only)
   const handleRejectDonasi = async (entry: SedekahBerbagiEntry) => {
     if (!isAdmin) return;
-    const reason = prompt(`Masukkan alasan penolakan donasi dari ${entry.donaturNama || 'Donatur'}:`, 'Data transfer tidak valid / tidak masuk');
+    const reason = prompt(`Masukkan alasan penolakan donasi dari ${entry.donaturNama || 'Donatur'}:`, 'Bukti pembayaran QRIS tidak valid / dana belum masuk');
     if (reason === null) return;
 
     try {
@@ -1237,8 +1213,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </div>
 
                 {/* QRIS Code Preview Box */}
-                {(showQrisPreview || sumberDana === 'qris') && (
-                  <div className="p-4 bg-white rounded-2xl text-slate-900 text-center space-y-2.5 border-2 border-rose-500 shadow-xl max-w-xs mx-auto animate-in zoom-in-95">
+                <div className="p-4 bg-white rounded-2xl text-slate-900 text-center space-y-2.5 border-2 border-rose-500 shadow-xl max-w-xs mx-auto animate-in zoom-in-95">
                     <div className="flex items-center justify-between border-b pb-1.5 border-slate-200">
                       <div className="flex items-center gap-1.5">
                         <span className="text-red-600 font-black text-base tracking-tighter">QRIS</span>
@@ -1306,7 +1281,6 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                       </button>
                     )}
                   </div>
-                )}
               </div>
 
               {/* Metode Pembayaran: Khusus QRIS */}
@@ -1335,49 +1309,47 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </div>
               </div>
 
-              {/* Upload Foto Bukti Transfer (Wajib jika transfer / QRIS - User Req 3) */}
-              {sumberDana !== 'tabungan_umum' && (
-                <div className="bg-slate-850 p-3 rounded-2xl border border-dashed border-slate-700 space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-300 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <span>Foto Bukti Transaksi / Resi QRIS:</span>
-                      <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
-                    </span>
-                    {buktiTransferUrl ? (
-                      <span className="text-emerald-400 text-[10px] font-bold">✓ Foto terlampir</span>
-                    ) : (
-                      <span className="text-amber-400 text-[10px]">Format JPG / PNG</span>
-                    )}
+              {/* Upload Foto Bukti Resi QRIS (Wajib) */}
+              <div className="bg-slate-850 p-3 rounded-2xl border border-dashed border-slate-700 space-y-1.5">
+                <label className="block text-xs font-bold text-slate-300 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <span>Foto Bukti Transaksi / Resi QRIS:</span>
+                    <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
+                  </span>
+                  {buktiTransferUrl ? (
+                    <span className="text-emerald-400 text-[10px] font-bold">✓ Foto terlampir</span>
+                  ) : (
+                    <span className="text-amber-400 text-[10px]">Format JPG / PNG</span>
+                  )}
+                </label>
+                <div className="flex items-center gap-3">
+                  <label className={`flex-1 p-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                    buktiTransferUrl
+                      ? 'bg-slate-800 border border-emerald-500/50 text-emerald-300'
+                      : 'bg-slate-800 border border-slate-700 hover:border-slate-500 text-slate-300'
+                  }`}>
+                    <Upload className="w-4 h-4 text-amber-400" />
+                    <span>{buktiTransferUrl ? 'Ganti Foto Bukti Resi QRIS' : 'Pilih File Foto Bukti Resi QRIS *'}</span>
+                    <input
+                      type="file"
+                      required
+                      accept="image/jpeg,image/png,image/jpg"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
                   </label>
-                  <div className="flex items-center gap-3">
-                    <label className={`flex-1 p-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors ${
-                      buktiTransferUrl
-                        ? 'bg-slate-800 border border-emerald-500/50 text-emerald-300'
-                        : 'bg-slate-800 border border-slate-700 hover:border-slate-500 text-slate-300'
-                    }`}>
-                      <Upload className="w-4 h-4 text-amber-400" />
-                      <span>{buktiTransferUrl ? 'Ganti Foto Bukti Transfer' : 'Pilih File Foto Bukti Resi Transfer *'}</span>
-                      <input
-                        type="file"
-                        required
-                        accept="image/jpeg,image/png,image/jpg"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                      />
-                    </label>
-                    {buktiTransferUrl && (
-                      <button
-                        type="button"
-                        onClick={() => setPreviewBukti(buktiTransferUrl)}
-                        className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-xl text-xs font-bold border border-sky-500/30 flex items-center gap-1 cursor-pointer shrink-0"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Pratinjau</span>
-                      </button>
-                    )}
-                  </div>
+                  {buktiTransferUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setPreviewBukti(buktiTransferUrl)}
+                      className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-xl text-xs font-bold border border-sky-500/30 flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Pratinjau</span>
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
 
               {/* Doa / Pesan Kebaikan */}
               <div>
@@ -1416,7 +1388,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                     isSubmittingDonasi ||
                     !customNominal ||
                     Number(customNominal) <= 0 ||
-                    (sumberDana !== 'tabungan_umum' && !buktiTransferUrl)
+                    !buktiTransferUrl
                   }
                   className="w-full py-3 bg-gradient-to-r from-rose-500 via-rose-600 to-amber-600 hover:from-rose-400 hover:to-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl shadow-lg shadow-rose-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
@@ -1424,8 +1396,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                   <span>
                     {isSubmittingDonasi
                       ? 'Mengirim Pengajuan Sedekah...'
-                      : sumberDana !== 'tabungan_umum' && !buktiTransferUrl
-                      ? '⚠️ Upload Bukti Transfer Dahulu'
+                      : !buktiTransferUrl
+                      ? '⚠️ Upload Bukti Resi QRIS Dahulu'
                       : `Bismillah, Kirim Donasi ${formatRupiah(Number(customNominal) || 0)} (Konfirmasi Admin)`}
                   </span>
                 </button>
@@ -1616,7 +1588,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                       : `Tidak ada riwayat donasi dengan status "${riwayatFilterStatus}".`}
                   </div>
                   <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-                    Kirimkan donasi sedekah subuh, jumat berkah, atau sedekah umum secara mudah melalui transfer QRIS atau tabungan umum.
+                    Kirimkan donasi sedekah subuh, jumat berkah, atau sedekah umum secara mudah melalui scan QRIS resmi koperasi.
                   </p>
                   <div className="pt-2">
                     <button
@@ -1661,7 +1633,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                         <div className="text-[11px] text-slate-400 flex items-center gap-2">
                           <span className="font-mono text-slate-300">{entry.tanggal} {entry.jam}</span>
                           <span>•</span>
-                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Potong Tabungan Umum' : 'QRIS Resmi'}</b></span>
+                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum (Arsip)' : 'QRIS Resmi'}</b></span>
                         </div>
 
                         {entry.keterangan && (
@@ -1712,7 +1684,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                       Antrean Konfirmasi Donasi Berbagi ({pendingSedekahList.length})
                     </div>
                     <div className="text-[10px] text-purple-300">
-                      Periksa transfer anggota, konfirmasi donasi untuk dicatat resmi pada Buku Kas Koperasi.
+                      Periksa bukti scan QRIS anggota, konfirmasi donasi untuk dicatat resmi pada Buku Kas Koperasi.
                     </div>
                   </div>
                 </div>
@@ -1759,7 +1731,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                             className="text-[11px] text-sky-400 hover:underline flex items-center gap-1 font-bold pt-0.5 cursor-pointer"
                           >
                             <Eye className="w-3.5 h-3.5" />
-                            <span>Lihat Foto Bukti Resi Transfer</span>
+                            <span>Lihat Foto Bukti Resi QRIS</span>
                           </button>
                         )}
                       </div>
@@ -2187,12 +2159,12 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           )}
         </div>
 
-        {/* Modal Pratinjau Foto Bukti Transfer */}
+        {/* Modal Pratinjau Foto Bukti Resi QRIS */}
         {previewBukti && (
           <div className="fixed inset-0 z-60 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
             <div className="bg-[#0f172a] border border-slate-700 max-w-lg w-full rounded-2xl overflow-hidden shadow-2xl">
               <div className="p-3 bg-[#162035] border-b border-slate-700 flex justify-between items-center">
-                <span className="text-xs font-bold text-white">Foto Bukti Transfer Sedekah</span>
+                <span className="text-xs font-bold text-white">Foto Bukti Resi QRIS Sedekah</span>
                 <button
                   type="button"
                   onClick={() => setPreviewBukti(null)}
@@ -2204,7 +2176,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               <div className="p-4 flex items-center justify-center max-h-[75vh] overflow-auto">
                 <img
                   src={previewBukti}
-                  alt="Bukti Transfer"
+                  alt="Bukti Resi QRIS Sedekah"
                   className="max-w-full rounded-lg object-contain shadow-lg"
                 />
               </div>
