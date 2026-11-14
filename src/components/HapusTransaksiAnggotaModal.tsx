@@ -6,8 +6,7 @@ import {
   MemberTransaction,
   WilayahKoperasi,
 } from '../types';
-import { formatRupiah, createAuditLog } from '../lib/storage';
-import { assertInternetForTransaction } from './NetworkStatusGuard';
+import { formatRupiah, createAuditLog, sortMembersDesc } from '../lib/storage';
 import {
   Trash2,
   ShieldAlert,
@@ -58,10 +57,11 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Filter members by selected wilayah
+  // Filter members by selected wilayah (urut no anggota terbesar di atas, terkecil di bawah)
   const availableMembers = useMemo(() => {
-    if (selectedWilayah === 'semua') return state.members;
-    return state.members.filter((m) => m.wilayah === selectedWilayah);
+    const sorted = sortMembersDesc(state.members);
+    if (selectedWilayah === 'semua') return sorted;
+    return sorted.filter((m) => m.wilayah === selectedWilayah);
   }, [state.members, selectedWilayah]);
 
   // When wilayah changes, reset member if not in available list
@@ -165,10 +165,6 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
-    if (!assertInternetForTransaction('Hapus Transaksi Anggota')) {
-      setErrorMessage('Status jaringan MERAH (tidak ada internet). Transaksi penghapusan dikunci saat offline.');
-      return;
-    }
 
     if (!isSuperAdmin) {
       setErrorMessage('Akses ditolak: Menu ini hanya dapat diakses dan dijalankan oleh Super Admin.');

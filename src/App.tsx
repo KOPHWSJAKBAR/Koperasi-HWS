@@ -12,7 +12,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { installFirestoreSystemErrorGuard } from './lib/firebase-init';
 
 import { detectPlatform } from './lib/activityLogger';
-import { useNetworkStatus, NetworkStatusGuard, getIsInternetConnected } from './components/NetworkStatusGuard';
+import { useNetworkStatus, getIsInternetConnected } from './components/NetworkStatusGuard';
 
 const SESSION_KEY = 'koperasi_hws_active_session';
 const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Req 12: Buat aplikasi ini auto logout dalam 2 menit apabila tidak tertutup)
@@ -65,11 +65,8 @@ export default function App() {
     }
   }, []);
 
-  // Status Koneksi Internet & Peringatan 60 Detik Offline / Auto-Logout
-  const { isOnline, showWarning, countdown, offlineSeconds, isChecking, checkNow } = useNetworkStatus(
-    handleLogout,
-    !!activeSession
-  );
+  // Keep background network state tracked without color monitoring or offline auto-logout
+  const { checkNow } = useNetworkStatus();
 
   // Handle Login Member
   const handleLoginMember = async (member: MemberUser) => {
@@ -385,17 +382,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Fullscreen Guard & Alert when Internet Connection is Lost (Req 2) */}
-      <NetworkStatusGuard
-        isOnline={isOnline}
-        showWarning={showWarning}
-        countdown={countdown}
-        offlineSeconds={offlineSeconds}
-        isChecking={isChecking}
-        onCheckNow={checkNow}
-        onLogout={handleLogout}
-        isSessionActive={!!activeSession}
-      />
     </>
   );
 }

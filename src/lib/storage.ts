@@ -534,19 +534,24 @@ export function deduplicateMembersClient(members: MemberUser[], deletedIds: stri
     result.push(m);
   }
 
-  const getMemberSeqNum = (nomorAnggota?: string) => {
-    const clean = String(nomorAnggota || '').trim();
-    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
-    const match = clean.match(/(\d+)$/);
-    return match ? parseInt(match[1], 10) || 0 : 0;
-  };
-  result.sort((a, b) => {
-    const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
-    if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
-  });
+  return sortMembersDesc(result);
+}
 
-  return result;
+export function getMemberSeqNum(nomorAnggota?: string): number {
+  const clean = String(nomorAnggota || '').trim();
+  if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
+  const match = clean.match(/(\d+)$/);
+  return match ? parseInt(match[1], 10) || 0 : 0;
+}
+
+export function sortMembersDesc<T extends { nomorAnggota?: string; id?: string }>(members: T[]): T[] {
+  return [...(Array.isArray(members) ? members : [])].sort((a, b) => {
+    const seqDiff = getMemberSeqNum(b?.nomorAnggota) - getMemberSeqNum(a?.nomorAnggota);
+    if (seqDiff !== 0) return seqDiff;
+    const noDiff = String(b?.nomorAnggota || '').localeCompare(String(a?.nomorAnggota || ''));
+    if (noDiff !== 0) return noDiff;
+    return String(b?.id || '').localeCompare(String(a?.id || ''));
+  });
 }
 
 let globalState: AppState = (() => {
@@ -897,34 +902,37 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  // 5. Member Transactions (Mutasi Rekening): Filter out any deletedTransactionIds so deleted mutations never resurrect
+  // 5. Member Transactions (Mutasi Rekening): UNION base + incoming filtered out by deletedTransactionIds so neither platform loses records
   const allDeletedTxIds = new Set<string>([
     ...(base.deletedTransactionIds || []),
     ...(incoming.deletedTransactionIds || []),
   ]);
 
-  const txSource = Array.isArray(incoming.memberTransactions)
-    ? incoming.memberTransactions
-    : (base.memberTransactions || []);
-
   const txMap = new Map<string, MemberTransaction>();
-  txSource.forEach((tx) => {
+  (base.memberTransactions || []).forEach((tx) => {
+    if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
+      txMap.set(tx.id, tx);
+    }
+  });
+  (incoming.memberTransactions || []).forEach((tx) => {
     if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
       txMap.set(tx.id, tx);
     }
   });
   const mergedTxList = Array.from(txMap.values());
 
-  // 6. Kas List: filter out any deletedKasIds so deletions persist across all devices & snapshots (Req 5).
+  // 6. Kas List: UNION base + incoming filtered out by deletedKasIds so deletions persist across all devices & snapshots (Req 5).
   const allDeletedKasIds = new Set<string>([
     ...(base.deletedKasIds || []),
     ...(incoming.deletedKasIds || []),
   ]);
-  const rawKasList: KasEntry[] = Array.isArray(incoming.kasList)
-    ? incoming.kasList
-    : (base.kasList || []);
   const kasMap = new Map<string, KasEntry>();
-  rawKasList.forEach((k) => {
+  (base.kasList || []).forEach((k) => {
+    if (k && k.id && !allDeletedKasIds.has(k.id)) {
+      kasMap.set(k.id, k);
+    }
+  });
+  (incoming.kasList || []).forEach((k) => {
     if (k && k.id && !allDeletedKasIds.has(k.id)) {
       kasMap.set(k.id, k);
     }
@@ -1794,6 +1802,7 @@ const lastWrittenMap = new Map<string, string>();
 let shardedTimer: any = null;
 let isFirestoreSyncRunning = false;
 let queuedFirestoreSyncState: AppState | null = null;
+let hasHydratedRemoteState = false;
 
 // Seed known server-authoritative hashes so unchanged documents are NOT re-blasted to Firestore on every mutation
 function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>) {
@@ -1816,9 +1825,7 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>) {
         usedAccountNumbers: serverData.usedAccountNumbers || [],
         usedMemberNumbers: serverData.usedMemberNumbers || [],
       });
-      if (!lastWrittenMap.has('settings/general')) {
-        lastWrittenMap.set('settings/general', JSON.stringify(generalCore));
-      }
+      lastWrittenMap.set('settings/general', JSON.stringify(generalCore));
     }
     if (Array.isArray(serverData.admins)) {
       const adminsCore = sanitizeForFirestore({
@@ -1960,7 +1967,7 @@ export async function syncShardedToFirestore(state: AppState) {
       usedMemberNumbers: state.usedMemberNumbers || [],
     });
     const generalStr = JSON.stringify(generalCore);
-    if (lastWrittenMap.get('settings/general') !== generalStr) {
+    if (hasHydratedRemoteState && lastWrittenMap.get('settings/general') !== generalStr) {
       await setDoc(
         doc(db, 'settings', 'general'),
         { ...generalCore, updatedAt: now, updatedBy: CLIENT_ID },
@@ -2275,6 +2282,7 @@ export async function fetchStateFromServer(): Promise<AppState> {
                 (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
             );
 
+            hasHydratedRemoteState = true;
             seedFirestoreSyncedHashesFromServer(data);
             globalState = mergeStates(globalState, data);
             try {
@@ -2315,23 +2323,52 @@ export async function fetchStateFromServer(): Promise<AppState> {
   try {
     const { db, ensureFirestoreOnline } = await import('./firebase-init');
     await ensureFirestoreOnline();
-    const { collection, getDocs } = await import('firebase/firestore');
-    const memSnap = await getDocs(collection(db, 'members'));
+    const { collection, getDocs, doc, getDoc } = await import('firebase/firestore');
+    const [memSnap, genSnap] = await Promise.all([
+      getDocs(collection(db, 'members')),
+      getDoc(doc(db, 'settings', 'general')),
+    ]);
+    let patch: Partial<AppState> = {};
+    if (genSnap.exists()) {
+      const data = genSnap.data();
+      if (data) {
+        patch = {
+          profile: data.profile || globalState.profile,
+          categoriesKasKoperasi: data.categoriesKasKoperasi || globalState.categoriesKasKoperasi,
+          pengaturanBerbagi: data.pengaturanBerbagi || globalState.pengaturanBerbagi,
+          penyaluranList: data.penyaluranList || globalState.penyaluranList,
+          maintenanceLock: data.maintenanceLock || globalState.maintenanceLock,
+          lastRunningNumber: data.lastRunningNumber || globalState.lastRunningNumber,
+          deletedMemberIds: data.deletedMemberIds || globalState.deletedMemberIds,
+          deletedTransactionIds: data.deletedTransactionIds || globalState.deletedTransactionIds,
+          deletedKasIds: data.deletedKasIds || globalState.deletedKasIds,
+          deletedSetoranIds: data.deletedSetoranIds || globalState.deletedSetoranIds,
+          usedAccountNumbers: data.usedAccountNumbers || globalState.usedAccountNumbers,
+          usedMemberNumbers: data.usedMemberNumbers || globalState.usedMemberNumbers,
+        };
+      }
+    }
     if (!memSnap.empty) {
-      const delSet = new Set(globalState.deletedMemberIds || []);
+      const delSet = new Set([...(globalState.deletedMemberIds || []), ...(patch.deletedMemberIds || [])]);
       const remoteMembers = memSnap.docs
         .map((d) => d.data() as MemberUser)
         .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
       if (remoteMembers.length > 0) {
-        globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-        } catch {}
-        notifyListeners();
+        patch.members = remoteMembers;
       }
+    }
+    if (Object.keys(patch).length > 0) {
+      hasHydratedRemoteState = true;
+      seedFirestoreSyncedHashesFromServer(patch);
+      globalState = mergeStates(globalState, { ...globalState, ...patch });
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+      } catch {}
+      notifyListeners();
     }
   } catch {}
 
+  hasHydratedRemoteState = true;
   return globalState;
 }
 
@@ -2627,9 +2664,9 @@ export function useKoperasiState() {
             (snap) => {
               if (snap.exists()) {
                 const data = snap.data();
-                if (data && data.updatedBy !== CLIENT_ID) {
-                  globalState = mergeStates(globalState, {
-                    ...globalState,
+                if (data) {
+                  hasHydratedRemoteState = true;
+                  const generalSnapshotState: Partial<AppState> = {
                     profile: data.profile || globalState.profile,
                     categoriesKasKoperasi: data.categoriesKasKoperasi || globalState.categoriesKasKoperasi,
                     pengaturanBerbagi: data.pengaturanBerbagi || globalState.pengaturanBerbagi,
@@ -2641,8 +2678,17 @@ export function useKoperasiState() {
                     deletedTransactionIds: Array.from(new Set([...(globalState.deletedTransactionIds || []), ...(data.deletedTransactionIds || [])])),
                     deletedKasIds: Array.from(new Set([...(globalState.deletedKasIds || []), ...(data.deletedKasIds || [])])),
                     deletedSetoranIds: Array.from(new Set([...(globalState.deletedSetoranIds || []), ...(data.deletedSetoranIds || [])])),
-                  });
-                  scheduleDebouncedNotify();
+                    usedAccountNumbers: Array.from(new Set([...(globalState.usedAccountNumbers || []), ...(data.usedAccountNumbers || [])])),
+                    usedMemberNumbers: Array.from(new Set([...(globalState.usedMemberNumbers || []), ...(data.usedMemberNumbers || [])])),
+                  };
+                  if (data.updatedBy !== CLIENT_ID) {
+                    seedFirestoreSyncedHashesFromServer(generalSnapshotState);
+                    globalState = mergeStates(globalState, {
+                      ...globalState,
+                      ...generalSnapshotState,
+                    });
+                    scheduleDebouncedNotify();
+                  }
                 }
               }
             },
@@ -2657,6 +2703,7 @@ export function useKoperasiState() {
               if (snap.exists()) {
                 const data = snap.data();
                 if (data && data.admins && data.updatedBy !== CLIENT_ID) {
+                  hasHydratedRemoteState = true;
                   globalState = mergeStates(globalState, {
                     ...globalState,
                     admins: data.admins,
@@ -2671,6 +2718,24 @@ export function useKoperasiState() {
             (err) => handleFirestoreError(err, OperationType.GET, 'settings/admins')
           );
           firestoreUnsubscribers.push(unsubAdmins);
+
+          const unsubAdminsCol = onSnapshot(
+            collection(db, 'admins'),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
+              const delAdmSet = new Set((globalState as any).deletedAdminIds || []);
+              const remoteAdmins = snapshot.docs
+                .map((d) => d.data() as AdminUser)
+                .filter((a) => a && (a.id || a.username) && !delAdmSet.has(a.id));
+              if (remoteAdmins.length > 0) {
+                globalState = mergeStates(globalState, { ...globalState, admins: remoteAdmins });
+                scheduleDebouncedNotify();
+              }
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'admins')
+          );
+          firestoreUnsubscribers.push(unsubAdminsCol);
 
           // H. Sharded Sedekah Collection
           const unsubSedekah = onSnapshot(
@@ -2750,6 +2815,7 @@ export function useKoperasiState() {
   }, []);
 
   const updateState = useCallback(async (updater: (prev: AppState) => AppState) => {
+    hasHydratedRemoteState = true;
     const nextState = updater(globalState);
     await syncStateToServer(nextState);
   }, []);
@@ -2985,7 +3051,7 @@ export async function registerMemberOnline(
   if (!getIsInternetConnected()) {
     return {
       success: false,
-      error: 'Status jaringan MERAH (tidak ada koneksi data internet). Hubungkan perangkat ke internet terlebih dahulu untuk melakukan pendaftaran.',
+      error: 'Perangkat tidak terhubung ke internet. Hubungkan perangkat ke internet terlebih dahulu untuk melakukan pendaftaran.',
     };
   }
 

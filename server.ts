@@ -671,18 +671,19 @@ function mergeServerState(current: any, incoming: any): any {
     }
   });
 
-  // 5. Member Transactions (Mutasi Rekening): Filter out any deletedTransactionIds so deleted mutations never resurrect
+  // 5. Member Transactions (Mutasi Rekening): UNION current + incoming filtered out by deletedTransactionIds
   const allDeletedTxIds = new Set<string>([
     ...(current.deletedTransactionIds || []),
     ...(incoming.deletedTransactionIds || []),
   ]);
 
-  const txSource = Array.isArray(incoming.memberTransactions)
-    ? incoming.memberTransactions
-    : (current.memberTransactions || []);
-
   const txMap = new Map<string, any>();
-  txSource.forEach((tx: any) => {
+  (current.memberTransactions || []).forEach((tx: any) => {
+    if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
+      txMap.set(tx.id, tx);
+    }
+  });
+  (incoming.memberTransactions || []).forEach((tx: any) => {
     if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
       txMap.set(tx.id, tx);
     }
@@ -690,16 +691,18 @@ function mergeServerState(current: any, incoming: any): any {
   const mergedTxList = Array.from(txMap.values());
   const mergedDeletedTxIds = Array.from(allDeletedTxIds);
 
-  // 6. Kas List: filter out deletedKasIds so deletions by Super Admin persist permanently
+  // 6. Kas List: UNION current + incoming filtered out by deletedKasIds so deletions by Super Admin persist permanently
   const allDeletedKasIds = new Set<string>([
     ...(current.deletedKasIds || []),
     ...(incoming.deletedKasIds || []),
   ]);
-  const kasSource = Array.isArray(incoming.kasList)
-    ? incoming.kasList
-    : (current.kasList || []);
   const kasMap = new Map<string, any>();
-  kasSource.forEach((k: any) => {
+  (current.kasList || []).forEach((k: any) => {
+    if (k && k.id && !allDeletedKasIds.has(k.id)) {
+      kasMap.set(k.id, k);
+    }
+  });
+  (incoming.kasList || []).forEach((k: any) => {
     if (k && k.id && !allDeletedKasIds.has(k.id)) {
       kasMap.set(k.id, k);
     }
@@ -1056,7 +1059,7 @@ async function syncStateToFirestoreServer(state: any) {
 }
 
 // Save DB with automated backup and physical file archiving
-function saveDatabase(state: any) {
+function saveDatabase(state: any, options?: { skipFirestore?: boolean }) {
   try {
     state.serverSyncStatus = {
       ...state.serverSyncStatus,
@@ -1095,8 +1098,10 @@ function saveDatabase(state: any) {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
     broadcastEvent('STATE_UPDATED', state);
 
-    // Asynchronous Realtime sync to Cloud Firestore
-    syncStateToFirestoreServer(state);
+    // Asynchronous Realtime sync to Cloud Firestore (unless just pulled directly from Firestore)
+    if (!options?.skipFirestore) {
+      syncStateToFirestoreServer(state);
+    }
 
     return true;
   } catch (err) {
@@ -1105,17 +1110,50 @@ function saveDatabase(state: any) {
   }
 }
 
+let lastAppliedFirestoreGeneralUpdatedAt = '';
+
+function buildStateSyncDigest(st: any): string {
+  try {
+    return JSON.stringify({
+      members: (st.members || []).map((m: any) => `${m.id}:${m.nama}:${m.nomorAnggota}:${m.nomorRekening}:${m.saldoPokok}:${m.saldoUmum}:${m.saldoZakatFitrah}:${m.saldoQurban}:${m.status}:${m.isPokokLocked}`),
+      admins: (st.admins || []).map((a: any) => `${a.id}:${a.nama}:${a.role}:${a.username}`),
+      setoran: (st.setoranList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}`),
+      kasCount: (st.kasList || []).length,
+      txCount: (st.memberTransactions || []).length,
+      sedekah: (st.sedekahList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}`),
+      chatCount: (st.chatMessages || []).length,
+      suratCount: (st.suratList || []).length,
+      logCount: (st.auditLogs || []).length,
+      profile: st.profile || {},
+      pengaturanBerbagi: st.pengaturanBerbagi || {},
+      categoriesKasKoperasi: st.categoriesKasKoperasi || {},
+      maintenanceLock: st.maintenanceLock || {},
+      penyaluranCount: (st.penyaluranList || []).length,
+      deletedMemberIds: st.deletedMemberIds || [],
+      deletedTransactionIds: st.deletedTransactionIds || [],
+      deletedKasIds: st.deletedKasIds || [],
+      deletedSetoranIds: st.deletedSetoranIds || [],
+      lastRunningNumber: st.lastRunningNumber || 66666,
+    });
+  } catch {
+    return String(Date.now());
+  }
+}
+
 // Inbound Synchronizer from Cloud Firestore to Server State
-// Ensures members, admins, and data registered from newly installed devices are immediately merged into server state
+// Ensures members, admins, transactions, chats, surat, logs, and settings edited on Android/iOS/Web/PC are immediately merged into server state
 async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembersCount?: number }> {
   try {
     const { initializeApp, getApps } = await import('firebase/app');
-    const { getFirestore, collection, getDocs, doc, getDoc, deleteDoc } = await import('firebase/firestore');
+    const { getFirestore, collection, getDocs, doc, getDoc, deleteDoc, query, orderBy, limit } = await import('firebase/firestore');
     const configPath = path.join(__dirname, 'firebase-applet-config.json');
     if (!fs.existsSync(configPath)) return { success: false };
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
     const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+
+    const beforeDigest = buildStateSyncDigest(currentState);
+    const beforeCount = (currentState.members || []).length;
 
     // 1. Fetch remote members from Firestore (ignore legacy -dup- & same-name duplicates and purge them from Firestore)
     const memSnap = await getDocs(collection(db, 'members'));
@@ -1149,6 +1187,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
 
     // 2. Fetch remote admins from Firestore (collection 'admins' and document 'settings/admins')
     const remoteAdmins: any[] = [];
+    let remoteDeletedAdminIds: string[] = [];
     try {
       const adminSnap = await getDocs(collection(db, 'admins'));
       adminSnap.forEach((d) => {
@@ -1164,6 +1203,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
           sData.admins.forEach((a: any) => {
             if (a && (a.id || a.username)) remoteAdmins.push(a);
           });
+        }
+        if (Array.isArray(sData?.deletedAdminIds)) {
+          remoteDeletedAdminIds = sData.deletedAdminIds;
         }
       }
     } catch {}
@@ -1208,54 +1250,135 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     });
 
-    // 7. Fetch settings/general for numbers synchronization
+    // 7. Fetch remote chats, surat, and logs
+    const remoteChats: any[] = [];
+    try {
+      const chatSnap = await getDocs(collection(db, 'chats'));
+      chatSnap.forEach((d) => {
+        const data = d.data();
+        if (data && data.id) remoteChats.push(data);
+      });
+    } catch {}
+
+    const remoteSurat: any[] = [];
+    try {
+      const suratSnap = await getDocs(collection(db, 'surat'));
+      suratSnap.forEach((d) => {
+        const data = d.data();
+        if (data && data.id) remoteSurat.push(data);
+      });
+    } catch {}
+
+    const remoteLogs: any[] = [];
+    try {
+      const logsSnap = await getDocs(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)));
+      logsSnap.forEach((d) => {
+        const data = d.data();
+        if (data) remoteLogs.push({ id: d.id, ...data });
+      });
+    } catch {}
+
+    // 8. Fetch settings/general (profile, pengaturanBerbagi, categoriesKasKoperasi, maintenanceLock, penyaluranList, deletions & numbers)
+    const remoteSettingsPatch: any = {};
     try {
       const genSnap = await getDoc(doc(db, 'settings', 'general'));
       if (genSnap.exists()) {
         const genData = genSnap.data();
         if (genData) {
-          if (genData.lastRunningNumber && genData.lastRunningNumber > (currentState.lastRunningNumber || 66666)) {
-            currentState.lastRunningNumber = genData.lastRunningNumber;
+          if (genData.lastRunningNumber) {
+            remoteSettingsPatch.lastRunningNumber = genData.lastRunningNumber;
           }
           if (Array.isArray(genData.usedMemberNumbers)) {
-            currentState.usedMemberNumbers = Array.from(
-              new Set([...(currentState.usedMemberNumbers || []), ...genData.usedMemberNumbers])
-            );
+            remoteSettingsPatch.usedMemberNumbers = genData.usedMemberNumbers;
           }
           if (Array.isArray(genData.usedAccountNumbers)) {
-            currentState.usedAccountNumbers = Array.from(
-              new Set([...(currentState.usedAccountNumbers || []), ...genData.usedAccountNumbers])
-            );
+            remoteSettingsPatch.usedAccountNumbers = genData.usedAccountNumbers;
+          }
+          if (Array.isArray(genData.deletedMemberIds)) {
+            remoteSettingsPatch.deletedMemberIds = genData.deletedMemberIds;
+          }
+          if (Array.isArray(genData.deletedTransactionIds)) {
+            remoteSettingsPatch.deletedTransactionIds = genData.deletedTransactionIds;
+          }
+          if (Array.isArray(genData.deletedKasIds)) {
+            remoteSettingsPatch.deletedKasIds = genData.deletedKasIds;
+          }
+          if (Array.isArray(genData.deletedSetoranIds)) {
+            remoteSettingsPatch.deletedSetoranIds = genData.deletedSetoranIds;
+          }
+          if (Array.isArray(genData.penyaluranList)) {
+            remoteSettingsPatch.penyaluranList = genData.penyaluranList;
+          }
+          if (Array.isArray(genData.sedekahList)) {
+            genData.sedekahList.forEach((s: any) => {
+              if (s && s.id && !remoteSedekah.some((rs) => rs.id === s.id)) {
+                remoteSedekah.push(s);
+              }
+            });
+          }
+
+          // Adopt inputted settings from Android/iOS/Web/PC whenever changed by a client device
+          const genUpdatedAt = String(genData.updatedAt || '');
+          const isExternalSettingsChange =
+            genData.updatedBy !== 'server_realtime' &&
+            genUpdatedAt !== '' &&
+            genUpdatedAt !== lastAppliedFirestoreGeneralUpdatedAt;
+
+          if (isExternalSettingsChange || !lastAppliedFirestoreGeneralUpdatedAt) {
+            if (genData.profile && typeof genData.profile === 'object' && Object.keys(genData.profile).length > 0) {
+              remoteSettingsPatch.profile = genData.profile;
+            }
+            if (genData.pengaturanBerbagi && typeof genData.pengaturanBerbagi === 'object' && Object.keys(genData.pengaturanBerbagi).length > 0) {
+              remoteSettingsPatch.pengaturanBerbagi = genData.pengaturanBerbagi;
+            }
+            if (genData.categoriesKasKoperasi && typeof genData.categoriesKasKoperasi === 'object' && Object.keys(genData.categoriesKasKoperasi).length > 0) {
+              remoteSettingsPatch.categoriesKasKoperasi = genData.categoriesKasKoperasi;
+            }
+            if (genData.maintenanceLock && typeof genData.maintenanceLock === 'object') {
+              remoteSettingsPatch.maintenanceLock = genData.maintenanceLock;
+            }
+            if (genUpdatedAt) {
+              lastAppliedFirestoreGeneralUpdatedAt = genUpdatedAt;
+            }
           }
         }
       }
     } catch {}
 
-    if (
+    const hasRemotePayload =
       remoteMembers.length > 0 ||
       remoteAdmins.length > 0 ||
       remoteTx.length > 0 ||
       remoteSetoran.length > 0 ||
       remoteKas.length > 0 ||
-      remoteSedekah.length > 0
-    ) {
-      const beforeCount = (currentState.members || []).length;
-      const beforeAdminCount = (currentState.admins || []).length;
+      remoteSedekah.length > 0 ||
+      remoteChats.length > 0 ||
+      remoteSurat.length > 0 ||
+      remoteLogs.length > 0 ||
+      Object.keys(remoteSettingsPatch).length > 0;
+
+    if (hasRemotePayload) {
       currentState = mergeServerState(currentState, {
+        ...remoteSettingsPatch,
         members: remoteMembers,
         admins: remoteAdmins,
+        deletedAdminIds: remoteDeletedAdminIds,
         memberTransactions: remoteTx,
         setoranList: remoteSetoran,
         kasList: remoteKas,
         sedekahList: remoteSedekah,
+        chatMessages: remoteChats,
+        suratList: remoteSurat,
+        auditLogs: remoteLogs,
       });
+
       const reconResult = reconcileLegacyMemberNumbers(currentState);
+      const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
-      const afterAdminCount = (currentState.admins || []).length;
-      if (afterCount !== beforeCount || afterAdminCount !== beforeAdminCount || reconResult.migratedCount > 0) {
-        console.log(`[Firestore Inbound Sync] Synchronized ${afterCount - beforeCount} members, ${afterAdminCount - beforeAdminCount} admins from Firestore (Total: ${afterCount} members, ${afterAdminCount} admins, ${reconResult.migratedCount} migrated)`);
-        saveDatabase(currentState);
-        broadcastEvent('STATE_UPDATED', currentState);
+
+      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0) {
+        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount})`);
+        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 });
       }
       return { success: true, newMembersCount: Math.max(0, afterCount - beforeCount) };
     }
@@ -1614,6 +1737,18 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     };
   });
 
+  const getMemberSeqNumReconcile = (nomorAnggota?: string) => {
+    const clean = String(nomorAnggota || '').trim();
+    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
+    const match = clean.match(/(\d+)$/);
+    return match ? parseInt(match[1], 10) || 0 : 0;
+  };
+  state.members.sort((a: any, b: any) => {
+    const seqDiff = getMemberSeqNumReconcile(b.nomorAnggota) - getMemberSeqNumReconcile(a.nomorAnggota);
+    if (seqDiff !== 0) return seqDiff;
+    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+  });
+
   state.memberTransactions = nextTxList.sort((a: any, b: any) =>
     `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
   );
@@ -1837,85 +1972,14 @@ async function startServer() {
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/api/uploads', express.static(UPLOADS_DIR));
 
-  // Cached real internet data probe (4s TTL) so LAN/Wi-Fi without mobile/ISP data reports online: false cleanly
-  let lastInternetProbeTime = 0;
-  let lastInternetProbeOk = true;
-  let activeInternetProbePromise: Promise<boolean> | null = null;
-
-  const probeExternalHost = (hostname: string, pathName: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      let settled = false;
-      const done = (ok: boolean) => {
-        if (!settled) {
-          settled = true;
-          resolve(ok);
-        }
-      };
-
-      try {
-        const req = https.request(
-          {
-            hostname,
-            port: 443,
-            path: pathName,
-            method: 'HEAD',
-            timeout: 2200,
-          },
-          (probeRes) => {
-            probeRes.resume();
-            const code = probeRes.statusCode || 0;
-            done(code > 0 && code < 500);
-          }
-        );
-        req.on('timeout', () => {
-          req.destroy();
-          done(false);
-        });
-        req.on('error', () => done(false));
-        req.end();
-      } catch {
-        done(false);
-      }
-    });
-  };
-
-  const checkRealInternetConnectivity = async (): Promise<boolean> => {
-    const now = Date.now();
-    if (now - lastInternetProbeTime < 4000) {
-      return lastInternetProbeOk;
-    }
-    if (activeInternetProbePromise) {
-      return activeInternetProbePromise;
-    }
-    activeInternetProbePromise = (async () => {
-      try {
-        let ok = await probeExternalHost('www.gstatic.com', '/generate_204');
-        if (!ok) {
-          ok = await probeExternalHost('firestore.googleapis.com', '/');
-        }
-        lastInternetProbeTime = Date.now();
-        lastInternetProbeOk = ok;
-        return ok;
-      } catch {
-        lastInternetProbeTime = Date.now();
-        lastInternetProbeOk = false;
-        return false;
-      } finally {
-        activeInternetProbePromise = null;
-      }
-    })();
-    return activeInternetProbePromise;
-  };
-
-  // Active Connection Ping Endpoint for Client Internet Status Guard
-  app.all('/api/ping', async (_req: Request, res: Response) => {
+  // Fast Ping Endpoint
+  app.all('/api/ping', (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     res.setHeader('Pragma', 'no-cache');
-    const hasInternet = await checkRealInternetConnectivity();
     res.status(200).json({
-      status: hasInternet ? 'online' : 'no_internet',
-      online: hasInternet,
-      internet: hasInternet,
+      status: 'online',
+      online: true,
+      internet: true,
       time: Date.now(),
     });
   });
@@ -4626,12 +4690,13 @@ async function startServer() {
     }
   });
 
-  // Endpoint: Sinkronisasi Database ke AI Studio Cloud Firestore
-  app.post('/api/state/sync-aistudio', (req: Request, res: Response) => {
+  // Endpoint: Sinkronisasi Database ke AI Studio Cloud Firestore (Android, iOS, Web, PC <-> AI Studio)
+  app.post('/api/state/sync-aistudio', async (req: Request, res: Response) => {
     try {
-      const { state: incomingState, adminName } = req.body;
+      const { state: incomingState, adminName } = req.body || {};
+      await pullFromFirestoreServer().catch(() => {});
       if (incomingState && typeof incomingState === 'object') {
-        currentState = { ...currentState, ...incomingState };
+        currentState = mergeServerState(currentState, incomingState);
       }
       currentState.serverSyncStatus = {
         online: true,
@@ -4650,12 +4715,12 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Sinkronisasi AI Studio Cloud',
-        detail: 'Database berhasil disinkronkan secara realtime dengan AI Studio Firestore Cloud',
+        detail: 'Database & pengaturan berhasil disinkronkan secara realtime antar Android, iOS, Web, PC dan AI Studio Firestore Cloud',
       });
 
       saveDatabase(currentState);
       broadcastEvent('STATE_UPDATED', currentState);
-      res.json({ success: true, message: 'Database berhasil disinkronkan ke AI Studio Cloud', state: currentState });
+      res.json({ success: true, message: 'Database & pengaturan berhasil disinkronkan ke AI Studio Cloud', state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menyelaraskan database ke AI Studio: ' + err.message });
     }

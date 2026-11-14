@@ -8,13 +8,12 @@ import {
   BankAccount,
   PengurusItem,
 } from '../types';
-import { formatRupiah, createAuditLog, syncStateToServer, validateMemberBiodata } from '../lib/storage';
+import { formatRupiah, createAuditLog, syncStateToServer, validateMemberBiodata, sortMembersDesc } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { GoogleDriveModal } from './GoogleDriveModal';
 import { InstallAppModal } from './InstallAppModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
-import { assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   X,
   User,
@@ -461,7 +460,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [maintenanceError, setMaintenanceError] = useState('');
 
   // Penyesuaian Saldo State (Req 5: Penyesuaian saldo anggota terinput di kas anggota & Req 14: Pilihan buku kas)
-  const [adjMemberId, setAdjMemberId] = useState(state.members[0]?.id || '');
+  const [adjMemberId, setAdjMemberId] = useState(() => sortMembersDesc(state.members)[0]?.id || '');
   const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok'>('umum');
   const [adjBukuKasTarget, setAdjBukuKasTarget] = useState<'anggota' | 'koperasi' | 'keduanya'>('anggota');
   const [adjTipe, setAdjTipe] = useState<'tambah' | 'tarik'>('tambah');
@@ -707,10 +706,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const handleResetAppFromZero = async (e: React.FormEvent) => {
     e.preventDefault();
     setResetAppError('');
-    if (!assertInternetForTransaction('Reset Aplikasi')) {
-      setResetAppError('Status jaringan MERAH (tidak ada internet). Reset aplikasi dikunci saat offline.');
-      return;
-    }
     if (!isSuperAdmin) {
       setResetAppError('Akses ditolak: Hanya Super Admin yang berwenang mereset aplikasi.');
       return;
@@ -1962,7 +1957,6 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   // Penyesuaian Saldo Anggota (Req 5: Penyesuaian saldo anggota terinput di kas anggota)
   const handlePenyesuaianSaldoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assertInternetForTransaction('Penyesuaian Saldo')) return;
     if (!currentAdmin) return;
     const amount = Number(adjNominal);
     if (!amount || amount <= 0) {
@@ -5110,7 +5104,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   onChange={(e) => setAdjMemberId(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                 >
-                  {state.members.map((m) => (
+                  {sortMembersDesc(state.members).map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.nama} ({m.nomorAnggota}) • Pokok: {formatRupiah(m.saldoPokok)} • Umum: {formatRupiah(m.saldoUmum)}
                     </option>

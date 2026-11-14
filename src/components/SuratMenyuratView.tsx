@@ -5,7 +5,7 @@ import {
   MemberUser,
   SuratResmi,
 } from '../types';
-import { createAuditLog, fetchStateFromServer, sanitizeForFirestore } from '../lib/storage';
+import { createAuditLog, fetchStateFromServer, sanitizeForFirestore, sortMembersDesc } from '../lib/storage';
 import { printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { sendRealtimeNotification } from '../lib/fcm';
@@ -620,7 +620,7 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                     >
                       <option value="">Pilih Anggota</option>
-                      {state.members.map((m) => (
+                      {sortMembersDesc(state.members).map((m) => (
                         <option key={m.id} value={m.id}>
                           {m.nama} ({m.nomorAnggota} - WA: {m.whatsapp})
                         </option>

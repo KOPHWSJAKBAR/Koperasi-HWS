@@ -7,11 +7,10 @@ import {
   LockPokokRequest,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
-import { useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Users,
   UserPlus,
@@ -53,7 +52,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   currentAdmin,
   onBackToDashboard,
 }) => {
-  const { isOnline } = useNetworkStatus();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedWilayah, setSelectedWilayah] = useState<string>('semua');
   const [selectedMemberForKta, setSelectedMemberForKta] = useState<MemberUser | null>(null);
@@ -188,7 +186,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Propose account freeze (Req 4: diajukan oleh admin write)
   const handleProposeFreeze = async (member: MemberUser, reason: string) => {
-    if (!assertInternetForTransaction('Bekukan Akun')) return;
     if (!reason.trim()) {
       alert('Harap masukkan alasan pembekuan akun.');
       return;
@@ -240,7 +237,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Approve account freeze by Kelola or Super Admin
   const handleApproveFreeze = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Setujui Pembekuan Akun')) return;
     const existingReq = member.freezeRequest || {
       requestedByRole: 'admin_write',
       requestedByName: 'Admin',
@@ -291,7 +287,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Reject account freeze
   const handleRejectFreeze = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Tolak Pembekuan Akun')) return;
     await updateState((prev) => ({
       ...prev,
       members: prev.members.map((m) =>
@@ -318,7 +313,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Unfreeze account
   const handleUnfreeze = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Buka Pembekuan Akun')) return;
     if (!isSuperAdmin && !isKelola) {
       alert('Hanya Super Admin atau Admin Kelola yang dapat membuka status pembekuan akun.');
       return;
@@ -352,15 +346,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   };
 
   // Filter and sort members: largest member number on top, smallest at bottom
-  const getMemberSeqNum = (nomorAnggota?: string) => {
-    const clean = String(nomorAnggota || '').trim();
-    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
-    const match = clean.match(/(\d+)$/);
-    return match ? parseInt(match[1], 10) || 0 : 0;
-  };
-
-  const filteredMembers = state.members
-    .filter((m) => {
+  const filteredMembers = sortMembersDesc(
+    state.members.filter((m) => {
       if (selectedWilayah !== 'semua' && m.wilayah !== selectedWilayah) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
@@ -384,11 +371,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       }
       return true;
     })
-    .sort((a, b) => {
-      const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
-      if (seqDiff !== 0) return seqDiff;
-      return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
-    });
+  );
 
   // Open Lock/Unlock Tabungan Pokok Modal (Req 7)
   const handleOpenLockPokok = (member: MemberUser) => {
@@ -405,7 +388,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Approve lock/unlock request (by Admin Approval or Super Admin)
   const handleApproveLockPokok = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Setujui Kunci Tabungan Pokok')) return;
     if (!member.lockPokokRequest) return;
     const req = member.lockPokokRequest;
     const newLockedStatus = req.action === 'lock';
@@ -440,7 +422,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Reject lock/unlock request (by Admin Approval or Super Admin)
   const handleRejectLockPokok = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Tolak Kunci Tabungan Pokok')) return;
     if (!member.lockPokokRequest) return;
     const req = member.lockPokokRequest;
 
@@ -474,7 +455,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   // Submit proposal or direct execution of Lock/Unlock Tabungan Pokok
   const handleSubmitLockPokokForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assertInternetForTransaction('Ubah Status Kunci Tabungan Pokok')) return;
     setLockPokokError('');
 
     if (!lockPokokModalMember) return;
@@ -554,7 +534,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Delete Member (Admin write requires approval from super admin or admin kelola)
   const handleDeleteMember = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Hapus Anggota')) return;
     if (!isSuperAdmin && !isKelola && !isWriter) {
       alert('Anda tidak memiliki hak untuk menghapus anggota.');
       return;
@@ -591,7 +570,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Execute deletion and record to Cash Books per User Req 1
   const executeApprovedDelete = async (member: MemberUser) => {
-    if (!assertInternetForTransaction('Setujui Hapus Anggota')) return;
     const totalSaldo = member.saldoPokok + member.saldoUmum + member.saldoZakatFitrah + member.saldoQurban;
     const confirmDelete = confirm(
       `Setujui & hapus data anggota ${member.nama} (${member.nomorAnggota})?\n` +
@@ -728,7 +706,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const handleAddMemberSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isAddingMemberRef.current || isAddingMember) return;
-    if (!assertInternetForTransaction('Pendaftaran Anggota')) return;
 
     // Validasi biodata wajib & unik: Nama, NIK, Email, NO HP, No. Rekening Bank, Pemilik Rekening tidak boleh sama dengan anggota lain
     const biodataErr = validateMemberBiodata(
@@ -835,7 +812,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const handleSaveEditMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMember) return;
-    if (!assertInternetForTransaction('Simpan Perubahan Anggota')) return;
 
     const biodataErr = validateMemberBiodata(editingMember, state.members, editingMember.id);
     if (biodataErr) {
@@ -865,7 +841,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Hapus 1 Mutasi Anggota (Khusus Super Admin per Req 2)
   const handleDeleteSingleTx = async (tx: MemberTransaction) => {
-    if (!assertInternetForTransaction('Hapus Mutasi Transaksi')) return;
     if (!isSuperAdmin) {
       alert('Akses Ditolak: Hanya Super Admin yang dapat menghapus mutasi transaksi anggota.');
       return;
@@ -1170,16 +1145,14 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
             {(isSuperAdmin || isWriter) && (
               <button
                 type="button"
-                disabled={!isOnline}
                 onClick={() => {
-                  if (!assertInternetForTransaction('Tambah Anggota')) return;
                   resetAddMemberForm();
                   setShowAddModal(true);
                 }}
-                className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
+                className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
               >
                 <UserPlus className="w-4 h-4" />
-                {isOnline ? '+ Tambah Anggota Baru' : '🔒 Offline (Terkunci)'}
+                + Tambah Anggota Baru
               </button>
             )}
 
@@ -2025,7 +1998,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isAddingMember || !isOnline}
+                  disabled={isAddingMember}
                   className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
                 >
                   {isAddingMember ? (
@@ -2033,8 +2006,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                       <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
                       <span>Menyimpan Anggota...</span>
                     </>
-                  ) : !isOnline ? (
-                    <span>🔒 Terkunci (Tidak Ada Koneksi Internet)</span>
                   ) : (
                     <span>Daftarkan Anggota Baru</span>
                   )}

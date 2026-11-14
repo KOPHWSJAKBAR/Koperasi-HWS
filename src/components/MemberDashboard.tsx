@@ -18,7 +18,6 @@ import { KtaDigitalModal } from './KtaDigitalModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
-import { ConnectionStatusBadge, useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   CreditCard,
   ArrowUpRight,
@@ -72,7 +71,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 }) => {
   // Sync member with latest state in case balance updated in real-time
   const currentMember = state.members.find((m) => m.id === member.id) || member;
-  const { isOnline } = useNetworkStatus();
 
   const [activeMenu, setActiveMenu] = useState<
     'dashboard' | 'setoran' | 'kta' | 'mutasi' | 'zakat' | 'surat' | 'chat'
@@ -275,10 +273,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const handleProceedToConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     setTfError('');
-    if (!assertInternetForTransaction('Transfer Sesama Anggota')) {
-      setTfError('Status jaringan MERAH: Tidak ada koneksi data internet. Transfer dikunci saat offline.');
-      return;
-    }
     if (!targetMemberRecipient) {
       setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
       return;
@@ -303,11 +297,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     e.preventDefault();
     setTfError('');
     setTfSuccess('');
-
-    if (!assertInternetForTransaction('Transfer Sesama Anggota')) {
-      setTfError('Status jaringan MERAH: Tidak ada koneksi data internet. Transfer dikunci saat offline.');
-      return;
-    }
 
     if (!targetMemberRecipient) {
       setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
@@ -425,10 +414,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const handleChangePinInTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     setPinChangeMsg('');
-    if (!assertInternetForTransaction('Ganti PIN Transaksi')) {
-      setPinChangeMsg('Status jaringan MERAH: Tidak ada koneksi data internet.');
-      return;
-    }
 
     if (pinChangePassword !== currentMember.password) {
       setPinChangeMsg('Password login Anda tidak cocok.');
@@ -475,11 +460,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const handleTarikSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTarikError('');
-
-    if (!assertInternetForTransaction('Penarikan Simpanan')) {
-      setTarikError('Status jaringan MERAH: Tidak ada koneksi data internet. Penarikan dikunci saat offline.');
-      return;
-    }
 
     const amount = Number(tarikNominal);
     if (!amount || amount <= 0) {
@@ -639,7 +619,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
 
             {/* Desktop Only Right Action Buttons */}
             <div className="hidden sm:flex items-center gap-2">
-              <ConnectionStatusBadge isOnline={isOnline} />
               <button
                 type="button"
                 onClick={() => setActiveMenu('chat')}
@@ -682,7 +661,6 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           {/* Requirement A.1 & A.2: Tampilan tombol setting dan chat di mobile pindahkan ke bawah logo koperasi dan nama anggota */}
           {/* Tombol setting pada dashboard anggota JANGAN dibuat melebar kesamping pada mobile, tempatkan di bawah chat atau hanya logo icon */}
           <div className="flex sm:hidden items-center gap-2 pt-1 border-t border-slate-800/60">
-            <ConnectionStatusBadge isOnline={isOnline} compact />
             <button
               type="button"
               onClick={() => setActiveMenu('chat')}
@@ -905,41 +883,29 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3 mt-5 pt-4 border-t border-slate-700/60 relative z-10">
                 <button
                   type="button"
-                  disabled={!isOnline}
-                  onClick={() => {
-                    if (!assertInternetForTransaction('Setor Tabungan')) return;
-                    setActiveMenu('setoran');
-                  }}
-                  className="py-3 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-45 disabled:cursor-not-allowed text-slate-950 font-black rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all text-xs sm:text-sm"
+                  onClick={() => setActiveMenu('setoran')}
+                  className="py-3 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all text-xs sm:text-sm"
                 >
                   <ArrowUpRight className="w-4 h-4" />
-                  <span>{isOnline ? 'Setor Tabungan' : '🔒 Setor Terkunci (Offline)'}</span>
+                  <span>Setor Tabungan</span>
                 </button>
 
                 <button
                   type="button"
-                  disabled={!isOnline}
-                  onClick={() => {
-                    if (!assertInternetForTransaction('Tarik Tabungan')) return;
-                    setShowTarikModal(true);
-                  }}
-                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-sky-400 border border-sky-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
+                  onClick={() => setShowTarikModal(true)}
+                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-sky-400 border border-sky-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
                 >
                   <ArrowDownLeft className="w-4 h-4 text-sky-400" />
-                  <span>{isOnline ? 'Tarik Tabungan (Umum / Pokok)' : '🔒 Tarik Terkunci (Offline)'}</span>
+                  <span>Tarik Tabungan (Umum / Pokok)</span>
                 </button>
 
                 <button
                   type="button"
-                  disabled={!isOnline}
-                  onClick={() => {
-                    if (!assertInternetForTransaction('Transfer Sesama Anggota')) return;
-                    setShowTransferModal(true);
-                  }}
-                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-emerald-400 border border-emerald-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
+                  onClick={() => setShowTransferModal(true)}
+                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
                 >
                   <ArrowLeftRight className="w-4 h-4 text-emerald-400" />
-                  <span>{isOnline ? 'Transfer Sesama Anggota' : '🔒 Transfer Terkunci (Offline)'}</span>
+                  <span>Transfer Sesama Anggota</span>
                 </button>
               </div>
 
@@ -1670,10 +1636,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     </button>
                     <button
                       type="submit"
-                      disabled={tfPin.length !== 6 || !isOnline}
+                      disabled={tfPin.length !== 6}
                       className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-45 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all"
                     >
-                      {isOnline ? 'Kirim Transfer Sekarang' : '🔒 Offline (Terkunci)'}
+                      Kirim Transfer Sekarang
                     </button>
                   </div>
                 </form>
@@ -1890,10 +1856,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={!isOnline || !tarikNominal || !tarikPin || tarikPin.length !== 6 || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
+                  disabled={!tarikNominal || !tarikPin || tarikPin.length !== 6 || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
                   className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all cursor-pointer"
                 >
-                  {!isOnline ? '🔒 Offline (Terkunci)' : tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? '🔒 Tabungan Pokok Terkunci' : 'Tarik Dana Sekarang'}
+                  {tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? '🔒 Tabungan Pokok Terkunci' : 'Tarik Dana Sekarang'}
                 </button>
               </div>
             </form>

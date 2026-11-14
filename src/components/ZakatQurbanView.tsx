@@ -8,10 +8,9 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog } from '../lib/storage';
+import { formatRupiah, createAuditLog, sortMembersDesc } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
-import { assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   HeartHandshake,
   CheckCircle,
@@ -56,7 +55,7 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
   const totalQurban = state.members.reduce((acc, m) => acc + m.saldoQurban, 0);
 
   // Target Members for current distribution selection
-  const eligibleMembers = state.members.filter((m) => {
+  const eligibleMembers = sortMembersDesc(state.members).filter((m) => {
     if (wilayahTarget !== 'Semua Wilayah' && m.wilayah !== wilayahTarget) return false;
     const balance = jenisPenyaluran === 'zakat_fitrah' ? m.saldoZakatFitrah : m.saldoQurban;
     return balance > 0;
@@ -64,7 +63,6 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
 
   const handleProposePenyaluran = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assertInternetForTransaction('Penyaluran Zakat & Qurban')) return;
     if (!currentAdmin) return;
     const amountPerMember = Number(nominalPerAnggota);
     if (!amountPerMember || amountPerMember <= 0) {
@@ -124,7 +122,6 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
   };
 
   const executeDistribution = async (p: PenyaluranZakatQurban) => {
-    if (!assertInternetForTransaction('Eksekusi Penyaluran Zakat & Qurban')) return;
     const now = new Date();
     const tgl = p.tanggal;
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);

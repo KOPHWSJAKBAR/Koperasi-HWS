@@ -1,5 +1,5 @@
 import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry, SedekahBerbagiEntry } from '../types';
-import { formatRupiah } from './storage';
+import { formatRupiah, sortMembersDesc } from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
 export function printDocumentHtml(htmlContent: string, title: string = 'Dokumen Koperasi HWS') {
@@ -455,8 +455,9 @@ export function exportAnggotaExcel(
   let totalQurban = 0;
   let totalKeseluruhan = 0;
 
+  const sortedMembers = sortMembersDesc(members || []);
   let rowsHtml = '';
-  members.forEach((m, idx) => {
+  sortedMembers.forEach((m, idx) => {
     const pokok = m.saldoPokok || 0;
     const zakat = m.saldoZakatFitrah || 0;
     const qurban = m.saldoQurban || 0;
@@ -571,7 +572,8 @@ export function exportAnggotaPdf(
   let totalQurban = 0;
   let totalKeseluruhan = 0;
 
-  const tableRows = members
+  const sortedMembers = sortMembersDesc(members || []);
+  const tableRows = sortedMembers
     .map((m, idx) => {
       const pokok = m.saldoPokok || 0;
       const zakat = m.saldoZakatFitrah || 0;

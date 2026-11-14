@@ -6,7 +6,6 @@ import { detectPlatform } from '../lib/activityLogger';
 import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
-import { ConnectionStatusBadge, useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Fingerprint,
   Lock,
@@ -44,7 +43,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
   onLoginMember,
   onLoginAdmin,
 }) => {
-  const { isOnline } = useNetworkStatus();
   const [activeTab, setActiveTab] = useState<'member' | 'admin'>('member');
 
   // Anggota login fields
@@ -589,11 +587,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
     e.preventDefault();
     if (isRegisterSubmittingRef.current || isRegistering) return;
 
-    if (!assertInternetForTransaction('Pendaftaran Anggota')) {
-      setRegError('Status jaringan MERAH: Tidak ada koneksi data internet. Semua transaksi & pendaftaran dikunci sampai koneksi internet pulih.');
-      return;
-    }
-
     setRegError('');
     setErrorMessage('');
 
@@ -760,10 +753,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
   // Reset Password via Security Question
   const handleResetPasswordSubmit = async () => {
     if (!foundUser) return;
-    if (!assertInternetForTransaction('Reset Password')) {
-      setErrorMessage('Status jaringan MERAH: Tidak ada koneksi data internet. Pembaruan password dikunci saat offline.');
-      return;
-    }
     if (securityAnswerInput.trim().toLowerCase() !== (foundUser.securityAnswer || '').toLowerCase()) {
       setErrorMessage('Jawaban keamanan tidak cocok.');
       return;
@@ -816,11 +805,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
         <p className="text-[11px] text-amber-400 font-bold tracking-wide text-center mt-1">
           Cengkareng • Kalideres • Kembangan • Kebon Jeruk
         </p>
-
-        {/* Status Koneksi Internet */}
-        <div className="mt-3 flex justify-center">
-          <ConnectionStatusBadge isOnline={isOnline} />
-        </div>
 
         {/* Tab Switcher */}
         <div className="w-full mt-6 bg-[#162035] p-1.5 rounded-2xl flex gap-1 border border-slate-700/60 shadow-inner">
@@ -1049,19 +1033,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </p>
                 <button
                   type="button"
-                  disabled={!isOnline}
                   onClick={() => {
-                    if (!assertInternetForTransaction('Pendaftaran Anggota')) return;
                     setErrorMessage('');
                     setRegError('');
                     setRegSuccessMember(null);
                     setRegForm(INITIAL_REG_FORM);
                     setShowRegisterModal(true);
                   }}
-                  className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/20"
+                  className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 text-xs font-black rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/20"
                 >
                   <UserPlus className="w-4 h-4 text-slate-950" />
-                  <span>{isOnline ? 'Daftar Anggota Baru (Pendaftaran Mandiri Online)' : '🔒 Pendaftaran Terkunci (Tidak Ada Internet)'}</span>
+                  <span>Daftar Anggota Baru (Pendaftaran Mandiri Online)</span>
                 </button>
               </div>
             </form>
@@ -1730,7 +1712,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isRegistering || !isOnline}
+                  disabled={isRegistering}
                   className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
                 >
                   {isRegistering ? (
@@ -1738,8 +1720,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
                       <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
                       <span>Memproses Pendaftaran...</span>
                     </>
-                  ) : !isOnline ? (
-                    <span>🔒 Terkunci (Tidak Ada Koneksi Internet)</span>
                   ) : (
                     <span>Selesaikan Pendaftaran Mandiri</span>
                   )}

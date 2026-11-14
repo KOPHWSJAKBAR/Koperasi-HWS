@@ -5,8 +5,7 @@ import {
   KasEntry,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, createAuditLog, getUnifiedSedekahList } from '../lib/storage';
-import { assertInternetForTransaction } from './NetworkStatusGuard';
+import { formatRupiah, createAuditLog, getUnifiedSedekahList, sortMembersDesc } from '../lib/storage';
 import {
   downloadExcelCsv,
   printDocumentHtml,
@@ -223,7 +222,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // Handle Input Transaksi Kas (Buku Kas Anggota & Buku Kas Koperasi)
   const handleInputKasSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assertInternetForTransaction('Input Transaksi Kas')) return;
     if (!canInput) {
       alert('Admin Approval / Admin Laporan tidak dapat menginput transaksi kas. Admin Write yang menulis dokumen, Admin Approval yang menyetujui.');
       return;
@@ -532,7 +530,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // Pinjaman Kas (sesuai dari mana buku kas diterima) dan Pengembalian Kas (sesuai dari mana buku kas diambil)
   const handleTransferBukuKasSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assertInternetForTransaction('Transfer Antar Buku Kas')) return;
     if (!canInput) {
       alert('Akses Ditolak: Anda tidak memiliki wewenang untuk melakukan transfer kas.');
       return;
@@ -643,7 +640,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // Save Edit Kas (Req 1: Admin write dapat mengedit dengan approval, Admin Approval/Superadmin menyetujui)
   const handleSaveEditKas = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assertInternetForTransaction('Edit Transaksi Kas')) return;
     if (!editingKasEntry) return;
 
     if (editingKasEntry.bukuKas === 'anggota') {
@@ -724,7 +720,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
   // Handle Delete Kas Entry (Req: Super Admin dapat menghapus buku kas anggota & kas koperasi)
   const handleDeleteKas = async (entry: KasEntry) => {
-    if (!assertInternetForTransaction('Hapus Transaksi Kas')) return;
     if (entry.bukuKas === 'anggota' && !isSuperAdmin) {
       alert('Buku Kas Anggota bersifat otomatis dan dilindungi. Hanya Super Admin yang berhak menghapus catatan Buku Kas Anggota.');
       return;
@@ -999,7 +994,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
   // Handle Approval for pending kas changes (Input, Edit, Hapus)
   const handleApproveKasAction = async (entry: KasEntry, isApproved: boolean) => {
-    if (!assertInternetForTransaction('Persetujuan Transaksi Kas')) return;
     if (!canDirectModify) return;
 
     let serverStateApplied = false;
@@ -2066,7 +2060,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
                     >
                       <option value="">-- Pilih Anggota Koperasi --</option>
-                      {state.members.map((m) => (
+                      {sortMembersDesc(state.members).map((m) => (
                         <option key={m.id} value={m.id}>
                           {m.nama} ({m.nomorRekening || m.nomorAnggota || m.id})
                         </option>

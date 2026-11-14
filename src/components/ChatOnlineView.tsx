@@ -6,7 +6,7 @@ import {
   ChatMessage,
 } from '../types';
 import { downloadExcelCsv } from '../lib/exportPdf';
-import { fetchStateFromServer, sanitizeForFirestore, applyRealtimeChatMessages, handleFirestoreError, OperationType } from '../lib/storage';
+import { fetchStateFromServer, sanitizeForFirestore, applyRealtimeChatMessages, handleFirestoreError, OperationType, sortMembersDesc } from '../lib/storage';
 import {
   MessageSquare,
   Send,
@@ -45,7 +45,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 }) => {
   const isMember = !!currentMember;
   const [selectedMemberId, setSelectedMemberId] = useState<string>(
-    isMember ? currentMember.id : state.members[0]?.id || ''
+    isMember ? currentMember.id : sortMembersDesc(state.members)[0]?.id || ''
   );
 
   useEffect(() => {
@@ -74,8 +74,9 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   useEffect(() => {
     if (!isMember) {
       if (!selectedMemberId || !state.members.some((m) => m.id === selectedMemberId)) {
-        if (state.members.length > 0) {
-          setSelectedMemberId(state.members[0].id);
+        const sortedMembers = sortMembersDesc(state.members);
+        if (sortedMembers.length > 0) {
+          setSelectedMemberId(sortedMembers[0].id);
         }
       }
     }
@@ -160,8 +161,8 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     };
   }, []);
 
-  // Filter members based on search query
-  const filteredMembers = state.members.filter((mem) => {
+  // Filter members based on search query (diurutkan dari no anggota terbesar ke terkecil)
+  const filteredMembers = sortMembersDesc(state.members).filter((mem) => {
     if (!searchMemberQuery.trim()) return true;
     const q = searchMemberQuery.toLowerCase();
     return (
