@@ -537,6 +537,147 @@ export function deduplicateMembersClient(members: MemberUser[], deletedIds: stri
   return sortMembersDesc(result);
 }
 
+export function extractMemberSuffixSeqClient(nomorAnggota?: string): number | null {
+  const clean = String(nomorAnggota || '').trim();
+  if (/^115\d{9,}$/.test(clean)) {
+    const seq = parseInt(clean.slice(9), 10);
+    return Number.isFinite(seq) && seq > 0 ? seq : null;
+  }
+  return null;
+}
+
+export function sanitizeUsedMemberNumbersClient(usedList: any[], members: MemberUser[] = []): string[] {
+  const activeSet = new Set<string>();
+  (members || []).forEach((m: any) => {
+    if (m?.nomorAnggota) activeSet.add(String(m.nomorAnggota).trim());
+    if (m?.legacyNomorAnggota) activeSet.add(String(m.legacyNomorAnggota).trim());
+  });
+
+  const raw = (Array.isArray(usedList) ? usedList : [])
+    .map((n) => String(n || '').trim())
+    .filter(Boolean);
+
+  const hasRunawayBloat =
+    raw.length > 300 || raw.some((n) => /^115\d{10,}$/.test(n));
+
+  const result = new Set<string>(activeSet);
+  for (const n of raw) {
+    if (activeSet.has(n)) {
+      result.add(n);
+      continue;
+    }
+    if (/^HWS-[A-Z]+-\d{4}-\d+$/.test(n)) {
+      result.add(n);
+      continue;
+    }
+    if (/^115\d{9}$/.test(n)) {
+      if (hasRunawayBloat && n.startsWith('115137726')) {
+        continue;
+      }
+      result.add(n);
+    }
+  }
+  return Array.from(result);
+}
+
+function getDatePartsDdYyClient(dateStr?: string): { dd: string; yy: string } {
+  const raw = String(dateStr || '').trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return {
+      dd: isoMatch[3],
+      yy: isoMatch[1].slice(-2),
+    };
+  }
+  try {
+    const d = raw ? new Date(raw) : new Date();
+    const valid = isNaN(d.getTime()) ? new Date() : d;
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      day: '2-digit',
+    }).formatToParts(valid);
+    const dd = parts.find((p) => p.type === 'day')?.value || String(valid.getDate()).padStart(2, '0');
+    const yyyy = parts.find((p) => p.type === 'year')?.value || String(valid.getFullYear());
+    return { dd: dd.padStart(2, '0'), yy: yyyy.slice(-2) };
+  } catch {
+    const now = new Date();
+    return {
+      dd: String(now.getDate()).padStart(2, '0'),
+      yy: String(now.getFullYear()).slice(-2),
+    };
+  }
+}
+
+function resolveDuplicateMemberSuffixesClient(
+  members: MemberUser[],
+  usedNumbers: string[] = []
+): MemberUser[] {
+  if (!Array.isArray(members) || members.length <= 1) return members;
+
+  const getScore = (m: any) => {
+    const idTs = String(m.id || '').match(/(\d{10,})/);
+    if (idTs) return Number(idTs[1]);
+    if (m.createdAt) return new Date(m.createdAt).getTime();
+    if (m.terdaftarSejak) return new Date(m.terdaftarSejak).getTime();
+    return 0;
+  };
+
+  const chronological = [...members].sort((a, b) => getScore(a) - getScore(b));
+  const assignedFull = new Set<string>();
+  const assignedSuffix = new Set<number>();
+  const needsNew = new Set<string>();
+
+  for (const m of chronological) {
+    const no = String(m?.nomorAnggota || '').trim();
+    const suffix = extractMemberSuffixSeqClient(no);
+    if (/^115\d{9}$/.test(no) && suffix !== null && !assignedFull.has(no) && !assignedSuffix.has(suffix)) {
+      assignedFull.add(no);
+      assignedSuffix.add(suffix);
+    } else {
+      needsNew.add(m.id);
+    }
+  }
+
+  if (needsNew.size === 0) {
+    return sortMembersDesc(members);
+  }
+
+  const reservedSuffix = new Set<number>(assignedSuffix);
+  const usedSet = new Set<string>([...assignedFull, ...usedNumbers]);
+  usedNumbers.forEach((n) => {
+    const s = extractMemberSuffixSeqClient(n);
+    if (s !== null) reservedSuffix.add(s);
+  });
+
+  let maxSeq = 0;
+  reservedSuffix.forEach((s) => {
+    if (s > maxSeq) maxSeq = s;
+  });
+
+  const updated = chronological.map((m) => {
+    if (!needsNew.has(m.id)) return m;
+    const { dd, yy } = getDatePartsDdYyClient(m.terdaftarSejak);
+    const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
+    let seq = Math.max(maxSeq + 1, 1);
+    let candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
+    while (usedSet.has(candidate) || reservedSuffix.has(seq)) {
+      seq++;
+      candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
+    }
+    maxSeq = Math.max(maxSeq, seq);
+    usedSet.add(candidate);
+    reservedSuffix.add(seq);
+    return {
+      ...m,
+      legacyNomorAnggota: (m as any).legacyNomorAnggota || m.nomorAnggota,
+      nomorAnggota: candidate,
+    } as MemberUser;
+  });
+
+  return sortMembersDesc(updated);
+}
+
 export function getMemberSeqNum(nomorAnggota?: string): number {
   const clean = String(nomorAnggota || '').trim();
   if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
@@ -830,10 +971,19 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  const mergedMembers = deduplicateMembersClient(
+  const dedupedMembers = deduplicateMembersClient(
     Array.from(memberMap.values()),
     Array.from(allDeletedMemIds)
   );
+  const sanitizedUsedMemberNos = sanitizeUsedMemberNumbersClient(
+    [
+      ...(base.usedMemberNumbers || []),
+      ...(incoming.usedMemberNumbers || []),
+      ...dedupedMembers.map((m) => m?.nomorAnggota).filter(Boolean),
+    ],
+    dedupedMembers
+  );
+  const mergedMembers = resolveDuplicateMemberSuffixesClient(dedupedMembers, sanitizedUsedMemberNos);
 
   // 2. Setoran List (Preserve all deposits & uploaded buktiTransferUrl, protect approved status)
   const allDeletedSetoranIds = new Set<string>([
@@ -1154,13 +1304,13 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         ...(incoming.members || []).map((m) => m?.nomorRekening).filter(Boolean),
       ])
     ),
-    usedMemberNumbers: Array.from(
-      new Set([
+    usedMemberNumbers: sanitizeUsedMemberNumbersClient(
+      [
         ...(base.usedMemberNumbers || []),
         ...(incoming.usedMemberNumbers || []),
-        ...(base.members || []).map((m) => m?.nomorAnggota).filter(Boolean),
-        ...(incoming.members || []).map((m) => m?.nomorAnggota).filter(Boolean),
-      ])
+        ...mergedMembers.map((m) => m?.nomorAnggota).filter(Boolean),
+      ],
+      mergedMembers
     ),
     serverSyncStatus: {
       online: true,
@@ -2679,7 +2829,10 @@ export function useKoperasiState() {
                     deletedKasIds: Array.from(new Set([...(globalState.deletedKasIds || []), ...(data.deletedKasIds || [])])),
                     deletedSetoranIds: Array.from(new Set([...(globalState.deletedSetoranIds || []), ...(data.deletedSetoranIds || [])])),
                     usedAccountNumbers: Array.from(new Set([...(globalState.usedAccountNumbers || []), ...(data.usedAccountNumbers || [])])),
-                    usedMemberNumbers: Array.from(new Set([...(globalState.usedMemberNumbers || []), ...(data.usedMemberNumbers || [])])),
+                    usedMemberNumbers: sanitizeUsedMemberNumbersClient(
+                      [...(globalState.usedMemberNumbers || []), ...(data.usedMemberNumbers || [])],
+                      globalState.members || []
+                    ),
                   };
                   if (data.updatedBy !== CLIENT_ID) {
                     seedFirestoreSyncedHashesFromServer(generalSnapshotState);
@@ -2991,7 +3144,7 @@ export function generateNomorRekening(
 }
 
 // Helper: Generate Official Member Number (Ketentuan: 115 depan, 2 angka tanggal mendaftar, 2 angka kode wilayah, 2 angka tahun, 3 angka nomer anggota)
-// Contoh: 115117726001 (115 + DD + KW + YY + NNN) - ANTI-REUSE & ANTI-MENIBAN
+// Contoh: 115117726001 (115 + DD + KW + YY + NNN) - 3 DIGIT AKHIR TIDAK BOLEH SAMA ANTAR ANGGOTA & ANTI-REUSE
 export function generateNomorAnggota(
   wilayah: WilayahKoperasi,
   existingCount: number,
@@ -3000,40 +3153,59 @@ export function generateNomorAnggota(
   registerDateStr?: string,
   commitToGlobal = true
 ): string {
-  const dateObj = registerDateStr ? new Date(registerDateStr) : new Date();
-  const dayStr = String(isNaN(dateObj.getDate()) ? 11 : dateObj.getDate()).padStart(2, '0');
+  const { dd: dayStr, yy: year2 } = getDatePartsDdYyClient(registerDateStr);
   const kodeWilayah = WILAYAH_CODE_MAP[wilayah] || '77';
-  const year2 = String(isNaN(dateObj.getFullYear()) ? 2026 : dateObj.getFullYear()).slice(-2);
 
-  const usedSet = new Set<string>();
+  const allMembers: MemberUser[] = [
+    ...(globalState.members || []),
+    ...(Array.isArray(existingMembers) ? existingMembers : []),
+  ];
+
+  const rawUsedInputs: string[] = [];
   if (Array.isArray(usedMemberNumbers)) {
-    usedMemberNumbers.forEach((n) => n && usedSet.add(String(n).trim()));
+    usedMemberNumbers.forEach((n) => n && rawUsedInputs.push(String(n).trim()));
   } else if (usedMemberNumbers instanceof Set) {
-    usedMemberNumbers.forEach((n) => n && usedSet.add(String(n).trim()));
+    usedMemberNumbers.forEach((n) => n && rawUsedInputs.push(String(n).trim()));
   }
-  (globalState.usedMemberNumbers || []).forEach((n) => n && usedSet.add(String(n).trim()));
-  (globalState.members || []).forEach((m) => {
-    if (m?.nomorAnggota) usedSet.add(String(m.nomorAnggota).trim());
-    if ((m as any)?.legacyNomorAnggota) usedSet.add(String((m as any).legacyNomorAnggota).trim());
-  });
-  if (Array.isArray(existingMembers)) {
-    existingMembers.forEach((m) => {
-      if (m?.nomorAnggota) usedSet.add(String(m.nomorAnggota).trim());
-      if ((m as any)?.legacyNomorAnggota) usedSet.add(String((m as any).legacyNomorAnggota).trim());
-    });
-  }
+  (globalState.usedMemberNumbers || []).forEach((n) => n && rawUsedInputs.push(String(n).trim()));
 
-  // Running sequential number 3 digit: 001, 002, 003...
-  let seq = Math.max(existingCount + 1, 1);
+  const cleanedUsed = sanitizeUsedMemberNumbersClient(rawUsedInputs, allMembers);
+  const usedSet = new Set<string>(cleanedUsed);
+  const usedSuffixes = new Set<number>();
+
+  allMembers.forEach((m) => {
+    if (m?.nomorAnggota) {
+      const no = String(m.nomorAnggota).trim();
+      usedSet.add(no);
+      const seq = extractMemberSuffixSeqClient(no);
+      if (seq !== null) usedSuffixes.add(seq);
+    }
+    if ((m as any)?.legacyNomorAnggota) {
+      usedSet.add(String((m as any).legacyNomorAnggota).trim());
+    }
+  });
+
+  cleanedUsed.forEach((n) => {
+    const seq = extractMemberSuffixSeqClient(n);
+    if (seq !== null) usedSuffixes.add(seq);
+  });
+
+  let maxSeq = 0;
+  usedSuffixes.forEach((s) => {
+    if (s > maxSeq) maxSeq = s;
+  });
+
+  // Running sequential number 3 digit: 001, 002, 003... unik di seluruh anggota
+  let seq = Math.max(maxSeq + 1, existingCount + 1, 1);
   let candidate = `115${dayStr}${kodeWilayah}${year2}${String(seq).padStart(3, '0')}`;
-  while (usedSet.has(candidate)) {
+  while (usedSet.has(candidate) || usedSuffixes.has(seq)) {
     seq++;
     candidate = `115${dayStr}${kodeWilayah}${year2}${String(seq).padStart(3, '0')}`;
   }
 
   usedSet.add(candidate);
   if (commitToGlobal) {
-    globalState.usedMemberNumbers = Array.from(usedSet);
+    globalState.usedMemberNumbers = sanitizeUsedMemberNumbersClient(Array.from(usedSet), allMembers);
   }
 
   return candidate;
