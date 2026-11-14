@@ -3,23 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useKoperasiState } from './lib/storage';
 import { MemberUser, AdminUser } from './types';
 import { LoginView } from './components/LoginView';
 import { MemberDashboard } from './components/MemberDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
-import { auth } from './lib/firebase-init';
-import {
-  onAuthStateChanged,
-  signInAnonymously,
-  signOut,
-  setPersistence,
-  browserLocalPersistence,
-} from 'firebase/auth';
+import { installFirestoreSystemErrorGuard } from './lib/firebase-init';
 
 import { detectPlatform } from './lib/activityLogger';
-import { useNetworkStatus, ConnectionStatusBadge, NetworkStatusGuard } from './components/NetworkStatusGuard';
+import { useNetworkStatus, NetworkStatusGuard, getIsInternetConnected } from './components/NetworkStatusGuard';
 
 const SESSION_KEY = 'koperasi_hws_active_session';
 const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Req 12: Buat aplikasi ini auto logout dalam 2 menit apabila tidak tertutup)
@@ -38,84 +31,53 @@ export default function App() {
     return null;
   });
 
-  const [isFirebaseAuthReady, setIsFirebaseAuthReady] = useState(false);
   const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
+  const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
 
-  // Optimasi persistensi sesi Firebase menggunakan browserLocalPersistence untuk PWA, APK, dan browser restart
+  // Pasang penjaga kesalahan stream Firestore di level App & sinkronisasi sesi antar-tab
   useEffect(() => {
-    setPersistence(auth, browserLocalPersistence)
-      .then(() => {
-        if (!auth.currentUser) {
-          return signInAnonymously(auth);
+    installFirestoreSystemErrorGuard();
+
+    const handleStorageSync = (ev: StorageEvent) => {
+      if (ev.key === SESSION_KEY) {
+        try {
+          setActiveSession(ev.newValue ? JSON.parse(ev.newValue) : null);
+        } catch {
+          setActiveSession(null);
         }
-      })
-      .catch(() => {
-        if (!auth.currentUser) {
-          signInAnonymously(auth).catch(() => {});
-        }
-      });
+      }
+    };
+    window.addEventListener('storage', handleStorageSync);
+    return () => window.removeEventListener('storage', handleStorageSync);
   }, []);
 
   // Sinkronisasi realtime sharded telah terhubung langsung dan otomatis melalui useKoperasiState di lib/storage.ts
-  // Menjamin pemisahan dokumen per koleksi (members, setoran, kas, transactions, settings) bebas dari batasan 1MB Firestore.
+  // Tanpa reset credential auth anonim yang memutus stream Listen/Write Firestore.
 
-  // Synchronize and persist user session with Firebase Authentication across all platforms (Web, Mobile, PC)
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (firebaseUser) => {
-        setIsFirebaseAuthReady(true);
-        try {
-          const saved = localStorage.getItem(SESSION_KEY);
-          if (saved && !activeSession) {
-            setActiveSession(JSON.parse(saved));
-          }
-        } catch {}
-      },
-      () => {
-        setIsFirebaseAuthReady(true);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [activeSession]);
-
-  // Handle Logout with Firebase Auth
-  const handleLogout = async (reason?: string) => {
+  // Handle Logout secara aman tanpa memutus koneksi jaringan Firestore aktif
+  const handleLogout = useCallback(async (reason?: unknown) => {
     try {
       localStorage.removeItem(SESSION_KEY);
-      if (auth.currentUser) {
-        await signOut(auth).catch(() => {});
-      }
     } catch {}
     setActiveSession(null);
-    if (reason) {
-      alert(reason);
+    if (typeof reason === 'string' && reason.trim()) {
+      setLogoutNotice(reason.trim());
     }
-  };
+  }, []);
 
-  // Status Koneksi Internet & Peringatan 10 Detik Offline / Auto-Logout (Req 2)
+  // Status Koneksi Internet & Peringatan 60 Detik Offline / Auto-Logout
   const { isOnline, showWarning, countdown, offlineSeconds, isChecking, checkNow } = useNetworkStatus(
     handleLogout,
     !!activeSession
   );
-
-  // Helper to safely trigger optional Firebase Auth in the background
-  const safeConnectFirebaseAuth = () => {
-    try {
-      if (!auth.currentUser) {
-        signInAnonymously(auth).catch(() => {});
-      }
-    } catch {}
-  };
 
   // Handle Login Member
   const handleLoginMember = async (member: MemberUser) => {
     const session = { type: 'member' as const, id: member.id };
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      safeConnectFirebaseAuth();
     } catch {}
+    setLogoutNotice(null);
     setActiveSession(session);
   };
 
@@ -124,8 +86,8 @@ export default function App() {
     const session = { type: 'admin' as const, id: admin.id };
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      safeConnectFirebaseAuth();
     } catch {}
+    setLogoutNotice(null);
     setActiveSession(session);
   };
 
@@ -241,6 +203,7 @@ export default function App() {
   // Online Presence Heartbeat across Web, Mobile, and PC (Req 1 & 19)
   useEffect(() => {
     const sendPresence = async () => {
+      if (!getIsInternetConnected()) return;
       try {
         const platform = detectPlatform();
         const activeId = currentMember?.id || currentAdmin?.id || 'guest';
@@ -404,6 +367,21 @@ export default function App() {
         <div className="fixed bottom-6 inset-x-0 mx-auto w-fit z-50 px-4 py-2 bg-slate-900/95 text-white border border-amber-500/80 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2 backdrop-blur animate-fade-in">
           <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
           <span>{backToastMessage}</span>
+        </div>
+      )}
+
+      {/* Non-blocking Logout Notice Banner */}
+      {typeof logoutNotice === 'string' && logoutNotice.trim() !== '' && (
+        <div className="fixed top-4 inset-x-0 mx-auto w-fit max-w-[92vw] z-[9990] px-4 py-3 bg-slate-900/95 text-slate-100 border border-amber-500/70 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-3 backdrop-blur">
+          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
+          <span>{logoutNotice}</span>
+          <button
+            type="button"
+            onClick={() => setLogoutNotice(null)}
+            className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[11px] cursor-pointer shrink-0"
+          >
+            Tutup
+          </button>
         </div>
       )}
 

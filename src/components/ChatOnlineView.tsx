@@ -6,7 +6,7 @@ import {
   ChatMessage,
 } from '../types';
 import { downloadExcelCsv } from '../lib/exportPdf';
-import { fetchStateFromServer, sanitizeForFirestore } from '../lib/storage';
+import { fetchStateFromServer, sanitizeForFirestore, applyRealtimeChatMessages, handleFirestoreError, OperationType } from '../lib/storage';
 import {
   MessageSquare,
   Send,
@@ -136,37 +136,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
               });
 
               if (incoming.length > 0) {
-                updateState((prev) => {
-                  const existingMap = new Map<string, ChatMessage>();
-                  (prev.chatMessages || []).forEach((m) => existingMap.set(m.id, m));
-                  let hasChanges = false;
-                  incoming.forEach((inMsg) => {
-                    const ex = existingMap.get(inMsg.id);
-                    if (!ex) {
-                      existingMap.set(inMsg.id, inMsg);
-                      hasChanges = true;
-                    } else if (
-                      ex.isReadByAdmin !== inMsg.isReadByAdmin ||
-                      ex.isReadByMember !== inMsg.isReadByMember ||
-                      ex.pesan !== inMsg.pesan
-                    ) {
-                      existingMap.set(inMsg.id, { ...ex, ...inMsg });
-                      hasChanges = true;
-                    }
-                  });
-
-                  if (!hasChanges) return prev;
-                  return {
-                    ...prev,
-                    chatMessages: Array.from(existingMap.values()).sort(
-                      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-                    ),
-                  };
-                });
+                applyRealtimeChatMessages(incoming);
               }
             },
             (err) => {
-              console.warn('Realtime chat onSnapshot notice:', err.message);
+              handleFirestoreError(err, OperationType.LIST, 'chats');
             }
           );
         } catch (e) {
@@ -177,14 +151,14 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
     const interval = setInterval(() => {
       fetchStateFromServer();
-    }, 2000);
+    }, 3000);
 
     return () => {
       active = false;
       if (unsubscribe) unsubscribe();
       clearInterval(interval);
     };
-  }, [updateState]);
+  }, []);
 
   // Filter members based on search query
   const filteredMembers = state.members.filter((mem) => {

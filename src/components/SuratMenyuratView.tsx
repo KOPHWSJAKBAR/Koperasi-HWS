@@ -5,7 +5,7 @@ import {
   MemberUser,
   SuratResmi,
 } from '../types';
-import { createAuditLog, fetchStateFromServer } from '../lib/storage';
+import { createAuditLog, fetchStateFromServer, sanitizeForFirestore } from '../lib/storage';
 import { printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { sendRealtimeNotification } from '../lib/fcm';
@@ -199,7 +199,7 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
     try {
       const { db } = await import('../lib/firebase');
       const { doc, setDoc } = await import('firebase/firestore');
-      await setDoc(doc(db, 'surat', newSurat.id), newSurat);
+      await setDoc(doc(db, 'surat', newSurat.id), sanitizeForFirestore(newSurat));
     } catch (e) {
       console.warn('Direct Firestore surat write error:', e);
     }

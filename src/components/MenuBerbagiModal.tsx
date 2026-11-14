@@ -12,6 +12,7 @@ import {
 import { formatRupiah, createAuditLog } from '../lib/storage';
 import { exportLaporanBerbagiPdf, exportLaporanBerbagiExcel } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
+import { useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Heart,
   Sun,
@@ -47,6 +48,7 @@ interface MenuBerbagiModalProps {
   currentMember?: MemberUser;
   currentAdmin?: AdminUser;
   initialTab?: 'berbagi' | 'konfirmasi' | 'salurkan' | 'laporan';
+  onBackToDashboard?: () => void;
 }
 
 export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
@@ -57,8 +59,10 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   currentMember,
   currentAdmin,
   initialTab,
+  onBackToDashboard,
 }) => {
   const isAdmin = !!currentAdmin;
+  const { isOnline } = useNetworkStatus();
 
   // Nama berbagi dari setting admin (dapat diubah oleh admin write, approval, super admin)
   const namaSubuh = state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh';
@@ -162,7 +166,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const [selectedJenis, setSelectedJenis] = useState<JenisSedekahBerbagi>('sedekah_subuh');
   // User Req: hapuskan nominal angka berbagi hanya input nominal manual
   const [customNominal, setCustomNominal] = useState<string>('');
-  const [sumberDana, setSumberDana] = useState<'qris' | 'tabungan_umum' | 'transfer_bank'>('qris');
+  const [sumberDana] = useState<'qris' | 'tabungan_umum'>('qris');
   const [doaPesan, setDoaPesan] = useState<string>('');
   const [buktiTransferUrl, setBuktiTransferUrl] = useState<string>('');
   const [isSubmittingDonasi, setIsSubmittingDonasi] = useState(false);
@@ -316,6 +320,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   // Submit Donasi Berbagi (Anggota / Donatur) - Req: berbagi akan dikonfirmasi admin
   const handleKirimDonasi = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!assertInternetForTransaction('Donasi Berbagi')) return;
     const nominal = Number(customNominal);
     if (!nominal || nominal <= 0) {
       alert('Silakan ketik nominal berbagi yang ingin disalurkan (minimal Rp 1.000).');
@@ -331,7 +336,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     if (sumberDana === 'tabungan_umum' && currentMember) {
       if (currentMember.saldoUmum < nominal) {
         alert(
-          `Saldo Tabungan Umum Anda (${formatRupiah(currentMember.saldoUmum)}) tidak mencukupi untuk nominal ${formatRupiah(nominal)}. Silakan pilih metode Transfer Bank / QRIS atau sesuaikan nominal.`
+          `Saldo Tabungan Umum Anda (${formatRupiah(currentMember.saldoUmum)}) tidak mencukupi untuk nominal ${formatRupiah(nominal)}. Silakan gunakan metode QRIS atau sesuaikan nominal.`
         );
         return;
       }
@@ -428,6 +433,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   // Konfirmasi / Setujui Donasi Berbagi (Admin Only - Req: berbagi akan di konfirmasi admin)
   const handleApproveDonasi = async (entry: SedekahBerbagiEntry) => {
     if (!isAdmin) return;
+    if (!assertInternetForTransaction('Setujui Donasi')) return;
 
     const jenisLabel = entry.namaBerbagiKustom || getJenisLabel(entry.jenis);
     const confirmApprove = confirm(
@@ -549,6 +555,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       } catch {}
 
       alert(`✓ Donasi ${jenisLabel} senilai ${formatRupiah(entry.nominal)} berhasil dikonfirmasi dan dicatat pada Buku Kas Koperasi!`);
+      onClose();
+      onBackToDashboard?.();
     } catch (err: any) {
       alert('Gagal mengonfirmasi donasi: ' + err.message);
     }
@@ -557,6 +565,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   // Tolak Donasi Berbagi (Admin Only)
   const handleRejectDonasi = async (entry: SedekahBerbagiEntry) => {
     if (!isAdmin) return;
+    if (!assertInternetForTransaction('Tolak Donasi')) return;
     const reason = prompt(`Masukkan alasan penolakan donasi dari ${entry.donaturNama || 'Donatur'}:`, 'Data transfer tidak valid / tidak masuk');
     if (reason === null) return;
 
@@ -620,6 +629,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   // Req E: Penyaluran sedekah = input admin write di aproval adminaproval / superadmin
   const handleKirimPenyaluran = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!assertInternetForTransaction('Penyaluran Sedekah')) return;
     if (!isAdmin) {
       alert('Akses Ditolak: Penyaluran dana berbagi hanya dapat diakses oleh Admin.');
       return;
@@ -739,6 +749,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
   // Otorisasi / Approval Penyaluran Sedekah oleh Admin Approval atau Super Admin (Req E)
   const handleApprovePenyaluran = async (entry: SedekahBerbagiEntry) => {
+    if (!assertInternetForTransaction('Setujui Penyaluran')) return;
     const isSuperAdmin = currentAdmin?.role === 'super_admin';
     const isApproval = currentAdmin?.role === 'admin_approval';
     if (!isSuperAdmin && !isApproval) {
@@ -806,6 +817,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
   // Tolak Penyaluran Sedekah oleh Admin Approval atau Super Admin (Req E)
   const handleRejectPenyaluran = async (entry: SedekahBerbagiEntry) => {
+    if (!assertInternetForTransaction('Tolak Penyaluran')) return;
     const isSuperAdmin = currentAdmin?.role === 'super_admin';
     const isApproval = currentAdmin?.role === 'admin_approval';
     if (!isSuperAdmin && !isApproval) {
@@ -1409,6 +1421,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 <button
                   type="submit"
                   disabled={
+                    !isOnline ||
                     isSubmittingDonasi ||
                     !customNominal ||
                     Number(customNominal) <= 0 ||
@@ -1418,7 +1431,9 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 >
                   <Heart className="w-4 h-4 fill-white" />
                   <span>
-                    {isSubmittingDonasi
+                    {!isOnline
+                      ? '🔒 Offline (Transaksi Terkunci)'
+                      : isSubmittingDonasi
                       ? 'Mengirim Pengajuan Sedekah...'
                       : sumberDana !== 'tabungan_umum' && !buktiTransferUrl
                       ? '⚠️ Upload Bukti Transfer Dahulu'
@@ -1657,7 +1672,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                         <div className="text-[11px] text-slate-400 flex items-center gap-2">
                           <span className="font-mono text-slate-300">{entry.tanggal} {entry.jam}</span>
                           <span>•</span>
-                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Potong Tabungan Umum' : 'Transfer Bank / QRIS'}</b></span>
+                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Potong Tabungan Umum' : 'QRIS Resmi'}</b></span>
                         </div>
 
                         {entry.keterangan && (
@@ -1741,7 +1756,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                           </span>
                         </div>
                         <div className="text-[11px] text-slate-400">
-                          {entry.tanggal} {entry.jam} • Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum' : 'Transfer Bank / QRIS'}</b>
+                          {entry.tanggal} {entry.jam} • Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum' : 'QRIS Resmi'}</b>
                         </div>
                         {entry.keterangan && (
                           <div className="text-[11px] text-slate-300 italic bg-slate-800/60 p-1.5 rounded-lg border border-slate-700/50">
@@ -1769,16 +1784,18 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                         </div>
                         <button
                           type="button"
+                          disabled={!isOnline}
                           onClick={() => handleApproveDonasi(entry)}
-                          className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs flex items-center gap-1 shadow-md shadow-emerald-600/30 transition-all cursor-pointer"
+                          className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs flex items-center gap-1 shadow-md shadow-emerald-600/30 transition-all cursor-pointer"
                         >
                           <Check className="w-3.5 h-3.5" />
-                          <span>Setujui</span>
+                          <span>{isOnline ? 'Setujui' : '🔒 Offline'}</span>
                         </button>
                         <button
                           type="button"
+                          disabled={!isOnline}
                           onClick={() => handleRejectDonasi(entry)}
-                          className="py-2 px-2.5 bg-red-900/60 hover:bg-red-800 text-red-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                          className="py-2 px-2.5 bg-red-900/60 hover:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-red-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
                         >
                           ✕ Tolak
                         </button>
@@ -1881,12 +1898,12 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmittingSalur}
+                  disabled={!isOnline || isSubmittingSalur}
                   className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm rounded-2xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
                 >
                   <Send className="w-4 h-4" />
                   <span>
-                    {isSubmittingSalur ? 'Mengesahkan Penyaluran...' : 'Sahkan & Catat Penyaluran ke Kas Koperasi'}
+                    {!isOnline ? '🔒 Offline (Transaksi Terkunci)' : isSubmittingSalur ? 'Mengesahkan Penyaluran...' : 'Sahkan & Catat Penyaluran ke Kas Koperasi'}
                   </span>
                 </button>
               </div>

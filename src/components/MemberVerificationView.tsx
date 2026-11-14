@@ -12,6 +12,7 @@ import { sendRealtimeNotification } from '../lib/fcm';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { LogoHws } from '../lib/logo';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
+import { useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Upload,
   CheckCircle2,
@@ -50,6 +51,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   onBackToDashboard,
 }) => {
   const isMember = !!currentMember;
+  const { isOnline } = useNetworkStatus();
   const [buktiSetorSuccess, setBuktiSetorSuccess] = useState<SetoranVerifikasi | null>(null);
 
   // Member deposit form state (Req 1: Kolom jumlah hari dikosongkan agar langsung dapat diinput)
@@ -57,7 +59,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [jumlahHari, setJumlahHari] = useState<string>('');
   const [nominalUmum, setNominalUmum] = useState<string>('50000');
   const [rekeningTujuan, setRekeningTujuan] = useState<string>('QRIS Resmi Koperasi HWS');
-  const [metode, setMetode] = useState<'transfer_bank' | 'qris'>('qris');
+  const [metode] = useState<'qris'>('qris');
   const [buktiUrl, setBuktiUrl] = useState<string>('');
   const [catatan, setCatatan] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -188,6 +190,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMember) return;
+    if (!assertInternetForTransaction('Setoran Simpanan')) {
+      setMsg({ type: 'error', text: 'Status jaringan MERAH (tidak ada internet). Semua transaksi dikunci sementara.' });
+      return;
+    }
     if (jenisSetoran === 'kewajiban' && daysCount <= 0) {
       setMsg({ type: 'error', text: 'Silakan isi jumlah hari setoran kewajiban terlebih dahulu.' });
       return;
@@ -201,7 +207,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     if (!buktiUrl || !buktiUrl.trim()) {
       setMsg({
         type: 'error',
-        text: 'Bukti transfer / setoran wajib di-upload saat melakukan setoran tabungan pokok maupun tabungan umum.',
+        text: 'Bukti pembayaran / resi QRIS wajib di-upload saat melakukan setoran tabungan pokok maupun tabungan umum.',
       });
       return;
     }
@@ -524,6 +530,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleTarikSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMember) return;
+    if (!assertInternetForTransaction('Penarikan Simpanan')) return;
     const amount = Number(nominalTarik);
     if (!amount || amount <= 0) {
       alert('Masukkan nominal penarikan yang valid.');
@@ -611,9 +618,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleApproveDeposit = async (dep: SetoranVerifikasi, rejectOthers: boolean = false) => {
     if (!currentAdmin) return;
     if (approvingId) return; // Mencegah double click secara bersamaan
+    if (!assertInternetForTransaction('Setujui Setoran')) return;
 
     if (dep.status === 'disetujui') {
       alert(`Setoran a/n ${dep.memberNama} sudah disetujui sebelumnya.`);
+      onBackToDashboard?.();
       return;
     }
 
@@ -685,6 +694,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
         alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui! Saldo tepat terupdate 1 kali.${rejectOthers ? ' Duplikat lainnya otomatis ditolak.' : ''}`);
         setApprovingId(null);
+        onBackToDashboard?.();
         return;
       }
     } catch (e) {
@@ -931,11 +941,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     }
 
     alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui online realtime! Saldo telah terupdate tepat 1 kali.`);
+    onBackToDashboard?.();
   };
 
   // ADMIN: Reject Deposit
   const handleRejectDeposit = async (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
+    if (!assertInternetForTransaction('Tolak Setoran')) return;
     const reason = prompt('Masukkan alasan penolakan setoran:') || 'Bukti transfer tidak valid/dana belum masuk';
 
     try {
@@ -1009,6 +1021,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
   // ADMIN: Delete Deposit Submission (Khusus Super Admin)
   const handleDeleteDeposit = async (dep: SetoranVerifikasi) => {
+    if (!assertInternetForTransaction('Hapus Setoran')) return;
     if (!currentAdmin || currentAdmin.role !== 'super_admin') {
       alert('Hanya Super Admin yang berhak menghapus riwayat verifikasi setoran.');
       return;
@@ -1135,11 +1148,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() => setIsTarikModalOpen(true)}
-                className="py-2 px-3.5 bg-sky-600/20 hover:bg-sky-600/30 text-sky-400 border border-sky-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
+                disabled={!isOnline}
+                onClick={() => {
+                  if (!assertInternetForTransaction('Tarik Saldo')) return;
+                  setIsTarikModalOpen(true);
+                }}
+                className="py-2 px-3.5 bg-sky-600/20 hover:bg-sky-600/30 disabled:opacity-40 disabled:cursor-not-allowed text-sky-400 border border-sky-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
               >
                 <CreditCard className="w-4 h-4" />
-                Tarik Saldo
+                {isOnline ? 'Tarik Saldo' : 'Terkunci (Offline)'}
               </button>
             </div>
 
@@ -1246,7 +1263,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   </div>
 
                   <div className="flex justify-between items-center pt-1 font-bold">
-                    <span className="text-xs text-slate-300">Total Yang Harus Ditransfer:</span>
+                    <span className="text-xs text-slate-300">Total Pembayaran QRIS:</span>
                     <span className="text-base text-amber-400 font-extrabold">
                       {formatRupiah(nominalKewajiban)}
                     </span>
@@ -1338,7 +1355,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   Scan via <b>BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay</b>
                 </div>
                 <div className="font-mono text-xs font-black text-amber-300">
-                  Nominal Transfer: {formatRupiah(nominalFinal)}
+                  Nominal QRIS: {formatRupiah(nominalFinal)}
                 </div>
                 <div className="pt-1">
                   <button
@@ -1400,11 +1417,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmitting || !buktiUrl}
+                disabled={isSubmitting || !buktiUrl || !isOnline}
                 className="w-full py-3 bg-[#f59e0b] hover:bg-[#d97706] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-extrabold text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <Send className="w-4 h-4" />
-                {isSubmitting ? 'Mengirim Data...' : !buktiUrl ? '⚠️ Wajib Upload Bukti Setoran Dahulu' : `Kirim Setoran (${formatRupiah(nominalFinal)})`}
+                {!isOnline ? '🔒 Transaksi Terkunci (Tidak Ada Koneksi Internet)' : isSubmitting ? 'Mengirim Data...' : !buktiUrl ? '⚠️ Wajib Upload Bukti Setoran Dahulu' : `Kirim Setoran (${formatRupiah(nominalFinal)})`}
               </button>
             </form>
           </div>
@@ -1563,9 +1580,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg"
+                disabled={!isOnline}
+                className="w-full py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs rounded-xl shadow-lg"
               >
-                Proses Penarikan Dana
+                {isOnline ? 'Proses Penarikan Dana' : '🔒 Terkunci (Tidak Ada Koneksi Internet)'}
               </button>
             </form>
           </div>
@@ -1587,8 +1605,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
               {isMember
-                ? 'Status verifikasi transfer simpanan oleh pengurus koperasi realtime'
-                : 'Periksa foto bukti transfer dan konfirmasi penambahan saldo anggota secara online'}
+                ? 'Status verifikasi setoran QRIS simpanan oleh pengurus koperasi realtime'
+                : 'Periksa foto bukti resi QRIS dan konfirmasi penambahan saldo anggota secara online'}
             </p>
           </div>
 
@@ -1939,17 +1957,18 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                                 <>
                                   <button
                                     type="button"
-                                    disabled={approvingId === dep.id}
+                                    disabled={!isOnline || approvingId === dep.id}
                                     onClick={() => handleApproveDeposit(dep, true)}
-                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[10px] font-black shadow transition-all flex items-center gap-1 cursor-pointer"
+                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[10px] font-black shadow transition-all flex items-center gap-1 cursor-pointer"
                                     title="Setujui pengajuan ini dan otomatis tolak pengajuan duplikat lainnya agar saldo tidak ganda"
                                   >
-                                    {approvingId === dep.id ? 'Memproses...' : '✓ Setujui (Tolak Duplikat)'}
+                                    {approvingId === dep.id ? 'Memproses...' : !isOnline ? '🔒 Offline' : '✓ Setujui (Tolak Duplikat)'}
                                   </button>
                                   <button
                                     type="button"
+                                    disabled={!isOnline}
                                     onClick={() => handleRejectDeposit(dep)}
-                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[10px] font-bold cursor-pointer"
+                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-red-300 rounded-lg text-[10px] font-bold cursor-pointer"
                                   >
                                     ✕ Tolak
                                   </button>
@@ -1958,16 +1977,17 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                                 <>
                                   <button
                                     type="button"
-                                    disabled={approvingId === dep.id}
+                                    disabled={!isOnline || approvingId === dep.id}
                                     onClick={() => handleApproveDeposit(dep, false)}
-                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
+                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
                                   >
-                                    {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
+                                    {approvingId === dep.id ? 'Memproses...' : !isOnline ? '🔒 Offline' : '✓ Setujui'}
                                   </button>
                                   <button
                                     type="button"
+                                    disabled={!isOnline}
                                     onClick={() => handleRejectDeposit(dep)}
-                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
+                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 disabled:opacity-40 disabled:cursor-not-allowed text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
                                   >
                                     ✕ Tolak
                                   </button>
@@ -1978,8 +1998,9 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                           {currentAdmin?.role === 'super_admin' && (
                             <button
                               type="button"
+                              disabled={!isOnline}
                               onClick={() => handleDeleteDeposit(dep)}
-                              className="py-1 px-2 bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 border border-rose-500/50 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 transition-all"
+                              className="py-1 px-2 bg-rose-950/50 hover:bg-rose-900/80 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 border border-rose-500/50 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 transition-all"
                               title="Super Admin: Hapus Pengajuan Setoran"
                             >
                               <Trash2 className="w-3.5 h-3.5 text-rose-400" />
@@ -2007,7 +2028,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
           <div className="bg-[#0f172a] border border-slate-700 max-w-lg w-full rounded-2xl overflow-hidden shadow-2xl">
             <div className="p-3 bg-[#162035] border-b border-slate-700 flex justify-between items-center">
-              <span className="text-xs font-bold text-white">Foto Bukti Transfer Bank</span>
+              <span className="text-xs font-bold text-white">Foto Bukti Transaksi / Resi QRIS</span>
               <button onClick={() => setPreviewBukti(null)} className="text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>

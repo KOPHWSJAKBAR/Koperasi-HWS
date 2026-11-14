@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import fs from 'fs';
 import http from 'http';
+import https from 'https';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
@@ -273,13 +274,131 @@ function deterministicMemberHash(seed: string): string {
   return (h >>> 0).toString(36);
 }
 
+function normalizeMemberNameServer(name?: string): string {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizePhoneIndonesiaServer(phone?: string): string {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('62') && digits.length >= 10) {
+    digits = '0' + digits.slice(2);
+  } else if (digits.startsWith('8') && digits.length >= 8) {
+    digits = '0' + digits;
+  }
+  return digits;
+}
+
+function normalizeNikServer(nik?: string): string {
+  const digits = String(nik || '').replace(/\D/g, '');
+  return digits || String(nik || '').trim();
+}
+
+function normalizeBankRekServer(rek?: string): string {
+  return String(rek || '')
+    .replace(/[\s.-]+/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function isBankRekPlaceholderServer(rek?: string): boolean {
+  const clean = normalizeBankRekServer(rek);
+  return !clean || clean === '-' || /^0+$/.test(clean) || clean.length < 5;
+}
+
+function validateMemberBiodataServer(
+  candidate: any,
+  members: any[],
+  excludeMemberId?: string
+): string | null {
+  const cleanName = normalizeMemberNameServer(candidate?.nama);
+  const cleanNik = normalizeNikServer(candidate?.nik);
+  const cleanEmail = String(candidate?.email || '').trim().toLowerCase();
+  const cleanHp = normalizePhoneIndonesiaServer(candidate?.whatsapp);
+  const rawRek = String(candidate?.bankPribadi?.nomorRekening || '').trim();
+  const cleanRek = normalizeBankRekServer(rawRek);
+  const cleanAtasNama = normalizeMemberNameServer(candidate?.bankPribadi?.atasNama);
+
+  if (!cleanName || cleanName.length < 2) {
+    return 'Nama lengkap anggota wajib diisi.';
+  }
+  if (!cleanNik || cleanNik.length < 6) {
+    return 'NIK anggota wajib diisi dengan benar.';
+  }
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return 'Alamat email aktif wajib diisi dengan format yang benar.';
+  }
+  if (!cleanHp || cleanHp.length < 8) {
+    return 'Nomor HP / WhatsApp aktif wajib diisi (minimal 8 digit).';
+  }
+  if (isBankRekPlaceholderServer(rawRek)) {
+    return 'Nomor rekening bank pribadi wajib diisi (tidak boleh kosong atau tanda "-").';
+  }
+  if (!cleanAtasNama || cleanAtasNama === '-' || cleanAtasNama.length < 2) {
+    return 'Nama pemilik rekening bank pribadi wajib diisi.';
+  }
+
+  const others = (members || []).filter((m: any) => m && m.id !== excludeMemberId);
+
+  const dupName = others.find((m: any) => normalizeMemberNameServer(m.nama) === cleanName);
+  if (dupName) {
+    return `Nama anggota "${candidate.nama}" sudah terdaftar (${dupName.nomorAnggota}). Nama anggota tidak boleh sama dengan anggota lain.`;
+  }
+
+  const dupNik = others.find((m: any) => m.nik && normalizeNikServer(m.nik) === cleanNik);
+  if (dupNik) {
+    return `NIK "${cleanNik}" sudah terdaftar sebagai anggota lain (${dupNik.nama}).`;
+  }
+
+  const dupEmail = others.find((m: any) => m.email && String(m.email).trim().toLowerCase() === cleanEmail);
+  if (dupEmail) {
+    return `Alamat email "${candidate.email}" sudah digunakan oleh anggota lain (${dupEmail.nama}).`;
+  }
+
+  const dupHp = others.find((m: any) => m.whatsapp && normalizePhoneIndonesiaServer(m.whatsapp) === cleanHp);
+  if (dupHp) {
+    return `Nomor HP / WhatsApp "${candidate.whatsapp}" sudah digunakan oleh anggota lain (${dupHp.nama}).`;
+  }
+
+  const dupRek = others.find((m: any) => {
+    const mRek = m.bankPribadi?.nomorRekening;
+    return mRek && !isBankRekPlaceholderServer(mRek) && normalizeBankRekServer(mRek) === cleanRek;
+  });
+  if (dupRek) {
+    return `Nomor rekening bank "${rawRek}" sudah digunakan oleh anggota lain (${dupRek.nama}).`;
+  }
+
+  const dupHolder = others.find((m: any) => {
+    const mHolder = normalizeMemberNameServer(m.bankPribadi?.atasNama);
+    return mHolder && mHolder !== '-' && mHolder === cleanAtasNama;
+  });
+  if (dupHolder) {
+    return `Nama pemilik rekening "${candidate.bankPribadi?.atasNama}" sudah digunakan oleh anggota lain (${dupHolder.nama}).`;
+  }
+
+  return null;
+}
+
 function deduplicateMembersServer(members: any[], deletedIds: string[] = []): any[] {
   const deletedSet = new Set<string>(deletedIds || []);
   const cleanList = (Array.isArray(members) ? members : []).filter(
     (m: any) => m && m.id && !deletedSet.has(m.id)
   );
 
-  // Prefer canonical non-dup IDs, non-placeholder records, and non-zero balances
+  const biodataScore = (m: any) => {
+    let s = 0;
+    if (m.nik && String(m.nik).trim()) s += 2;
+    if (m.whatsapp && String(m.whatsapp).replace(/\D/g, '').length >= 8) s += 2;
+    if (m.email && String(m.email).trim()) s += 2;
+    if (m.bankPribadi?.nomorRekening && !isBankRekPlaceholderServer(m.bankPribadi.nomorRekening)) s += 2;
+    if (/^115\d{9}$/.test(String(m.nomorAnggota || ''))) s += 1;
+    return s;
+  };
+
+  // Prefer canonical non-dup IDs, non-placeholder records, non-zero balances, and richer biodata
   cleanList.sort((a: any, b: any) => {
     const aDup = String(a.id).includes('-dup-') ? 1 : 0;
     const bDup = String(b.id).includes('-dup-') ? 1 : 0;
@@ -287,7 +406,9 @@ function deduplicateMembersServer(members: any[], deletedIds: string[] = []): an
     const aPh = a.isRestoredPlaceholder ? 1 : 0;
     const bPh = b.isRestoredPlaceholder ? 1 : 0;
     if (aPh !== bPh) return aPh - bPh;
-    return (Number(b.totalSimpanan) || 0) - (Number(a.totalSimpanan) || 0);
+    const balDiff = (Number(b.totalSimpanan) || 0) - (Number(a.totalSimpanan) || 0);
+    if (balDiff !== 0) return balDiff;
+    return biodataScore(b) - biodataScore(a);
   });
 
   const result: any[] = [];
@@ -297,26 +418,15 @@ function deduplicateMembersServer(members: any[], deletedIds: string[] = []): an
     const m = { ...raw };
     delete m.biometricActive;
     const isDupId = String(m.id).includes('-dup-');
-    const cleanName = String(m.nama || '').toLowerCase().trim();
+    const cleanName = normalizeMemberNameServer(m.nama);
     const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
     const cleanEmail = String(m.email || '').toLowerCase().trim();
     const cleanNik = String(m.nik || '').trim();
 
     let match = byId.get(m.id);
-    if (!match) {
-      match = result.find((existing) => {
-        const exName = String(existing.nama || '').toLowerCase().trim();
-        const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
-        const exEmail = String(existing.email || '').toLowerCase().trim();
-        const exNik = String(existing.nik || '').trim();
-        if (!cleanName || exName !== cleanName) return false;
-        if (isDupId || String(existing.id).includes('-dup-')) return true;
-        if (cleanHp && exHp && cleanHp === exHp) return true;
-        if (cleanEmail && exEmail && cleanEmail === exEmail) return true;
-        if (cleanNik && exNik && cleanNik === exNik) return true;
-        if (!cleanHp && !cleanEmail && !cleanNik && !exHp && !exEmail && !exNik) return true;
-        return false;
-      });
+    if (!match && cleanName) {
+      // Hapus seluruh data anggota duplikat berdasarkan nama yang sama
+      match = result.find((existing) => normalizeMemberNameServer(existing.nama) === cleanName);
     }
 
     if (match) {
@@ -329,6 +439,13 @@ function deduplicateMembersServer(members: any[], deletedIds: string[] = []): an
       if (!match.alamatLengkap && m.alamatLengkap) match.alamatLengkap = m.alamatLengkap;
       if (!match.ktpPhotoUrl && m.ktpPhotoUrl) match.ktpPhotoUrl = m.ktpPhotoUrl;
       if (!match.avatarUrl && m.avatarUrl) match.avatarUrl = m.avatarUrl;
+      if (isBankRekPlaceholderServer(match.bankPribadi?.nomorRekening) && !isBankRekPlaceholderServer(m.bankPribadi?.nomorRekening)) {
+        match.bankPribadi = {
+          namaBank: m.bankPribadi?.namaBank || match.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
+          nomorRekening: m.bankPribadi.nomorRekening,
+          atasNama: m.bankPribadi?.atasNama || match.bankPribadi?.atasNama || match.nama,
+        };
+      }
       if (match.isRestoredPlaceholder && match.nik && match.whatsapp) {
         match.isRestoredPlaceholder = false;
       }
@@ -371,20 +488,14 @@ function mergeServerState(current: any, incoming: any): any {
     ...(incoming.deletedMemberIds || []),
   ]);
 
-  // 1. Members: Union of current and incoming members without creating random -dup- clones!
+  // 1. Members: Union of current and incoming members without creating duplicate names or -dup- clones!
   const memberMap = new Map<string, any>();
   const findMemberByIdentity = (m: any) => {
-    const cleanName = String(m.nama || '').toLowerCase().trim();
-    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
-    const cleanEmail = String(m.email || '').toLowerCase().trim();
+    const cleanName = normalizeMemberNameServer(m.nama);
+    if (!cleanName) return undefined;
     for (const existing of memberMap.values()) {
-      const exName = String(existing.nama || '').toLowerCase().trim();
-      const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
-      const exEmail = String(existing.email || '').toLowerCase().trim();
-      if (cleanName && exName === cleanName) {
-        if (cleanHp && exHp && cleanHp === exHp) return existing;
-        if (cleanEmail && exEmail && cleanEmail === exEmail) return existing;
-        if (String(m.id).includes('-dup-')) return existing;
+      if (normalizeMemberNameServer(existing.nama) === cleanName) {
+        return existing;
       }
     }
     return undefined;
@@ -409,11 +520,12 @@ function mergeServerState(current: any, incoming: any): any {
           bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
 
     if (bySameId && isSamePersonOnId) {
-      // Exact ID + same person match
+      // Exact ID + same person match (never let empty incoming strings wipe existing inputted fields)
       memberMap.set(m.id, {
         ...bySameId,
         ...m,
         id: bySameId.id,
+        nama: m.nama && String(m.nama).trim() ? m.nama : bySameId.nama,
         nomorAnggota:
           /^115\d{9}$/.test(String(bySameId.nomorAnggota || ''))
             ? bySameId.nomorAnggota
@@ -432,12 +544,15 @@ function mergeServerState(current: any, incoming: any): any {
         avatarUrl: m.avatarUrl || bySameId.avatarUrl,
         isRestoredPlaceholder: m.nik && m.whatsapp ? false : bySameId.isRestoredPlaceholder,
         bankPribadi: {
-          ...bySameId.bankPribadi,
-          ...(m.bankPribadi || {}),
+          namaBank: m.bankPribadi?.namaBank || bySameId.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
           nomorRekening:
-            m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
+            !isBankRekPlaceholderServer(m.bankPribadi?.nomorRekening)
               ? m.bankPribadi.nomorRekening
               : bySameId.bankPribadi?.nomorRekening || '-',
+          atasNama:
+            m.bankPribadi?.atasNama && String(m.bankPribadi.atasNama).trim() && String(m.bankPribadi.atasNama).trim() !== '-'
+              ? m.bankPribadi.atasNama
+              : bySameId.bankPribadi?.atasNama || bySameId.nama,
         },
       });
       return;
@@ -1002,9 +1117,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
     const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
     const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
 
-    // 1. Fetch remote members from Firestore (ignore legacy -dup- artifacts and purge them immediately)
+    // 1. Fetch remote members from Firestore (ignore legacy -dup- & same-name duplicates and purge them from Firestore)
     const memSnap = await getDocs(collection(db, 'members'));
-    const remoteMembers: any[] = [];
+    const rawRemoteMembers: Array<{ docId: string; data: any }> = [];
     const dupDocsToDelete: string[] = [];
     memSnap.forEach((d) => {
       const data = d.data();
@@ -1013,10 +1128,22 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
         return;
       }
       if (data && data.id) {
-        remoteMembers.push(data);
+        rawRemoteMembers.push({ docId: d.id, data });
       }
     });
+    const dedupedRemote = deduplicateMembersServer(
+      rawRemoteMembers.map((r) => r.data),
+      currentState.deletedMemberIds || []
+    );
+    const keepIds = new Set(dedupedRemote.map((m: any) => m.id));
+    rawRemoteMembers.forEach(({ docId, data }) => {
+      if (!keepIds.has(data.id) || docId !== data.id) {
+        dupDocsToDelete.push(docId);
+      }
+    });
+    const remoteMembers = dedupedRemote;
     if (dupDocsToDelete.length > 0) {
+      console.log(`[Firestore Deduplicate] Purging ${dupDocsToDelete.length} duplicate member doc(s) from Firestore.`);
       Promise.all(dupDocsToDelete.map((id) => deleteDoc(doc(db, 'members', id)).catch(() => {}))).catch(() => {});
     }
 
@@ -1710,11 +1837,87 @@ async function startServer() {
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/api/uploads', express.static(UPLOADS_DIR));
 
+  // Cached real internet data probe (4s TTL) so LAN/Wi-Fi without mobile/ISP data reports online: false cleanly
+  let lastInternetProbeTime = 0;
+  let lastInternetProbeOk = true;
+  let activeInternetProbePromise: Promise<boolean> | null = null;
+
+  const probeExternalHost = (hostname: string, pathName: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (ok: boolean) => {
+        if (!settled) {
+          settled = true;
+          resolve(ok);
+        }
+      };
+
+      try {
+        const req = https.request(
+          {
+            hostname,
+            port: 443,
+            path: pathName,
+            method: 'HEAD',
+            timeout: 2200,
+          },
+          (probeRes) => {
+            probeRes.resume();
+            const code = probeRes.statusCode || 0;
+            done(code > 0 && code < 500);
+          }
+        );
+        req.on('timeout', () => {
+          req.destroy();
+          done(false);
+        });
+        req.on('error', () => done(false));
+        req.end();
+      } catch {
+        done(false);
+      }
+    });
+  };
+
+  const checkRealInternetConnectivity = async (): Promise<boolean> => {
+    const now = Date.now();
+    if (now - lastInternetProbeTime < 4000) {
+      return lastInternetProbeOk;
+    }
+    if (activeInternetProbePromise) {
+      return activeInternetProbePromise;
+    }
+    activeInternetProbePromise = (async () => {
+      try {
+        let ok = await probeExternalHost('www.gstatic.com', '/generate_204');
+        if (!ok) {
+          ok = await probeExternalHost('firestore.googleapis.com', '/');
+        }
+        lastInternetProbeTime = Date.now();
+        lastInternetProbeOk = ok;
+        return ok;
+      } catch {
+        lastInternetProbeTime = Date.now();
+        lastInternetProbeOk = false;
+        return false;
+      } finally {
+        activeInternetProbePromise = null;
+      }
+    })();
+    return activeInternetProbePromise;
+  };
+
   // Active Connection Ping Endpoint for Client Internet Status Guard
-  app.all('/api/ping', (req: Request, res: Response) => {
+  app.all('/api/ping', async (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     res.setHeader('Pragma', 'no-cache');
-    res.status(200).json({ status: 'online', time: Date.now() });
+    const hasInternet = await checkRealInternetConnectivity();
+    res.status(200).json({
+      status: hasInternet ? 'online' : 'no_internet',
+      online: hasInternet,
+      internet: hasInternet,
+      time: Date.now(),
+    });
   });
 
   // SSE Realtime Channel with 15s keep-alive heartbeat for production resilience (Cloud Run & proxies)
@@ -1810,7 +2013,7 @@ async function startServer() {
   app.get('/api/version', (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.json({
-      version: '2.6.1',
+      version: '2.7.0',
       platforms: ['android', 'ios', 'web', 'pc', 'aistudio'],
       preserveDataOnUpdate: true,
       alwaysOnline: true,
@@ -3016,54 +3219,44 @@ async function startServer() {
     }
   });
 
-  // Dedicated Member Registration Endpoint for instant authoritative persistence (Login & Admin) - ANTI MENIBAN & REALTIME ONLINE
+  // Dedicated Member Registration Endpoint for instant authoritative persistence (Login & Admin) - ANTI PENDAFTARAN BERULANG & ANTI MENIBAN
   app.post('/api/members/register', (req: Request, res: Response) => {
     try {
-      const { member, nextRunningNumber, adminName } = req.body;
+      const { member, nextRunningNumber, adminName, isUpdate } = req.body;
       if (!member || !member.nama) {
         return res.status(400).json({ error: 'Data nama anggota diperlukan' });
       }
 
-      currentState.members = currentState.members || [];
-      const cleanNik = member.nik ? String(member.nik).trim() : '';
-      const cleanHp = member.whatsapp ? String(member.whatsapp).replace(/\D/g, '') : '';
-      const cleanEmail = member.email ? String(member.email).trim().toLowerCase() : '';
-
-      // User Req 2: Nomer tlp anggota dan email anggota tidak bisa sama dengan anggota lainnya
-      if (cleanNik) {
-        const dupNik = currentState.members.find(
-          (m: any) => m.id !== member.id && m.nik && String(m.nik).trim() === cleanNik
-        );
-        if (dupNik) {
-          return res.status(400).json({ error: 'NIK ini sudah terdaftar sebagai anggota koperasi HWS.' });
-        }
-      }
-      if (cleanHp) {
-        const dupHp = currentState.members.find(
-          (m: any) => m.id !== member.id && m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp
-        );
-        if (dupHp) {
-          return res.status(400).json({
-            error: `Nomor telepon / WhatsApp ${member.whatsapp} sudah digunakan oleh anggota lain (${dupHp.nama}).`,
-          });
-        }
-      }
-      if (cleanEmail) {
-        const dupEmail = currentState.members.find(
-          (m: any) => m.id !== member.id && m.email && String(m.email).trim().toLowerCase() === cleanEmail
-        );
-        if (dupEmail) {
-          return res.status(400).json({
-            error: `Alamat email ${member.email} sudah digunakan oleh anggota lain (${dupEmail.nama}).`,
-          });
-        }
-      }
-
-      // Check if this member is an existing member updating their own profile (strictly by ID or NIK for admin management)
-      const existingIdx = currentState.members.findIndex((m: any) =>
-        (member.id && m.id === member.id) ||
-        (adminName && cleanNik && m.nik && String(m.nik).trim() === cleanNik)
+      currentState.members = deduplicateMembersServer(
+        currentState.members || [],
+        currentState.deletedMemberIds || []
       );
+      const cleanNik = normalizeNikServer(member.nik);
+      const isExplicitUpdate = isUpdate === true || member.isUpdate === true;
+
+      // Idempotency guard for exact same submission retry (e.g. double network request with identical member.id)
+      if (!isExplicitUpdate && member.id) {
+        const sameIdExisting = currentState.members.find((m: any) => m.id === member.id);
+        if (sameIdExisting) {
+          const samePerson =
+            normalizeMemberNameServer(sameIdExisting.nama) === normalizeMemberNameServer(member.nama) &&
+            normalizeNikServer(sameIdExisting.nik) === cleanNik;
+          if (samePerson) {
+            return res.json({ success: true, member: sameIdExisting, state: currentState, idempotent: true });
+          }
+        }
+      }
+
+      // Only allow updating when explicitly requested via isUpdate === true with matching ID (NEVER silently match by NIK on new registration)
+      const existingIdx = isExplicitUpdate && member.id
+        ? currentState.members.findIndex((m: any) => m.id === member.id)
+        : -1;
+
+      const excludeId = existingIdx !== -1 ? currentState.members[existingIdx].id : undefined;
+      const biodataError = validateMemberBiodataServer(member, currentState.members, excludeId);
+      if (biodataError) {
+        return res.status(400).json({ error: biodataError });
+      }
 
       let finalMember: any;
 
@@ -3096,17 +3289,7 @@ async function startServer() {
         currentState.members[existingIdx] = finalMember;
       } else {
         // BRAND NEW MEMBER REGISTRATION
-        // 1. Validate WhatsApp uniqueness
-        if (cleanHp) {
-          const duplicateHp = currentState.members.find(
-            (m: any) => m.whatsapp && String(m.whatsapp).replace(/\D/g, '') === cleanHp
-          );
-          if (duplicateHp) {
-            return res.status(400).json({
-              error: `Nomor WhatsApp ${member.whatsapp} sudah digunakan oleh anggota lain (${duplicateHp.nama}).`,
-            });
-          }
-        }
+        const cleanHp = member.whatsapp ? String(member.whatsapp).replace(/\D/g, '') : '';
 
         // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Ketentuan: 115 depan, 2 angka DD tanggal mendaftar, 2 angka KW kode wilayah, 2 angka YY tahun, 3 angka NNN nomer anggota)
         // Nomor anggota yang pernah dipakai TIDAK DAPAT digunakan kembali meskipun anggota sudah dihapus

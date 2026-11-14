@@ -8,9 +8,6 @@
  * 4. Haptic Feedback & Verifikasi Sensor Lokal: Respons getar dan pemindaian sensor fisik langsung.
  */
 
-import { auth } from './firebase-init';
-import { signInAnonymously } from 'firebase/auth';
-
 const BIO_ACTIVE_KEY = 'hws_biometric_active';
 const BIO_USER_KEY = 'hws_biometric_user';
 const BIO_ROLE_KEY = 'hws_biometric_user_role';
@@ -36,10 +33,6 @@ export async function registerBiometricCredentials(
   userRole: 'member' | 'admin'
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    if (!auth.currentUser) {
-      await signInAnonymously(auth).catch(() => {});
-    }
-
     // Buat token kriptografi lokal hardware device binding (Zero-Server Storage)
     let deviceToken = '';
     if (typeof window !== 'undefined' && window.crypto) {
@@ -95,11 +88,6 @@ export async function authenticateBiometric(
         success: false,
         error: 'Identitas akun belum terdaftar pada sensor perangkat ini. Masukkan Nomor Anggota atau Username Anda terlebih dahulu.',
       };
-    }
-
-    // Integrasi Firebase Auth jika belum aktif
-    if (!auth.currentUser) {
-      await signInAnonymously(auth).catch(() => {});
     }
 
     // Haptic feedback saat verifikasi sidik jari (standar perbankan)

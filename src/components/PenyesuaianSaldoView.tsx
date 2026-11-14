@@ -9,6 +9,7 @@ import {
 } from '../types';
 import { formatRupiah, createAuditLog, getWibDateStr, getWibTimeStr, formatWibDateShort } from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
+import { useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   SlidersHorizontal,
   Scale,
@@ -50,6 +51,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   updateState,
   currentAdmin,
 }) => {
+  const { isOnline } = useNetworkStatus();
   const [activeSubTab, setActiveSubTab] = useState<'koreksi' | 'pembagian_hasil'>('koreksi');
 
   // ================= STATE 1: KOREKSI SALDO =================
@@ -119,6 +121,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const handleKirimKoreksi = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError('');
+    if (!assertInternetForTransaction('Koreksi Saldo')) return;
 
     if (!canPerformAdjustment) {
       alert('Akses Ditolak: Anda tidak memiliki wewenang untuk mengajukan atau melakukan koreksi saldo anggota.');
@@ -427,6 +430,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const handleKirimBagiHasil = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError('');
+    if (!assertInternetForTransaction('Pembagian Hasil')) return;
 
     if (!canPerformAdjustment) {
       alert('Akses Ditolak: Hanya Super Admin yang berwenang menyetujui transaksi pembagian hasil.');
@@ -1005,12 +1009,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmittingKoreksi || !canPerformAdjustment}
+                  disabled={!isOnline || isSubmittingKoreksi || !canPerformAdjustment}
                   className="w-full py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>
-                    {isSubmittingKoreksi ? 'Memproses Koreksi...' : 'Klik Kirim Koreksi Saldo'}
+                    {!isOnline ? '🔒 Offline (Transaksi Terkunci)' : isSubmittingKoreksi ? 'Memproses Koreksi...' : 'Klik Kirim Koreksi Saldo'}
                   </span>
                 </button>
               </div>
@@ -1325,12 +1329,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={isSubmittingBagiHasil || !canPerformAdjustment}
+                  disabled={!isOnline || isSubmittingBagiHasil || !canPerformAdjustment}
                   className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
                 >
                   <TrendingUp className="w-4 h-4" />
                   <span>
-                    {isSubmittingBagiHasil ? 'Memproses Bagi Hasil...' : 'Klik Kirim & Proses Pembagian Hasil'}
+                    {!isOnline ? '🔒 Offline (Transaksi Terkunci)' : isSubmittingBagiHasil ? 'Memproses Bagi Hasil...' : 'Klik Kirim & Proses Pembagian Hasil'}
                   </span>
                 </button>
               </div>

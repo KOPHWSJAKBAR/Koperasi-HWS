@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList } from '../lib/storage';
+import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { initFCM } from '../lib/fcm';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -18,7 +18,7 @@ import { KtaDigitalModal } from './KtaDigitalModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
-import { ConnectionStatusBadge, useNetworkStatus } from './NetworkStatusGuard';
+import { ConnectionStatusBadge, useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   CreditCard,
   ArrowUpRight,
@@ -79,6 +79,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   >('dashboard');
 
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsInitialSubModal, setSettingsInitialSubModal] = useState<null | 'edit_profile'>(null);
   const [showKtaModal, setShowKtaModal] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [copiedRekening, setCopiedRekening] = useState(false);
@@ -274,6 +275,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const handleProceedToConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     setTfError('');
+    if (!assertInternetForTransaction('Transfer Sesama Anggota')) {
+      setTfError('Status jaringan MERAH: Tidak ada koneksi data internet. Transfer dikunci saat offline.');
+      return;
+    }
     if (!targetMemberRecipient) {
       setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
       return;
@@ -298,6 +303,11 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     e.preventDefault();
     setTfError('');
     setTfSuccess('');
+
+    if (!assertInternetForTransaction('Transfer Sesama Anggota')) {
+      setTfError('Status jaringan MERAH: Tidak ada koneksi data internet. Transfer dikunci saat offline.');
+      return;
+    }
 
     if (!targetMemberRecipient) {
       setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
@@ -415,6 +425,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const handleChangePinInTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     setPinChangeMsg('');
+    if (!assertInternetForTransaction('Ganti PIN Transaksi')) {
+      setPinChangeMsg('Status jaringan MERAH: Tidak ada koneksi data internet.');
+      return;
+    }
 
     if (pinChangePassword !== currentMember.password) {
       setPinChangeMsg('Password login Anda tidak cocok.');
@@ -461,6 +475,11 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
   const handleTarikSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTarikError('');
+
+    if (!assertInternetForTransaction('Penarikan Simpanan')) {
+      setTarikError('Status jaringan MERAH: Tidak ada koneksi data internet. Penarikan dikunci saat offline.');
+      return;
+    }
 
     const amount = Number(tarikNominal);
     if (!amount || amount <= 0) {
@@ -731,6 +750,30 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       <main className={`w-full max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex-1 overflow-x-hidden ${activeMenu === 'chat' ? 'p-2 sm:p-4 flex flex-col min-h-0' : 'p-3 sm:p-6 space-y-5 sm:space-y-6'}`}>
         {activeMenu === 'dashboard' ? (
           <>
+            {isMemberBiodataIncomplete(currentMember) && (
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/15 border border-amber-500/60 text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="text-xs">
+                    <div className="font-black text-amber-300">Biodata Wajib Belum Lengkap</div>
+                    <div className="text-amber-100/90 mt-0.5">
+                      Mohon lengkapi <b>Nama, NIK, Email, No. HP, Nomor Rekening, dan Pemilik Rekening Bank Pribadi</b> Anda yang unik dan aktif.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsInitialSubModal('edit_profile');
+                    setShowSettings(true);
+                  }}
+                  className="shrink-0 py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs transition-all cursor-pointer"
+                >
+                  Lengkapi Biodata
+                </button>
+              </div>
+            )}
+
             {/* Top Balance Card (Matching Anggota PC Dashboard.png & Mobile) */}
             <div className="w-full bg-[#0d1424] border border-slate-700/80 rounded-3xl p-5 sm:p-7 shadow-2xl relative overflow-hidden">
               {/* Subtle Logo Watermark on right corner */}
@@ -862,29 +905,41 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3 mt-5 pt-4 border-t border-slate-700/60 relative z-10">
                 <button
                   type="button"
-                  onClick={() => setActiveMenu('setoran')}
-                  className="py-3 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all text-xs sm:text-sm"
+                  disabled={!isOnline}
+                  onClick={() => {
+                    if (!assertInternetForTransaction('Setor Tabungan')) return;
+                    setActiveMenu('setoran');
+                  }}
+                  className="py-3 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-45 disabled:cursor-not-allowed text-slate-950 font-black rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all text-xs sm:text-sm"
                 >
                   <ArrowUpRight className="w-4 h-4" />
-                  <span>Setor Tabungan</span>
+                  <span>{isOnline ? 'Setor Tabungan' : '🔒 Setor Terkunci (Offline)'}</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setShowTarikModal(true)}
-                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-sky-400 border border-sky-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
+                  disabled={!isOnline}
+                  onClick={() => {
+                    if (!assertInternetForTransaction('Tarik Tabungan')) return;
+                    setShowTarikModal(true);
+                  }}
+                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-sky-400 border border-sky-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
                 >
                   <ArrowDownLeft className="w-4 h-4 text-sky-400" />
-                  <span>Tarik Tabungan (Umum / Pokok)</span>
+                  <span>{isOnline ? 'Tarik Tabungan (Umum / Pokok)' : '🔒 Tarik Terkunci (Offline)'}</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setShowTransferModal(true)}
-                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
+                  disabled={!isOnline}
+                  onClick={() => {
+                    if (!assertInternetForTransaction('Transfer Sesama Anggota')) return;
+                    setShowTransferModal(true);
+                  }}
+                  className="py-3 px-4 bg-[#162035] hover:bg-slate-800 disabled:opacity-45 disabled:cursor-not-allowed text-emerald-400 border border-emerald-500/30 font-bold rounded-2xl flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] transition-all text-xs sm:text-sm cursor-pointer"
                 >
                   <ArrowLeftRight className="w-4 h-4 text-emerald-400" />
-                  <span>Transfer Sesama Anggota</span>
+                  <span>{isOnline ? 'Transfer Sesama Anggota' : '🔒 Transfer Terkunci (Offline)'}</span>
                 </button>
               </div>
 
@@ -1090,7 +1145,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     <div>
                       <div className="text-xs sm:text-sm font-extrabold">2. Verifikasi Setoran</div>
                       <div className="text-[11px] sm:text-xs text-slate-400 mt-0.5">
-                        Setor & upload bukti transfer
+                        Setor via QRIS & upload bukti resi
                       </div>
                     </div>
                   </div>
@@ -1615,10 +1670,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                     </button>
                     <button
                       type="submit"
-                      disabled={tfPin.length !== 6}
-                      className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                      disabled={tfPin.length !== 6 || !isOnline}
+                      className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-45 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all"
                     >
-                      Kirim Transfer Sekarang
+                      {isOnline ? 'Kirim Transfer Sekarang' : '🔒 Offline (Terkunci)'}
                     </button>
                   </div>
                 </form>
@@ -1835,10 +1890,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={!tarikNominal || !tarikPin || tarikPin.length !== 6 || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
+                  disabled={!isOnline || !tarikNominal || !tarikPin || tarikPin.length !== 6 || (tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked)}
                   className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all cursor-pointer"
                 >
-                  {tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? '🔒 Tabungan Pokok Terkunci' : 'Tarik Dana Sekarang'}
+                  {!isOnline ? '🔒 Offline (Terkunci)' : tarikJenisTabungan === 'pokok' && currentMember.isPokokLocked ? '🔒 Tabungan Pokok Terkunci' : 'Tarik Dana Sekarang'}
                 </button>
               </div>
             </form>
@@ -1856,7 +1911,11 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           state={state}
           updateState={updateState}
           currentMember={currentMember}
-          onClose={() => setShowSettings(false)}
+          initialSubModal={settingsInitialSubModal}
+          onClose={() => {
+            setShowSettings(false);
+            setSettingsInitialSubModal(null);
+          }}
           onLogout={onLogout}
           onOpenKta={() => setShowKtaModal(true)}
           onOpenMutasi={() => setActiveMenu('mutasi')}

@@ -15,6 +15,7 @@ import {
   WILAYAH_CODE_MAP,
   WILAYAH_ABBR_MAP,
 } from '../types';
+import { getIsInternetConnected } from '../components/NetworkStatusGuard';
 
 const STORAGE_KEY = 'koperasi_hws_local_cache';
 
@@ -315,11 +316,160 @@ function deterministicMemberHashClient(seed: string): string {
   return (h >>> 0).toString(36);
 }
 
+export function normalizeMemberName(name?: string): string {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function normalizePhoneIndonesia(phone?: string): string {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('62') && digits.length >= 10) {
+    digits = '0' + digits.slice(2);
+  } else if (digits.startsWith('8') && digits.length >= 8) {
+    digits = '0' + digits;
+  }
+  return digits;
+}
+
+export function normalizeNik(nik?: string): string {
+  const digits = String(nik || '').replace(/\D/g, '');
+  return digits || String(nik || '').trim();
+}
+
+export function normalizeBankRek(rek?: string): string {
+  return String(rek || '')
+    .replace(/[\s.-]+/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+export function isBankRekPlaceholder(rek?: string): boolean {
+  const clean = normalizeBankRek(rek);
+  return !clean || clean === '-' || /^0+$/.test(clean) || clean.length < 5;
+}
+
+export interface BiodataValidationInput {
+  nama?: string;
+  nik?: string;
+  email?: string;
+  whatsapp?: string;
+  bankPribadi?: {
+    namaBank?: string;
+    nomorRekening?: string;
+    atasNama?: string;
+  };
+}
+
+export function validateMemberBiodata(
+  candidate: BiodataValidationInput,
+  members: MemberUser[],
+  excludeMemberId?: string
+): string | null {
+  const cleanName = normalizeMemberName(candidate.nama);
+  const cleanNik = normalizeNik(candidate.nik);
+  const cleanEmail = String(candidate.email || '').trim().toLowerCase();
+  const cleanHp = normalizePhoneIndonesia(candidate.whatsapp);
+  const rawRek = String(candidate.bankPribadi?.nomorRekening || '').trim();
+  const cleanRek = normalizeBankRek(rawRek);
+  const cleanAtasNama = normalizeMemberName(candidate.bankPribadi?.atasNama);
+
+  if (!cleanName || cleanName.length < 2) {
+    return 'Nama lengkap wajib diisi.';
+  }
+  if (!cleanNik || cleanNik.length < 6) {
+    return 'NIK wajib diisi dengan benar.';
+  }
+  if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return 'Alamat email aktif wajib diisi dengan format yang benar.';
+  }
+  if (!cleanHp || cleanHp.length < 8) {
+    return 'Nomor HP / WhatsApp aktif wajib diisi (minimal 8 digit).';
+  }
+  if (isBankRekPlaceholder(rawRek)) {
+    return 'Nomor rekening bank pribadi wajib diisi (tidak boleh kosong atau tanda "-").';
+  }
+  if (!cleanAtasNama || cleanAtasNama === '-' || cleanAtasNama.length < 2) {
+    return 'Nama pemilik rekening bank pribadi wajib diisi.';
+  }
+
+  const others = (members || []).filter((m) => m && m.id !== excludeMemberId);
+
+  const dupName = others.find((m) => normalizeMemberName(m.nama) === cleanName);
+  if (dupName) {
+    return `Nama anggota "${candidate.nama}" sudah terdaftar (${dupName.nomorAnggota}). Nama anggota tidak boleh sama dengan anggota lain.`;
+  }
+
+  const dupNik = others.find((m) => m.nik && normalizeNik(m.nik) === cleanNik);
+  if (dupNik) {
+    return `NIK "${cleanNik}" sudah digunakan oleh anggota lain (${dupNik.nama}).`;
+  }
+
+  const dupEmail = others.find((m) => m.email && m.email.trim().toLowerCase() === cleanEmail);
+  if (dupEmail) {
+    return `Alamat email "${candidate.email}" sudah digunakan oleh anggota lain (${dupEmail.nama}).`;
+  }
+
+  const dupHp = others.find((m) => m.whatsapp && normalizePhoneIndonesia(m.whatsapp) === cleanHp);
+  if (dupHp) {
+    return `Nomor HP / WhatsApp "${candidate.whatsapp}" sudah digunakan oleh anggota lain (${dupHp.nama}).`;
+  }
+
+  const dupRek = others.find((m) => {
+    const mRek = m.bankPribadi?.nomorRekening;
+    return mRek && !isBankRekPlaceholder(mRek) && normalizeBankRek(mRek) === cleanRek;
+  });
+  if (dupRek) {
+    return `Nomor rekening bank "${rawRek}" sudah digunakan oleh anggota lain (${dupRek.nama}).`;
+  }
+
+  const dupHolder = others.find((m) => {
+    const mHolder = normalizeMemberName(m.bankPribadi?.atasNama);
+    return mHolder && mHolder !== '-' && mHolder === cleanAtasNama;
+  });
+  if (dupHolder) {
+    return `Nama pemilik rekening "${candidate.bankPribadi?.atasNama}" sudah digunakan oleh anggota lain (${dupHolder.nama}).`;
+  }
+
+  return null;
+}
+
+export function isMemberBiodataIncomplete(m?: MemberUser | null): boolean {
+  if (!m) return false;
+  const cleanName = normalizeMemberName(m.nama);
+  const cleanNik = String(m.nik || '').trim();
+  const cleanEmail = String(m.email || '').trim();
+  const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+  const cleanRek = String(m.bankPribadi?.nomorRekening || '').trim();
+  const cleanHolder = normalizeMemberName(m.bankPribadi?.atasNama);
+  return (
+    !cleanName ||
+    !cleanNik ||
+    !cleanEmail ||
+    !cleanHp ||
+    isBankRekPlaceholder(cleanRek) ||
+    !cleanHolder ||
+    cleanHolder === '-'
+  );
+}
+
 export function deduplicateMembersClient(members: MemberUser[], deletedIds: string[] = []): MemberUser[] {
   const deletedSet = new Set<string>(deletedIds || []);
   const cleanList = (Array.isArray(members) ? members : []).filter(
     (m) => m && m.id && !deletedSet.has(m.id)
   );
+
+  const biodataScore = (m: any) => {
+    let s = 0;
+    if (m.nik && String(m.nik).trim()) s += 2;
+    if (m.whatsapp && String(m.whatsapp).replace(/\D/g, '').length >= 8) s += 2;
+    if (m.email && String(m.email).trim()) s += 2;
+    if (m.bankPribadi?.nomorRekening && !isBankRekPlaceholder(m.bankPribadi.nomorRekening)) s += 2;
+    if (/^115\d{9}$/.test(String(m.nomorAnggota || ''))) s += 1;
+    return s;
+  };
 
   cleanList.sort((a, b) => {
     const aDup = String(a.id).includes('-dup-') ? 1 : 0;
@@ -328,7 +478,9 @@ export function deduplicateMembersClient(members: MemberUser[], deletedIds: stri
     const aPh = (a as any).isRestoredPlaceholder ? 1 : 0;
     const bPh = (b as any).isRestoredPlaceholder ? 1 : 0;
     if (aPh !== bPh) return aPh - bPh;
-    return (Number(b.totalSimpanan) || 0) - (Number(a.totalSimpanan) || 0);
+    const balDiff = (Number(b.totalSimpanan) || 0) - (Number(a.totalSimpanan) || 0);
+    if (balDiff !== 0) return balDiff;
+    return biodataScore(b) - biodataScore(a);
   });
 
   const result: MemberUser[] = [];
@@ -338,26 +490,15 @@ export function deduplicateMembersClient(members: MemberUser[], deletedIds: stri
     const m: any = { ...raw };
     delete m.biometricActive;
     const isDupId = String(m.id).includes('-dup-');
-    const cleanName = String(m.nama || '').toLowerCase().trim();
+    const cleanName = normalizeMemberName(m.nama);
     const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
     const cleanEmail = String(m.email || '').toLowerCase().trim();
     const cleanNik = String(m.nik || '').trim();
 
     let match = byId.get(m.id);
-    if (!match) {
-      match = result.find((existing) => {
-        const exName = String(existing.nama || '').toLowerCase().trim();
-        const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
-        const exEmail = String(existing.email || '').toLowerCase().trim();
-        const exNik = String(existing.nik || '').trim();
-        if (!cleanName || exName !== cleanName) return false;
-        if (isDupId || String(existing.id).includes('-dup-')) return true;
-        if (cleanHp && exHp && cleanHp === exHp) return true;
-        if (cleanEmail && exEmail && cleanEmail === exEmail) return true;
-        if (cleanNik && exNik && cleanNik === exNik) return true;
-        if (!cleanHp && !cleanEmail && !cleanNik && !exHp && !exEmail && !exNik) return true;
-        return false;
-      });
+    if (!match && cleanName) {
+      // Hapus semua duplikasi data anggota apabila memiliki nama yang sama (case-insensitive)
+      match = result.find((existing) => normalizeMemberName(existing.nama) === cleanName);
     }
 
     if (match) {
@@ -369,6 +510,13 @@ export function deduplicateMembersClient(members: MemberUser[], deletedIds: stri
       if (!match.alamatLengkap && m.alamatLengkap) match.alamatLengkap = m.alamatLengkap;
       if (!match.ktpPhotoUrl && m.ktpPhotoUrl) match.ktpPhotoUrl = m.ktpPhotoUrl;
       if (!match.avatarUrl && m.avatarUrl) match.avatarUrl = m.avatarUrl;
+      if (isBankRekPlaceholder(match.bankPribadi?.nomorRekening) && !isBankRekPlaceholder(m.bankPribadi?.nomorRekening)) {
+        match.bankPribadi = {
+          namaBank: m.bankPribadi?.namaBank || match.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
+          nomorRekening: m.bankPribadi.nomorRekening,
+          atasNama: m.bankPribadi?.atasNama || match.bankPribadi?.atasNama || match.nama,
+        };
+      }
       if ((match as any).isRestoredPlaceholder && match.nik && match.whatsapp) {
         (match as any).isRestoredPlaceholder = false;
       }
@@ -587,20 +735,14 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     ...(incoming.deletedMemberIds || []),
   ]);
 
-  // 1. Members: UNION without generating random -dup- clones!
+  // 1. Members: UNION without generating duplicate names or -dup- clones!
   const memberMap = new Map<string, MemberUser>();
   const findMemberByIdentity = (m: MemberUser): MemberUser | undefined => {
-    const cleanName = String(m.nama || '').toLowerCase().trim();
-    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
-    const cleanEmail = String(m.email || '').toLowerCase().trim();
+    const cleanName = normalizeMemberName(m.nama);
+    if (!cleanName) return undefined;
     for (const existing of memberMap.values()) {
-      const exName = String(existing.nama || '').toLowerCase().trim();
-      const exHp = String(existing.whatsapp || '').replace(/\D/g, '');
-      const exEmail = String(existing.email || '').toLowerCase().trim();
-      if (cleanName && exName === cleanName) {
-        if (cleanHp && exHp && cleanHp === exHp) return existing;
-        if (cleanEmail && exEmail && cleanEmail === exEmail) return existing;
-        if (String(m.id).includes('-dup-')) return existing;
+      if (normalizeMemberName(existing.nama) === cleanName) {
+        return existing;
       }
     }
     return undefined;
@@ -617,7 +759,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     const bySameId = memberMap.get(m.id);
     const isSamePersonOnId =
       bySameId &&
-      ((bySameId.nama || '').toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
+      (normalizeMemberName(bySameId.nama) === normalizeMemberName(m.nama) ||
         (bySameId.whatsapp &&
           m.whatsapp &&
           bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
@@ -627,6 +769,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         ...bySameId,
         ...m,
         id: bySameId.id,
+        nama: m.nama && m.nama.trim() ? m.nama : bySameId.nama,
         nik: m.nik || bySameId.nik || '',
         whatsapp: m.whatsapp || bySameId.whatsapp || '',
         email: m.email || bySameId.email || '',
@@ -636,12 +779,15 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         ktpPhotoUrl: m.ktpPhotoUrl || bySameId.ktpPhotoUrl,
         avatarUrl: m.avatarUrl || bySameId.avatarUrl,
         bankPribadi: {
-          ...bySameId.bankPribadi,
-          ...(m.bankPribadi || {}),
+          namaBank: m.bankPribadi?.namaBank || bySameId.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
           nomorRekening:
-            m.bankPribadi?.nomorRekening && m.bankPribadi.nomorRekening !== '-'
-              ? m.bankPribadi.nomorRekening
+            !isBankRekPlaceholder(m.bankPribadi?.nomorRekening)
+              ? m.bankPribadi!.nomorRekening
               : bySameId.bankPribadi?.nomorRekening || '-',
+          atasNama:
+            m.bankPribadi?.atasNama && m.bankPribadi.atasNama.trim() && m.bankPribadi.atasNama.trim() !== '-'
+              ? m.bankPribadi.atasNama
+              : bySameId.bankPribadi?.atasNama || bySameId.nama,
         },
       });
       return;
@@ -1643,19 +1789,161 @@ export function sanitizeForFirestore<T>(data: T): T {
   }
 }
 
-// Track last synced hashes to prevent redundant network writes
+// Track last synced hashes to prevent redundant network writes & enforce single-flight write queue
 const lastWrittenMap = new Map<string, string>();
 let shardedTimer: any = null;
+let isFirestoreSyncRunning = false;
+let queuedFirestoreSyncState: AppState | null = null;
 
-// Sharded Cloud Firestore synchronizer (resolves 1MB document limit and undefined fields completely)
+// Seed known server-authoritative hashes so unchanged documents are NOT re-blasted to Firestore on every mutation
+function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>) {
+  if (!serverData || typeof serverData !== 'object') return;
+  try {
+    if (serverData.profile) {
+      const generalCore = sanitizeForFirestore({
+        id: 'general',
+        profile: serverData.profile || {},
+        categoriesKasKoperasi: serverData.categoriesKasKoperasi || {},
+        pengaturanBerbagi: serverData.pengaturanBerbagi || {},
+        sedekahList: serverData.sedekahList || [],
+        penyaluranList: serverData.penyaluranList || [],
+        maintenanceLock: serverData.maintenanceLock || { isLocked: false },
+        lastRunningNumber: serverData.lastRunningNumber || 66666,
+        deletedMemberIds: serverData.deletedMemberIds || [],
+        deletedTransactionIds: serverData.deletedTransactionIds || [],
+        deletedKasIds: serverData.deletedKasIds || [],
+        deletedSetoranIds: serverData.deletedSetoranIds || [],
+        usedAccountNumbers: serverData.usedAccountNumbers || [],
+        usedMemberNumbers: serverData.usedMemberNumbers || [],
+      });
+      if (!lastWrittenMap.has('settings/general')) {
+        lastWrittenMap.set('settings/general', JSON.stringify(generalCore));
+      }
+    }
+    if (Array.isArray(serverData.admins)) {
+      const adminsCore = sanitizeForFirestore({
+        id: 'admins',
+        admins: serverData.admins,
+        deletedAdminIds: (serverData as any).deletedAdminIds || [],
+      });
+      if (!lastWrittenMap.has('settings/admins')) {
+        lastWrittenMap.set('settings/admins', JSON.stringify(adminsCore));
+      }
+      for (const adm of serverData.admins) {
+        if (adm && adm.id && !lastWrittenMap.has(`admins/${adm.id}`)) {
+          lastWrittenMap.set(`admins/${adm.id}`, JSON.stringify(sanitizeForFirestore({ ...adm })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.members)) {
+      for (const m of serverData.members) {
+        if (m && m.id && !String(m.id).includes('-dup-') && !lastWrittenMap.has(`members/${m.id}`)) {
+          lastWrittenMap.set(`members/${m.id}`, JSON.stringify(sanitizeForFirestore({ ...m })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.setoranList)) {
+      for (const s of serverData.setoranList) {
+        if (s && s.id && !lastWrittenMap.has(`setoran/${s.id}`)) {
+          lastWrittenMap.set(`setoran/${s.id}`, JSON.stringify(sanitizeForFirestore({ ...s })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.sedekahList)) {
+      for (const sdk of serverData.sedekahList) {
+        if (sdk && sdk.id && !lastWrittenMap.has(`sedekah/${sdk.id}`)) {
+          lastWrittenMap.set(`sedekah/${sdk.id}`, JSON.stringify(sanitizeForFirestore({ ...sdk })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.kasList)) {
+      for (const k of serverData.kasList) {
+        if (k && k.id && !lastWrittenMap.has(`kas/${k.id}`)) {
+          lastWrittenMap.set(`kas/${k.id}`, JSON.stringify(sanitizeForFirestore({ ...k })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.memberTransactions)) {
+      for (const tx of serverData.memberTransactions) {
+        if (tx && tx.id && !lastWrittenMap.has(`transactions/${tx.id}`)) {
+          lastWrittenMap.set(`transactions/${tx.id}`, JSON.stringify(sanitizeForFirestore({ ...tx })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.chatMessages)) {
+      for (const c of serverData.chatMessages.slice(-100)) {
+        if (c && c.id && !lastWrittenMap.has(`chats/${c.id}`)) {
+          lastWrittenMap.set(`chats/${c.id}`, JSON.stringify(sanitizeForFirestore({ ...c })));
+        }
+      }
+    }
+    if (Array.isArray(serverData.suratList)) {
+      for (const sr of serverData.suratList) {
+        if (sr && sr.id && !lastWrittenMap.has(`surat/${sr.id}`)) {
+          lastWrittenMap.set(`surat/${sr.id}`, JSON.stringify(sanitizeForFirestore({ ...sr })));
+        }
+      }
+    }
+  } catch {}
+}
+
+// Merge realtime chat snapshots locally without triggering a full /api/state or 260-doc Firestore writeback
+export function applyRealtimeChatMessages(incoming: ChatMessage[]): boolean {
+  if (!Array.isArray(incoming) || incoming.length === 0) return false;
+  const existingMap = new Map<string, ChatMessage>();
+  (globalState.chatMessages || []).forEach((m) => {
+    if (m && m.id) existingMap.set(m.id, m);
+  });
+  let hasChanges = false;
+  incoming.forEach((inMsg) => {
+    if (!inMsg || !inMsg.id) return;
+    const ex = existingMap.get(inMsg.id);
+    if (!ex) {
+      existingMap.set(inMsg.id, inMsg);
+      hasChanges = true;
+    } else if (
+      ex.isReadByAdmin !== inMsg.isReadByAdmin ||
+      ex.isReadByMember !== inMsg.isReadByMember ||
+      ex.pesan !== inMsg.pesan
+    ) {
+      existingMap.set(inMsg.id, { ...ex, ...inMsg });
+      hasChanges = true;
+    }
+  });
+  if (!hasChanges) return false;
+  globalState = {
+    ...globalState,
+    chatMessages: Array.from(existingMap.values()).sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    ),
+  };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+  } catch {}
+  notifyListeners();
+  return true;
+}
+
+// Sharded Cloud Firestore synchronizer (resolves 1MB document limit, undefined fields, and concurrent write storms)
 export async function syncShardedToFirestore(state: AppState) {
+  if (!getIsInternetConnected()) {
+    queuedFirestoreSyncState = state;
+    return;
+  }
+  if (isFirestoreSyncRunning) {
+    queuedFirestoreSyncState = state;
+    return;
+  }
+
+  isFirestoreSyncRunning = true;
   try {
     const { db } = await import('./firebase');
     const { doc, setDoc, deleteDoc } = await import('firebase/firestore');
     const now = new Date().toISOString();
+    let hasAnyDocWritten = false;
 
     // 1. Sharded settings/general (includes sedekahList & penyaluranList so Sedekah is synced across all devices)
-    const generalData = sanitizeForFirestore({
+    const generalCore = sanitizeForFirestore({
       id: 'general',
       profile: state.profile || {},
       categoriesKasKoperasi: state.categoriesKasKoperasi || {},
@@ -1670,45 +1958,53 @@ export async function syncShardedToFirestore(state: AppState) {
       deletedSetoranIds: state.deletedSetoranIds || [],
       usedAccountNumbers: state.usedAccountNumbers || [],
       usedMemberNumbers: state.usedMemberNumbers || [],
-      updatedAt: now,
-      updatedBy: CLIENT_ID,
     });
-    const generalStr = JSON.stringify(generalData);
+    const generalStr = JSON.stringify(generalCore);
     if (lastWrittenMap.get('settings/general') !== generalStr) {
-      await setDoc(doc(db, 'settings', 'general'), generalData, { merge: true }).catch((e) =>
-        handleFirestoreError(e, OperationType.WRITE, 'settings/general')
-      );
+      await setDoc(
+        doc(db, 'settings', 'general'),
+        { ...generalCore, updatedAt: now, updatedBy: CLIENT_ID },
+        { merge: true }
+      ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'settings/general'));
       lastWrittenMap.set('settings/general', generalStr);
+      hasAnyDocWritten = true;
     }
 
     // 2. Sharded settings/admins + sharded admins collection
-    const adminsData = sanitizeForFirestore({
+    const adminsCore = sanitizeForFirestore({
       id: 'admins',
       admins: state.admins || [],
       deletedAdminIds: (state as any).deletedAdminIds || [],
-      updatedAt: now,
-      updatedBy: CLIENT_ID,
     });
-    const adminsStr = JSON.stringify(adminsData);
+    const adminsStr = JSON.stringify(adminsCore);
     if (lastWrittenMap.get('settings/admins') !== adminsStr) {
-      await setDoc(doc(db, 'settings', 'admins'), adminsData, { merge: true }).catch((e) =>
-        handleFirestoreError(e, OperationType.WRITE, 'settings/admins')
-      );
+      await setDoc(
+        doc(db, 'settings', 'admins'),
+        { ...adminsCore, updatedAt: now, updatedBy: CLIENT_ID },
+        { merge: true }
+      ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'settings/admins'));
       lastWrittenMap.set('settings/admins', adminsStr);
+      hasAnyDocWritten = true;
     }
     for (const adm of state.admins || []) {
       if (adm && adm.id) {
         const key = `admins/${adm.id}`;
-        const cleanAdm = sanitizeForFirestore({ ...adm, updatedAt: now });
+        const cleanAdm = sanitizeForFirestore({ ...adm });
         const aStr = JSON.stringify(cleanAdm);
         if (lastWrittenMap.get(key) !== aStr) {
-          await setDoc(doc(db, 'admins', adm.id), cleanAdm, { merge: true }).catch(() => {});
+          await setDoc(doc(db, 'admins', adm.id), { ...cleanAdm, updatedAt: now }, { merge: true }).catch(() => {});
           lastWrittenMap.set(key, aStr);
+          hasAnyDocWritten = true;
         }
       }
     }
     for (const delAdmId of (state as any).deletedAdminIds || []) {
-      await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
+      const delKey = `deleted_admins/${delAdmId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
     }
 
     // 3. Sharded Members collection (each member is an isolated ~1KB doc, strictly deduplicated and free of -dup- artifacts)
@@ -1716,84 +2012,109 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const m of cleanMembersForFs) {
       if (m && m.id && !String(m.id).includes('-dup-')) {
         const key = `members/${m.id}`;
-        const cleanMember = sanitizeForFirestore({ ...m, updatedAt: now });
+        const cleanMember = sanitizeForFirestore({ ...m });
         const mStr = JSON.stringify(cleanMember);
         if (lastWrittenMap.get(key) !== mStr) {
-          await setDoc(doc(db, 'members', m.id), cleanMember, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'members', m.id), { ...cleanMember, updatedAt: now }, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, mStr);
+          hasAnyDocWritten = true;
         }
       }
     }
     for (const delId of state.deletedMemberIds || []) {
-      await deleteDoc(doc(db, 'members', delId)).catch(() => {});
+      const delKey = `deleted_members/${delId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'members', delId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
     }
 
     // 4. Sharded Setoran & Sedekah collections
     for (const s of state.setoranList || []) {
       if (s && s.id) {
         const key = `setoran/${s.id}`;
-        const cleanSetoran = sanitizeForFirestore({ ...s, updatedAt: now });
+        const cleanSetoran = sanitizeForFirestore({ ...s });
         const sStr = JSON.stringify(cleanSetoran);
         if (lastWrittenMap.get(key) !== sStr) {
-          await setDoc(doc(db, 'setoran', s.id), cleanSetoran, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'setoran', s.id), { ...cleanSetoran, updatedAt: now }, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, sStr);
+          hasAnyDocWritten = true;
         }
       }
     }
     for (const sdk of state.sedekahList || []) {
       if (sdk && sdk.id) {
         const key = `sedekah/${sdk.id}`;
-        const cleanSdk = sanitizeForFirestore({ ...sdk, updatedAt: now });
+        const cleanSdk = sanitizeForFirestore({ ...sdk });
         const sdkStr = JSON.stringify(cleanSdk);
         if (lastWrittenMap.get(key) !== sdkStr) {
-          await setDoc(doc(db, 'sedekah', sdk.id), cleanSdk, { merge: true }).catch(() => {});
+          await setDoc(doc(db, 'sedekah', sdk.id), { ...cleanSdk, updatedAt: now }, { merge: true }).catch(() => {});
           lastWrittenMap.set(key, sdkStr);
+          hasAnyDocWritten = true;
         }
       }
     }
     for (const delSetId of state.deletedSetoranIds || []) {
-      await deleteDoc(doc(db, 'setoran', delSetId)).catch(() => {});
-      await deleteDoc(doc(db, 'sedekah', delSetId)).catch(() => {});
+      const delKey = `deleted_setoran/${delSetId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'setoran', delSetId)).catch(() => {});
+        await deleteDoc(doc(db, 'sedekah', delSetId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
     }
 
     // 5. Sharded Kas collection
     for (const k of state.kasList || []) {
       if (k && k.id) {
         const key = `kas/${k.id}`;
-        const cleanKas = sanitizeForFirestore({ ...k, updatedAt: now });
+        const cleanKas = sanitizeForFirestore({ ...k });
         const kStr = JSON.stringify(cleanKas);
         if (lastWrittenMap.get(key) !== kStr) {
-          await setDoc(doc(db, 'kas', k.id), cleanKas, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'kas', k.id), { ...cleanKas, updatedAt: now }, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, kStr);
+          hasAnyDocWritten = true;
         }
       }
     }
     for (const delKasId of state.deletedKasIds || []) {
-      await deleteDoc(doc(db, 'kas', delKasId)).catch(() => {});
+      const delKey = `deleted_kas/${delKasId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'kas', delKasId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
     }
 
     // 6. Sharded Member Transactions collection
     for (const tx of state.memberTransactions || []) {
       if (tx && tx.id) {
         const key = `transactions/${tx.id}`;
-        const cleanTx = sanitizeForFirestore({ ...tx, updatedAt: now });
+        const cleanTx = sanitizeForFirestore({ ...tx });
         const txStr = JSON.stringify(cleanTx);
         if (lastWrittenMap.get(key) !== txStr) {
-          await setDoc(doc(db, 'transactions', tx.id), cleanTx, { merge: true }).catch((e) =>
+          await setDoc(doc(db, 'transactions', tx.id), { ...cleanTx, updatedAt: now }, { merge: true }).catch((e) =>
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, txStr);
+          hasAnyDocWritten = true;
         }
       }
     }
     for (const delTxId of state.deletedTransactionIds || []) {
-      await deleteDoc(doc(db, 'transactions', delTxId)).catch(() => {});
+      const delKey = `deleted_tx/${delTxId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'transactions', delTxId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
     }
 
     // 7. Sharded Chat Messages (Recent 100)
@@ -1808,6 +2129,7 @@ export async function syncShardedToFirestore(state: AppState) {
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, cStr);
+          hasAnyDocWritten = true;
         }
       }
     }
@@ -1823,36 +2145,46 @@ export async function syncShardedToFirestore(state: AppState) {
             handleFirestoreError(e, OperationType.WRITE, key)
           );
           lastWrittenMap.set(key, srStr);
+          hasAnyDocWritten = true;
         }
       }
     }
 
-    // 9. Lightweight Metadata Pulse to koperasi_state/main_database (ONLY ~300 bytes, replaces any legacy >1MB payload)
-    const metadataDoc = sanitizeForFirestore({
-      id: 'main_database',
-      lastSynced: now,
-      updatedBy: CLIENT_ID,
-      isSharded: true,
-      totalAdmins: (state.admins || []).length,
-      totalMembers: (state.members || []).length,
-      totalKas: (state.kasList || []).length,
-      totalSetoran: (state.setoranList || []).length,
-      totalSedekah: (state.sedekahList || []).length,
-      totalTransactions: (state.memberTransactions || []).length,
-      totalChats: (state.chatMessages || []).length,
-      totalSurat: (state.suratList || []).length,
-      filesProtected: true,
-    });
-    await setDoc(
-      doc(db, 'koperasi_state', 'main_database'),
-      metadataDoc
-    ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'koperasi_state/main_database'));
+    // 9. Lightweight Metadata Pulse to koperasi_state/main_database ONLY when something actually changed
+    if (hasAnyDocWritten) {
+      const metadataDoc = sanitizeForFirestore({
+        id: 'main_database',
+        lastSynced: now,
+        updatedBy: CLIENT_ID,
+        isSharded: true,
+        totalAdmins: (state.admins || []).length,
+        totalMembers: cleanMembersForFs.length,
+        totalKas: (state.kasList || []).length,
+        totalSetoran: (state.setoranList || []).length,
+        totalSedekah: (state.sedekahList || []).length,
+        totalTransactions: (state.memberTransactions || []).length,
+        totalChats: (state.chatMessages || []).length,
+        totalSurat: (state.suratList || []).length,
+        filesProtected: true,
+      });
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        metadataDoc
+      ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'koperasi_state/main_database'));
+    }
   } catch (err) {
     console.warn('Notice syncShardedToFirestore:', err);
+  } finally {
+    isFirestoreSyncRunning = false;
+    const nextQueued = queuedFirestoreSyncState;
+    queuedFirestoreSyncState = null;
+    if (nextQueued) {
+      scheduleShardedFirestoreSync(nextQueued, 500);
+    }
   }
 }
 
-export function scheduleShardedFirestoreSync(state: AppState, delay = 300) {
+export function scheduleShardedFirestoreSync(state: AppState, delay = 600) {
   clearTimeout(shardedTimer);
   shardedTimer = setTimeout(() => {
     syncShardedToFirestore(state);
@@ -1881,7 +2213,12 @@ export async function syncStateToServer(state: AppState) {
     } catch {}
     notifyListeners();
 
-    // 1. Post to Express realtime backend
+    // 1. Post to Express realtime backend only when internet connection is active
+    if (!getIsInternetConnected()) {
+      queuedFirestoreSyncState = globalState;
+      return;
+    }
+
     try {
       await fetch('/api/state', {
         method: 'POST',
@@ -1899,6 +2236,9 @@ export async function syncStateToServer(state: AppState) {
 
 // Load from server on startup (with safe merge & anti-cache for all installed devices)
 export async function fetchStateFromServer(): Promise<AppState> {
+  if (!getIsInternetConnected()) {
+    return globalState;
+  }
   try {
     const res = await fetch(`/api/state?_t=${Date.now()}`, {
       cache: 'no-store',
@@ -1935,6 +2275,7 @@ export async function fetchStateFromServer(): Promise<AppState> {
                 (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
             );
 
+            seedFirestoreSyncedHashesFromServer(data);
             globalState = mergeStates(globalState, data);
             try {
               localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
@@ -2006,18 +2347,25 @@ export function useKoperasiState() {
     listeners.add(handler);
 
     // Initial fetch + live Firestore network activation whenever app opens
-    import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
-    fetchStateFromServer();
+    if (getIsInternetConnected()) {
+      import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+      fetchStateFromServer();
+    }
 
     // Foregrounding & network re-sync handlers so app always stays connected to internet when open
     const handleDeviceResume = () => {
-      if (document.visibilityState === 'visible' || navigator.onLine) {
+      if ((document.visibilityState === 'visible' || navigator.onLine) && getIsInternetConnected()) {
         import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
         fetchStateFromServer();
       }
     };
     const handleNetworkRestored = () => {
       import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+      if (queuedFirestoreSyncState) {
+        const pending = queuedFirestoreSyncState;
+        queuedFirestoreSyncState = null;
+        syncStateToServer(pending).catch(() => {});
+      }
       fetchStateFromServer();
       connectSSE();
     };
@@ -2029,17 +2377,24 @@ export function useKoperasiState() {
       window.addEventListener('hws:network_restored', handleNetworkRestored);
     }
 
-    // Regular polling fallback every 3 seconds to keep all devices & mobile in sync & online
+    // Regular polling fallback every 3 seconds & periodic Firestore online check so app always stays connected when open
     const pollInterval = setInterval(() => {
-      fetchStateFromServer();
+      if (getIsInternetConnected()) {
+        fetchStateFromServer();
+      }
     }, 3000);
+    const firestoreKeepAliveInterval = setInterval(() => {
+      if (getIsInternetConnected()) {
+        import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+      }
+    }, 45000);
 
     // Resilient SSE Realtime Connection with Auto-Reconnect
     let eventSource: EventSource | null = null;
     let reconnectTimeout: any = null;
 
     function connectSSE() {
-      if (!isMounted) return;
+      if (!isMounted || !getIsInternetConnected()) return;
       try {
         if (eventSource) {
           eventSource.close();
@@ -2053,6 +2408,7 @@ export function useKoperasiState() {
             const data = JSON.parse(event.data);
             if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
               if (data.payload) {
+                seedFirestoreSyncedHashesFromServer(data.payload);
                 globalState = mergeStates(globalState, data.payload);
                 try {
                   localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
@@ -2068,24 +2424,37 @@ export function useKoperasiState() {
             } else if (data.type === 'MEMBER_REGISTERED') {
               const regMem = data.payload?.member as MemberUser | undefined;
               if (regMem && regMem.id) {
-                const existing = globalState.members.find(
-                  (m) => m.id === regMem.id || (regMem.nik && m.nik === regMem.nik)
-                );
-                if (!existing) {
-                  globalState = {
-                    ...globalState,
-                    members: [...globalState.members, regMem],
-                    usedAccountNumbers: Array.from(
-                      new Set([...(globalState.usedAccountNumbers || []), regMem.nomorRekening].filter(Boolean))
-                    ),
-                    usedMemberNumbers: Array.from(
-                      new Set([...(globalState.usedMemberNumbers || []), regMem.nomorAnggota].filter(Boolean))
-                    ),
-                  };
-                  try {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                  } catch {}
-                  notifyListeners();
+                const delSet = new Set(globalState.deletedMemberIds || []);
+                if (!delSet.has(regMem.id)) {
+                  const cleanRegName = normalizeMemberName(regMem.nama);
+                  const cleanRegNik = normalizeNik(regMem.nik);
+                  const cleanRegHp = normalizePhoneIndonesia(regMem.whatsapp);
+                  const existing = globalState.members.find(
+                    (m) =>
+                      m.id === regMem.id ||
+                      (cleanRegName && normalizeMemberName(m.nama) === cleanRegName) ||
+                      (cleanRegNik && normalizeNik(m.nik) === cleanRegNik) ||
+                      (cleanRegHp && normalizePhoneIndonesia(m.whatsapp) === cleanRegHp)
+                  );
+                  if (!existing) {
+                    globalState = {
+                      ...globalState,
+                      members: deduplicateMembersClient(
+                        [...globalState.members, regMem],
+                        globalState.deletedMemberIds || []
+                      ),
+                      usedAccountNumbers: Array.from(
+                        new Set([...(globalState.usedAccountNumbers || []), regMem.nomorRekening].filter(Boolean))
+                      ),
+                      usedMemberNumbers: Array.from(
+                        new Set([...(globalState.usedMemberNumbers || []), regMem.nomorAnggota].filter(Boolean))
+                      ),
+                    };
+                    try {
+                      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+                    } catch {}
+                    notifyListeners();
+                  }
                 }
               }
               window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: data.payload }));
@@ -2148,18 +2517,18 @@ export function useKoperasiState() {
           }
         };
         eventSource.onerror = () => {
-          // Auto-reconnect after 2 seconds if connection drops
+          // Auto-reconnect after 3 seconds only when internet is connected
           if (eventSource) {
             eventSource.close();
             eventSource = null;
           }
-          if (isMounted) {
+          if (isMounted && getIsInternetConnected()) {
             clearTimeout(reconnectTimeout);
-            reconnectTimeout = setTimeout(connectSSE, 2000);
+            reconnectTimeout = setTimeout(connectSSE, 3000);
           }
         };
       } catch (err) {
-        if (isMounted) {
+        if (isMounted && getIsInternetConnected()) {
           clearTimeout(reconnectTimeout);
           reconnectTimeout = setTimeout(connectSSE, 3000);
         }
@@ -2172,7 +2541,7 @@ export function useKoperasiState() {
     const firestoreUnsubscribers: (() => void)[] = [];
     try {
       import('./firebase').then(({ db }) => {
-        import('firebase/firestore').then(({ collection, doc, onSnapshot }) => {
+        import('firebase/firestore').then(({ collection, doc, onSnapshot, query, orderBy, limit }) => {
           if (!isMounted) return;
 
           // A. Members Collection (Debounced UI sync, strictly skip legacy -dup- artifacts)
@@ -2185,7 +2554,7 @@ export function useKoperasiState() {
                 .map((d) => d.data() as MemberUser)
                 .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
               globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
-              scheduleDebouncedNotify(150, true);
+              scheduleDebouncedNotify(150, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'members')
           );
@@ -2319,35 +2688,32 @@ export function useKoperasiState() {
           );
           firestoreUnsubscribers.push(unsubSedekah);
 
-          // I. Realtime Admin Activity Logs Collection (Setiap aktivitas admin yang terhubung langsung masuk ke Log History Super Admin)
-          import('firebase/firestore').then(({ query, orderBy, limit }) => {
-            if (!isMounted) return;
-            const unsubLogs = onSnapshot(
-              query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)),
-              (snapshot) => {
-                if (snapshot.empty) return;
-                const remoteLogs: AuditLog[] = snapshot.docs.map((d) => {
-                  const data = d.data();
-                  return {
-                    id: d.id,
-                    timestamp: data.timestamp || new Date().toISOString(),
-                    adminId: data.adminId || 'admin',
-                    adminNama: data.adminNama || 'Admin',
-                    adminRole: data.adminRole || 'admin_write',
-                    action: data.action || 'Aktivitas Admin',
-                    detail: data.detail || '',
-                    targetId: data.targetId || undefined,
-                  };
-                });
-                globalState = mergeStates(globalState, { ...globalState, auditLogs: remoteLogs });
-                scheduleDebouncedNotify();
-              },
-              (err) => handleFirestoreError(err, OperationType.LIST, 'logs')
-            );
-            firestoreUnsubscribers.push(unsubLogs);
-          }).catch(() => {});
+          // I. Realtime Admin Activity Logs Collection
+          const unsubLogs = onSnapshot(
+            query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)),
+            (snapshot) => {
+              if (snapshot.empty) return;
+              const remoteLogs: AuditLog[] = snapshot.docs.map((d) => {
+                const data = d.data();
+                return {
+                  id: d.id,
+                  timestamp: data.timestamp || new Date().toISOString(),
+                  adminId: data.adminId || 'admin',
+                  adminNama: data.adminNama || 'Admin',
+                  adminRole: data.adminRole || 'admin_write',
+                  action: data.action || 'Aktivitas Admin',
+                  detail: data.detail || '',
+                  targetId: data.targetId || undefined,
+                };
+              });
+              globalState = mergeStates(globalState, { ...globalState, auditLogs: remoteLogs });
+              scheduleDebouncedNotify();
+            },
+            (err) => handleFirestoreError(err, OperationType.LIST, 'logs')
+          );
+          firestoreUnsubscribers.push(unsubLogs);
 
-          // J. Realtime Surat Menyurat Collection (Req 1 & 5: Surat menyurat realtime online across all devices)
+          // J. Realtime Surat Menyurat Collection
           const unsubSurat = onSnapshot(
             collection(db, 'surat'),
             (snapshot) => {
@@ -2367,6 +2733,7 @@ export function useKoperasiState() {
       isMounted = false;
       listeners.delete(handler);
       clearInterval(pollInterval);
+      clearInterval(firestoreKeepAliveInterval);
       clearTimeout(reconnectTimeout);
       if (eventSource) eventSource.close();
       firestoreUnsubscribers.forEach((unsub) => {
@@ -2519,7 +2886,8 @@ export function generateNomorRekening(
   noHp: string,
   lastRunningNumber: number,
   usedAccountNumbers?: string[] | Set<string>,
-  existingMembers?: MemberUser[]
+  existingMembers?: MemberUser[],
+  commitToGlobal = true
 ): { nomorRekening: string; nextRunningNumber: number; usedAccountNumbers: string[] } {
   const kodeWilayah = WILAYAH_CODE_MAP[wilayah] || '77';
   const cleanHp = (noHp || '').replace(/\D/g, '');
@@ -2549,7 +2917,9 @@ export function generateNomorRekening(
 
   usedSet.add(candidate);
   const updatedUsedList = Array.from(usedSet);
-  globalState.usedAccountNumbers = updatedUsedList;
+  if (commitToGlobal) {
+    globalState.usedAccountNumbers = updatedUsedList;
+  }
 
   return { nomorRekening: candidate, nextRunningNumber: running, usedAccountNumbers: updatedUsedList };
 }
@@ -2561,7 +2931,8 @@ export function generateNomorAnggota(
   existingCount: number,
   usedMemberNumbers?: string[] | Set<string>,
   existingMembers?: MemberUser[],
-  registerDateStr?: string
+  registerDateStr?: string,
+  commitToGlobal = true
 ): string {
   const dateObj = registerDateStr ? new Date(registerDateStr) : new Date();
   const dayStr = String(isNaN(dateObj.getDate()) ? 11 : dateObj.getDate()).padStart(2, '0');
@@ -2595,35 +2966,71 @@ export function generateNomorAnggota(
   }
 
   usedSet.add(candidate);
-  globalState.usedMemberNumbers = Array.from(usedSet);
+  if (commitToGlobal) {
+    globalState.usedMemberNumbers = Array.from(usedSet);
+  }
 
   return candidate;
 }
 
+const inFlightRegistrations = new Set<string>();
+
 // Unified Authoritative Online Registration across all platforms (Android, iOS, PC, Web, AI Studio)
-// Mencegah data saling meniban pada device baru terinstall dan multi-device bersamaan
+// Mencegah pendaftaran berulang & data saling meniban pada device baru terinstall dan multi-device bersamaan
 export async function registerMemberOnline(
   newMember: MemberUser,
   nextRunningNumber?: number,
   adminName?: string
 ): Promise<{ success: boolean; member?: MemberUser; error?: string }> {
+  if (!getIsInternetConnected()) {
+    return {
+      success: false,
+      error: 'Status jaringan MERAH (tidak ada koneksi data internet). Hubungkan perangkat ke internet terlebih dahulu untuk melakukan pendaftaran.',
+    };
+  }
+
+  const flightKey = [
+    normalizeMemberName(newMember.nama),
+    normalizeNik(newMember.nik),
+    normalizePhoneIndonesia(newMember.whatsapp),
+    String(newMember.email || '').trim().toLowerCase(),
+  ].join('|');
+
+  if (inFlightRegistrations.has(flightKey)) {
+    return {
+      success: false,
+      error: 'Pendaftaran untuk data anggota ini sedang diproses. Mohon tunggu sebentar.',
+    };
+  }
+
+  inFlightRegistrations.add(flightKey);
   try {
     // 1. Ambil state terbaru dari server terlebih dahulu (menghindari cache kosong pada device baru)
     await fetchStateFromServer();
 
-    // 2. Pastikan nomor anggota mengikuti format resmi 115 + DD + KW + YY + NNN
-    let candidateToSave = { ...newMember };
+    // 2. Validasi kelengkapan & keunikan 6 biodata wajib sebelum menyimpan ke database
+    const biodataErr = validateMemberBiodata(newMember, globalState.members || []);
+    if (biodataErr) {
+      return { success: false, error: biodataErr };
+    }
+
+    // 3. Pastikan nomor anggota mengikuti format resmi 115 + DD + KW + YY + NNN (tanpa mutasi globalState sebelum server konfirmasi)
+    let candidateToSave = {
+      ...newMember,
+      nik: normalizeNik(newMember.nik),
+    };
     if (!candidateToSave.nomorAnggota || candidateToSave.nomorAnggota.startsWith('HWS-')) {
       candidateToSave.nomorAnggota = generateNomorAnggota(
         candidateToSave.wilayah,
         globalState.members.length,
         globalState.usedMemberNumbers,
         globalState.members,
-        candidateToSave.terdaftarSejak
+        candidateToSave.terdaftarSejak,
+        false
       );
     }
 
-    // 3. Pastikan nomor rekening tidak pernah dipergunakan
+    // 4. Pastikan nomor rekening tidak pernah dipergunakan (tanpa mutasi globalState sebelum server konfirmasi)
     const usedRekSet = new Set<string>([
       ...(globalState.usedAccountNumbers || []),
       ...(globalState.members || []).map((m) => m.nomorRekening).filter(Boolean),
@@ -2634,33 +3041,13 @@ export async function registerMemberOnline(
         candidateToSave.whatsapp,
         nextRunningNumber || globalState.lastRunningNumber || 66755,
         globalState.usedAccountNumbers,
-        globalState.members
+        globalState.members,
+        false
       );
       candidateToSave.nomorRekening = generatedRek.nomorRekening;
     }
 
-    // 4. Langsung kirim ke Cloud Firestore doc 'members/{id}' (Realtime online langsung untuk semua device)
-    try {
-      const { db } = await import('./firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
-      const cleanMem = sanitizeForFirestore({ ...candidateToSave, updatedAt: new Date().toISOString() });
-      delete (cleanMem as any).biometricActive;
-      await setDoc(doc(db, 'members', candidateToSave.id), cleanMem, { merge: true });
-      await setDoc(
-        doc(db, 'koperasi_state', 'main_database'),
-        {
-          id: 'main_database',
-          lastSynced: new Date().toISOString(),
-          updatedBy: CLIENT_ID,
-          totalMembers: (globalState.members || []).length + 1,
-        },
-        { merge: true }
-      ).catch(() => {});
-    } catch (e) {
-      console.warn('Notice direct Firestore write in registration:', e);
-    }
-
-    // 5. Kirim ke backend endpoint pendaftaran otoritatif
+    // 5. Kirim ke backend endpoint pendaftaran otoritatif terlebih dahulu agar validasi 400 ditangani penuh
     const res = await fetch('/api/members/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2668,25 +3055,54 @@ export async function registerMemberOnline(
         member: candidateToSave,
         nextRunningNumber,
         adminName,
+        isUpdate: false,
       }),
     });
 
-    let savedMember: MemberUser = candidateToSave;
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return {
+        success: false,
+        error: data?.error || 'Pendaftaran ditolak: periksa kelengkapan atau duplikasi biodata anggota.',
+      };
+    }
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && data.member) {
-        savedMember = data.member as MemberUser;
-        if (data.state) {
-          globalState = mergeStates(globalState, data.state);
-        }
+    let savedMember: MemberUser = candidateToSave;
+    if (data && data.success && data.member) {
+      savedMember = data.member as MemberUser;
+      if (data.state) {
+        globalState = mergeStates(globalState, data.state);
       }
     }
 
-    // 6. Langsung sinkronkan state ke globalState lokal tanpa meniban data lain
+    // 6. Langsung sinkronkan ke Cloud Firestore doc 'members/{id}' setelah otorisasi server sukses
+    try {
+      const { db } = await import('./firebase');
+      const { doc, setDoc } = await import('firebase/firestore');
+      const cleanMem = sanitizeForFirestore({ ...savedMember, updatedAt: new Date().toISOString() });
+      delete (cleanMem as any).biometricActive;
+      await setDoc(doc(db, 'members', savedMember.id), cleanMem, { merge: true });
+      await setDoc(
+        doc(db, 'koperasi_state', 'main_database'),
+        {
+          id: 'main_database',
+          lastSynced: new Date().toISOString(),
+          updatedBy: CLIENT_ID,
+          totalMembers: (globalState.members || []).length,
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch (e) {
+      console.warn('Notice direct Firestore write in registration:', e);
+    }
+
+    // 7. Langsung sinkronkan state ke globalState lokal tanpa meniban data lain
     globalState = {
       ...globalState,
-      members: [...globalState.members.filter((m) => m.id !== savedMember.id), savedMember],
+      members: deduplicateMembersClient(
+        [...globalState.members.filter((m) => m.id !== savedMember.id), savedMember],
+        globalState.deletedMemberIds || []
+      ),
       usedAccountNumbers: Array.from(
         new Set([...(globalState.usedAccountNumbers || []), savedMember.nomorRekening].filter(Boolean))
       ),
@@ -2709,24 +3125,9 @@ export async function registerMemberOnline(
 
     return { success: true, member: savedMember };
   } catch (err: any) {
-    // If backend is temporarily unreachable, direct Cloud Firestore write guarantees online persistence!
-    try {
-      const { db } = await import('./firebase');
-      const { doc, setDoc } = await import('firebase/firestore');
-      const cleanMem = sanitizeForFirestore({ ...newMember, updatedAt: new Date().toISOString() });
-      delete (cleanMem as any).biometricActive;
-      await setDoc(doc(db, 'members', newMember.id), cleanMem, { merge: true });
-      globalState = {
-        ...globalState,
-        members: [...globalState.members.filter((m) => m.id !== newMember.id), newMember],
-      };
-      notifyListeners();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: newMember }));
-      }
-      return { success: true, member: newMember };
-    } catch {}
-    return { success: false, error: err.message || 'Koneksi ke server online terputus.' };
+    return { success: false, error: err?.message || 'Koneksi ke server online terputus. Pastikan perangkat terhubung ke internet.' };
+  } finally {
+    inFlightRegistrations.delete(flightKey);
   }
 }
 

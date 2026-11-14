@@ -11,6 +11,7 @@ import {
 import { formatRupiah, createAuditLog } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
+import { assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   HeartHandshake,
   CheckCircle,
@@ -63,6 +64,7 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
 
   const handleProposePenyaluran = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!assertInternetForTransaction('Penyaluran Zakat & Qurban')) return;
     if (!currentAdmin) return;
     const amountPerMember = Number(nominalPerAnggota);
     if (!amountPerMember || amountPerMember <= 0) {
@@ -122,6 +124,7 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
   };
 
   const executeDistribution = async (p: PenyaluranZakatQurban) => {
+    if (!assertInternetForTransaction('Eksekusi Penyaluran Zakat & Qurban')) return;
     const now = new Date();
     const tgl = p.tanggal;
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);

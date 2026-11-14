@@ -7,6 +7,7 @@ import {
   WilayahKoperasi,
 } from '../types';
 import { formatRupiah, createAuditLog } from '../lib/storage';
+import { assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Trash2,
   ShieldAlert,
@@ -164,6 +165,10 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    if (!assertInternetForTransaction('Hapus Transaksi Anggota')) {
+      setErrorMessage('Status jaringan MERAH (tidak ada internet). Transaksi penghapusan dikunci saat offline.');
+      return;
+    }
 
     if (!isSuperAdmin) {
       setErrorMessage('Akses ditolak: Menu ini hanya dapat diakses dan dijalankan oleh Super Admin.');

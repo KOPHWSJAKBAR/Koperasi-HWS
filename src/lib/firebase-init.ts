@@ -1,6 +1,14 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { initializeFirestore, getFirestore, Firestore } from 'firebase/firestore';
+import {
+  getFirestore,
+  Firestore,
+  setLogLevel,
+  doc,
+  setDoc,
+  getDocFromServer,
+} from 'firebase/firestore';
 import { getAuth, Auth } from 'firebase/auth';
+import { getStorage, FirebaseStorage } from 'firebase/storage';
 
 // Centralized Firebase configuration for multi-platform sync (Web, Android, iOS, PC, AI Studio)
 export const firebaseConfig = {
@@ -20,6 +28,12 @@ export const firebaseConfig = {
 let cachedApp: FirebaseApp | null = null;
 let cachedDb: Firestore | null = null;
 let cachedAuth: Auth | null = null;
+let cachedStorage: FirebaseStorage | null = null;
+
+// Suppress verbose Firebase SDK logs in browser / iframe
+try {
+  setLogLevel('silent');
+} catch {}
 
 export function getFirebaseApp(): FirebaseApp {
   if (!cachedApp) {
@@ -32,45 +46,17 @@ export function getFirebaseApp(): FirebaseApp {
   return cachedApp;
 }
 
-import { setLogLevel } from 'firebase/firestore';
-
-// Suppress internal Firebase logs and connection notices in browser / iframe
-try {
-  setLogLevel('silent');
-} catch {}
-
 export function getFirebaseFirestore(): Firestore {
   if (!cachedDb) {
     const currentApp = getFirebaseApp();
-    const firestoreSettings = {
-      experimentalForceLongPolling: true,
-      useFetchStreams: false,
-    };
-
     if (firebaseConfig.firestoreDatabaseId) {
-      try {
-        cachedDb = initializeFirestore(currentApp, firestoreSettings, firebaseConfig.firestoreDatabaseId);
-      } catch (err) {
-        try {
-          cachedDb = getFirestore(currentApp, firebaseConfig.firestoreDatabaseId);
-        } catch {
-          cachedDb = getFirestore(currentApp);
-        }
-      }
+      cachedDb = getFirestore(currentApp, firebaseConfig.firestoreDatabaseId);
     } else {
-      try {
-        cachedDb = initializeFirestore(currentApp, firestoreSettings);
-      } catch {
-        cachedDb = getFirestore(currentApp);
-      }
+      cachedDb = getFirestore(currentApp);
     }
   }
   return cachedDb;
 }
-
-import { getStorage, FirebaseStorage } from 'firebase/storage';
-import { getAnalytics, isSupported as isAnalyticsSupported, logEvent, Analytics } from 'firebase/analytics';
-import { doc, setDoc, enableNetwork, getDocFromServer } from 'firebase/firestore';
 
 export function getFirebaseAuth(): Auth {
   if (!cachedAuth) {
@@ -79,7 +65,6 @@ export function getFirebaseAuth(): Auth {
   return cachedAuth;
 }
 
-let cachedStorage: FirebaseStorage | null = null;
 export function getFirebaseStorage(): FirebaseStorage {
   if (!cachedStorage) {
     const currentApp = getFirebaseApp();
@@ -88,26 +73,27 @@ export function getFirebaseStorage(): FirebaseStorage {
   return cachedStorage;
 }
 
-let cachedAnalytics: Analytics | null = null;
-export async function getFirebaseAnalyticsSafe(): Promise<Analytics | null> {
-  if (typeof window === 'undefined') return null;
-  if (!cachedAnalytics) {
-    try {
-      const supported = await isAnalyticsSupported();
-      if (supported) {
-        cachedAnalytics = getAnalytics(getFirebaseApp());
-      }
-    } catch {}
-  }
-  return cachedAnalytics;
+// Avoid calling firebase/analytics getAnalytics() which fetches firebase.googleapis.com/.../webConfig
+// and throws NetworkError inside sandboxed iframes / Cloud Run previews.
+export async function getFirebaseAnalyticsSafe(): Promise<null> {
+  return null;
 }
+
+let lastAnalyticsKey = '';
+let lastAnalyticsTime = 0;
 
 export async function logAnalyticsEvent(eventName: string, params?: Record<string, any>) {
   try {
-    const a = await getFirebaseAnalyticsSafe();
-    if (a) {
-      logEvent(a, eventName, params);
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const serializedParams = params ? JSON.parse(JSON.stringify(params)) : {};
+    const dedupeKey = `${eventName}:${JSON.stringify(serializedParams)}`;
+    const nowMs = Date.now();
+    if (dedupeKey === lastAnalyticsKey && nowMs - lastAnalyticsTime < 3000) {
+      return;
     }
+    lastAnalyticsKey = dedupeKey;
+    lastAnalyticsTime = nowMs;
+
     const firestoreDb = getFirebaseFirestore();
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
     const platform = /Android/i.test(ua)
@@ -122,7 +108,7 @@ export async function logAnalyticsEvent(eventName: string, params?: Record<strin
       {
         id: 'analytics_realtime',
         lastEventName: eventName,
-        lastEventParams: params ? JSON.parse(JSON.stringify(params)) : {},
+        lastEventParams: serializedParams,
         lastEventPlatform: platform,
         lastEventTime: new Date().toISOString(),
         measurementId: firebaseConfig.measurementId,
@@ -140,15 +126,76 @@ export const db: Firestore = getFirebaseFirestore();
 export const auth: Auth = getFirebaseAuth();
 export const storage: FirebaseStorage = getFirebaseStorage();
 
-// Verify and keep Firestore live-connected whenever app is open (never stay stuck in offline cache)
+let activeOnlineCheckPromise: Promise<boolean> | null = null;
+let lastOnlineCheckTime = 0;
+let lastOnlineCheckResult = true;
+
+// Passive server reachability check: NEVER invokes enableNetwork(db) or disableNetwork(db),
+// because mutating network state mid-stream triggers PersistentWriteStream.onNext assertion failures.
 export async function ensureFirestoreOnline(): Promise<boolean> {
-  try {
-    await enableNetwork(db);
-    await getDocFromServer(doc(db, 'koperasi_state', 'main_database'));
-    return true;
-  } catch {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    lastOnlineCheckResult = false;
     return false;
   }
+  const now = Date.now();
+  if (now - lastOnlineCheckTime < 5000 && lastOnlineCheckResult) {
+    return true;
+  }
+  if (activeOnlineCheckPromise) {
+    return activeOnlineCheckPromise;
+  }
+
+  activeOnlineCheckPromise = (async () => {
+    try {
+      await Promise.race([
+        getDocFromServer(doc(db, 'koperasi_state', 'main_database')),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+      ]);
+      lastOnlineCheckTime = Date.now();
+      lastOnlineCheckResult = true;
+      return true;
+    } catch {
+      lastOnlineCheckTime = Date.now();
+      lastOnlineCheckResult = typeof navigator !== 'undefined' ? navigator.onLine : false;
+      return lastOnlineCheckResult;
+    } finally {
+      activeOnlineCheckPromise = null;
+    }
+  })();
+
+  return activeOnlineCheckPromise;
+}
+
+let isSystemErrorGuardInstalled = false;
+
+// Guard browser runtime against transient Firebase internal stream rejections so the app never crashes
+export function installFirestoreSystemErrorGuard() {
+  if (typeof window === 'undefined' || isSystemErrorGuardInstalled) return;
+  isSystemErrorGuardInstalled = true;
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    const msg = String(reason?.message || reason || '');
+    const stack = String(reason?.stack || '');
+    const isTransientFirestoreInternal =
+      msg.includes('INTERNAL ASSERTION FAILED') ||
+      msg.includes('49232') ||
+      msg.includes('47125') ||
+      msg.includes('12678') ||
+      msg.includes('55816') ||
+      msg.includes('31322') ||
+      stack.includes('firebase_firestore') ||
+      stack.includes('PersistentWriteStream') ||
+      stack.includes('__PRIVATE_fromVersion') ||
+      stack.includes('__PRIVATE_hardAssert');
+
+    if (isTransientFirestoreInternal) {
+      event.preventDefault();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hws:firestore_stream_recovered'));
+      }
+    }
+  });
 }
 
 export default {
@@ -164,4 +211,5 @@ export default {
   getFirebaseAnalyticsSafe,
   logAnalyticsEvent,
   ensureFirestoreOnline,
+  installFirestoreSystemErrorGuard,
 };

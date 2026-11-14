@@ -1924,12 +1924,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             state={state}
             updateState={updateState}
             currentAdmin={currentAdmin}
+            onBackToDashboard={() => setActiveTab('dashboard')}
           />
         ) : activeTab === 'anggota' ? (
           <MemberListView
             state={state}
             updateState={updateState}
             currentAdmin={currentAdmin}
+            onBackToDashboard={() => setActiveTab('dashboard')}
           />
         ) : activeTab === 'kas' ? (
           <BukuKasView
@@ -2129,6 +2131,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         updateState={updateState}
         currentAdmin={currentAdmin}
         initialTab={berbagiInitialTab}
+        onBackToDashboard={() => setActiveTab('dashboard')}
       />
 
       {/* ================= MODAL HAPUS TRANSAKSI & RESET MUTASI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}

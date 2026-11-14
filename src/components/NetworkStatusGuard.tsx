@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Wifi, WifiOff, RefreshCw, LogOut, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Wifi, WifiOff, RefreshCw, LogOut, CheckCircle2, Lock } from 'lucide-react';
 
 export interface NetworkStatusState {
   isOnline: boolean;
@@ -13,173 +13,316 @@ export interface NetworkStatusState {
 const OFFLINE_WARNING_THRESHOLD_SEC = 60; // Muncul peringatan apabila dalam 60 detik tidak terkoneksi ke internet
 const AUTO_LOGOUT_GRACE_SEC = 30; // 30 detik hitung mundur setelah peringatan muncul (total 90 detik)
 
+interface SharedNetworkSnapshot {
+  isOnline: boolean;
+  showWarning: boolean;
+  offlineSeconds: number;
+  countdown: number;
+  isChecking: boolean;
+  blockedMessage: string | null;
+}
+
+const snapshot: SharedNetworkSnapshot = {
+  isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+  showWarning: false,
+  offlineSeconds: 0,
+  countdown: AUTO_LOGOUT_GRACE_SEC,
+  isChecking: false,
+  blockedMessage: null,
+};
+
+const subscribers = new Set<() => void>();
+const sessionLogoutListeners = new Set<{
+  isSessionActive: () => boolean;
+  onLogout: (reason: string) => void;
+}>();
+
+let inFlightPing: Promise<boolean> | null = null;
+let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+let offlineSecondTimer: ReturnType<typeof setInterval> | null = null;
+let blockedNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+let monitorRefCount = 0;
+
+function notifySubscribers() {
+  subscribers.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
+}
+
+function stopOfflineCounter() {
+  if (offlineSecondTimer) {
+    clearInterval(offlineSecondTimer);
+    offlineSecondTimer = null;
+  }
+}
+
+function startOfflineCounter() {
+  if (offlineSecondTimer) return;
+  offlineSecondTimer = setInterval(() => {
+    if (snapshot.isOnline) {
+      stopOfflineCounter();
+      return;
+    }
+
+    const nextSec = snapshot.offlineSeconds + 1;
+    snapshot.offlineSeconds = nextSec;
+
+    if (nextSec >= OFFLINE_WARNING_THRESHOLD_SEC) {
+      snapshot.showWarning = true;
+      snapshot.countdown = Math.max(
+        0,
+        OFFLINE_WARNING_THRESHOLD_SEC + AUTO_LOGOUT_GRACE_SEC - nextSec
+      );
+    } else {
+      snapshot.showWarning = false;
+      snapshot.countdown = AUTO_LOGOUT_GRACE_SEC;
+    }
+
+    if (nextSec >= OFFLINE_WARNING_THRESHOLD_SEC + AUTO_LOGOUT_GRACE_SEC) {
+      stopOfflineCounter();
+      sessionLogoutListeners.forEach((entry) => {
+        try {
+          if (entry.isSessionActive()) {
+            entry.onLogout(
+              'Sesi Anda telah di-logout otomatis karena perangkat tidak terkoneksi ke jaringan internet demi menjaga keamanan akun dan transaksi perbankan Anda.'
+            );
+          }
+        } catch {}
+      });
+    }
+
+    notifySubscribers();
+  }, 1000);
+}
+
+function applyOnlineState(nextOnline: boolean) {
+  const prevOnline = snapshot.isOnline;
+  snapshot.isOnline = nextOnline;
+
+  if (nextOnline) {
+    stopOfflineCounter();
+    snapshot.showWarning = false;
+    snapshot.offlineSeconds = 0;
+    snapshot.countdown = AUTO_LOGOUT_GRACE_SEC;
+    snapshot.blockedMessage = null;
+
+    if (!prevOnline) {
+      import('../lib/firebase-init')
+        .then(({ ensureFirestoreOnline }) => ensureFirestoreOnline())
+        .catch(() => {});
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hws:network_restored'));
+      }
+    }
+  } else {
+    startOfflineCounter();
+  }
+
+  notifySubscribers();
+}
+
+export function getIsInternetConnected(): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return false;
+  }
+  return snapshot.isOnline;
+}
+
+export function showOfflineTransactionBlockedNotice(actionLabel?: string) {
+  const label = actionLabel ? ` (${actionLabel})` : '';
+  snapshot.blockedMessage = `Transaksi${label} diblokir: Status jaringan MERAH (tidak ada koneksi data internet). Hubungkan internet terlebih dahulu.`;
+  notifySubscribers();
+
+  if (blockedNoticeTimer) clearTimeout(blockedNoticeTimer);
+  blockedNoticeTimer = setTimeout(() => {
+    snapshot.blockedMessage = null;
+    notifySubscribers();
+  }, 4500);
+}
+
+export function assertInternetForTransaction(actionLabel?: string): boolean {
+  if (!getIsInternetConnected()) {
+    showOfflineTransactionBlockedNotice(actionLabel);
+    return false;
+  }
+  return true;
+}
+
+export async function checkSharedInternetConnectivity(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    snapshot.isChecking = false;
+    applyOnlineState(false);
+    return false;
+  }
+
+  if (inFlightPing) {
+    return inFlightPing;
+  }
+
+  snapshot.isChecking = true;
+  notifySubscribers();
+
+  inFlightPing = (async () => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = setTimeout(() => {
+      try {
+        controller?.abort();
+      } catch {}
+    }, 3200);
+
+    try {
+      const res = await fetch(`/api/ping?t=${Date.now()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller?.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        applyOnlineState(false);
+        return false;
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        applyOnlineState(false);
+        return false;
+      }
+
+      const data = await res.json().catch(() => null);
+      const online = Boolean(
+        data && (data.online === true || data.internet === true || data.status === 'online')
+      );
+      applyOnlineState(online);
+      return online;
+    } catch {
+      clearTimeout(timeoutId);
+      applyOnlineState(false);
+      return false;
+    } finally {
+      snapshot.isChecking = false;
+      inFlightPing = null;
+      notifySubscribers();
+    }
+  })();
+
+  return inFlightPing;
+}
+
+function scheduleNextPing() {
+  if (heartbeatTimeout) {
+    clearTimeout(heartbeatTimeout);
+    heartbeatTimeout = null;
+  }
+  if (monitorRefCount <= 0) return;
+
+  const delayMs = snapshot.isOnline ? 3500 : 2000;
+  heartbeatTimeout = setTimeout(async () => {
+    await checkSharedInternetConnectivity();
+    scheduleNextPing();
+  }, delayMs);
+}
+
+function handleWindowOnline() {
+  checkSharedInternetConnectivity().finally(() => scheduleNextPing());
+}
+
+function handleWindowOffline() {
+  applyOnlineState(false);
+  scheduleNextPing();
+}
+
+function handleWindowFocusOrVisible() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  checkSharedInternetConnectivity();
+}
+
+function retainNetworkMonitor() {
+  monitorRefCount += 1;
+  if (monitorRefCount === 1 && typeof window !== 'undefined') {
+    window.addEventListener('online', handleWindowOnline);
+    window.addEventListener('offline', handleWindowOffline);
+    window.addEventListener('focus', handleWindowFocusOrVisible);
+    window.addEventListener('pageshow', handleWindowFocusOrVisible);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleWindowFocusOrVisible);
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      applyOnlineState(false);
+    } else {
+      checkSharedInternetConnectivity();
+    }
+    scheduleNextPing();
+  }
+}
+
+function releaseNetworkMonitor() {
+  monitorRefCount = Math.max(0, monitorRefCount - 1);
+  if (monitorRefCount === 0 && typeof window !== 'undefined') {
+    window.removeEventListener('online', handleWindowOnline);
+    window.removeEventListener('offline', handleWindowOffline);
+    window.removeEventListener('focus', handleWindowFocusOrVisible);
+    window.removeEventListener('pageshow', handleWindowFocusOrVisible);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleWindowFocusOrVisible);
+    }
+    if (heartbeatTimeout) {
+      clearTimeout(heartbeatTimeout);
+      heartbeatTimeout = null;
+    }
+    stopOfflineCounter();
+  }
+}
+
 export function useNetworkStatus(
   onAutoLogout?: (reason: string) => void,
   isSessionActive: boolean = false
 ): NetworkStatusState {
-  const [isOnline, setIsOnline] = useState<boolean>(() => {
-    return typeof navigator !== 'undefined' ? navigator.onLine : true;
-  });
-  const [showWarning, setShowWarning] = useState<boolean>(false);
-  const [offlineSeconds, setOfflineSeconds] = useState<number>(0);
-  const [countdown, setCountdown] = useState<number>(AUTO_LOGOUT_GRACE_SEC);
-  const [isChecking, setIsChecking] = useState<boolean>(false);
+  const [, setTick] = useState(0);
 
-  const timerRef = useRef<any>(null);
   const onAutoLogoutRef = useRef(onAutoLogout);
   onAutoLogoutRef.current = onAutoLogout;
   const isSessionActiveRef = useRef(isSessionActive);
   isSessionActiveRef.current = isSessionActive;
 
-  // Active ping function to verify real internet/server connectivity
-  const checkNow = useCallback(async (): Promise<boolean> => {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      setIsOnline(false);
-      setIsChecking(false);
-      return false;
-    }
-
-    setIsChecking(true);
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`/api/ping?t=${Date.now()}`, {
-        method: 'GET',
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const online = res.ok;
-      setIsOnline((prevOnline) => {
-        if (!prevOnline && online) {
-          import('../lib/firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('hws:network_restored'));
-          }
-        }
-        return online;
-      });
-      if (online) {
-        setShowWarning(false);
-        setOfflineSeconds(0);
-        setCountdown(AUTO_LOGOUT_GRACE_SEC);
-      }
-      setIsChecking(false);
-      return online;
-    } catch {
-      setIsOnline(false);
-      setIsChecking(false);
-      return false;
-    }
-  }, []);
-
-  // Window online/offline event listeners & continuous live heartbeat ping (3s online, 2s offline retry)
   useEffect(() => {
-    const handleOnline = () => {
-      checkNow();
-    };
+    const listener = () => setTick((t) => (t + 1) % 1000000);
+    subscribers.add(listener);
+    retainNetworkMonitor();
 
-    const handleOffline = () => {
-      setIsOnline(false);
-    };
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        checkNow();
-      }
-    };
-
-    const handleFocus = () => {
-      checkNow();
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('pageshow', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibility);
-
-    // Check immediately on mount & keep active heartbeat ping while app is open
-    checkNow();
-    const pingInterval = setInterval(() => {
-      checkNow();
-    }, isOnline ? 3000 : 2000);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('pageshow', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibility);
-      clearInterval(pingInterval);
-    };
-  }, [checkNow, isOnline]);
-
-  // Track offline duration:
-  // - Status badge immediately turns RED when disconnected
-  // - After 60 seconds disconnected -> show blocking warning modal
-  // - 30 seconds grace countdown while warning is displayed -> auto-logout
-  useEffect(() => {
-    if (!isOnline) {
-      if (timerRef.current) clearInterval(timerRef.current);
-
-      timerRef.current = setInterval(() => {
-        setOfflineSeconds((prevSec) => {
-          const newSec = prevSec + 1;
-
-          if (newSec >= OFFLINE_WARNING_THRESHOLD_SEC) {
-            setShowWarning(true);
-            const remaining = Math.max(
-              0,
-              OFFLINE_WARNING_THRESHOLD_SEC + AUTO_LOGOUT_GRACE_SEC - newSec
-            );
-            setCountdown(remaining);
-          } else {
-            setShowWarning(false);
-          }
-
-          if (newSec >= OFFLINE_WARNING_THRESHOLD_SEC + AUTO_LOGOUT_GRACE_SEC) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-            if (isSessionActiveRef.current && onAutoLogoutRef.current) {
-              onAutoLogoutRef.current(
-                'Sesi Anda telah di-logout otomatis karena perangkat tidak terkoneksi ke jaringan internet demi menjaga keamanan akun dan transaksi perbankan Anda.'
-              );
-            }
-          }
-
-          return newSec;
-        });
-      }, 1000);
-    } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      setShowWarning(false);
-      setOfflineSeconds(0);
-      setCountdown(AUTO_LOGOUT_GRACE_SEC);
+    let logoutEntry: { isSessionActive: () => boolean; onLogout: (reason: string) => void } | null = null;
+    if (onAutoLogout) {
+      logoutEntry = {
+        isSessionActive: () => isSessionActiveRef.current,
+        onLogout: (reason: string) => onAutoLogoutRef.current?.(reason),
+      };
+      sessionLogoutListeners.add(logoutEntry);
     }
 
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
+      subscribers.delete(listener);
+      if (logoutEntry) {
+        sessionLogoutListeners.delete(logoutEntry);
       }
+      releaseNetworkMonitor();
     };
-  }, [isOnline]);
+  }, [Boolean(onAutoLogout)]);
 
   return {
-    isOnline,
-    showWarning,
-    offlineSeconds,
-    countdown,
-    isChecking,
-    checkNow,
+    isOnline: snapshot.isOnline,
+    showWarning: snapshot.showWarning,
+    offlineSeconds: snapshot.offlineSeconds,
+    countdown: snapshot.countdown,
+    isChecking: snapshot.isChecking,
+    checkNow: checkSharedInternetConnectivity,
   };
 }
 
 // Visual Connection Status Badge
-// Hijau = Terkoneksi Internet, Merah = Tidak Terkoneksi Internet
+// Hijau = Terkoneksi Internet (Data Aktif), Merah = Tidak Terkoneksi Internet (Transaksi Terkunci)
 export const ConnectionStatusBadge: React.FC<{
   isOnline: boolean;
   className?: string;
@@ -189,7 +332,7 @@ export const ConnectionStatusBadge: React.FC<{
     return (
       <div
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 shadow-sm transition-all ${className}`}
-        title="Status: Terkoneksi Internet (Online Realtime)"
+        title="Status Hijau: Terkoneksi Data Internet (Semua Transaksi Aktif)"
       >
         <span className="relative flex h-2 w-2">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -203,21 +346,21 @@ export const ConnectionStatusBadge: React.FC<{
 
   return (
     <div
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/60 shadow-sm transition-all animate-pulse ${className}`}
-      title="Status: Tidak Terkoneksi Internet (Offline)"
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-600/25 text-rose-200 border border-rose-500/80 shadow-sm transition-all animate-pulse ${className}`}
+      title="Status Merah: Tidak Ada Koneksi Data Internet (Semua Transaksi Dikunci)"
     >
       <span className="relative flex h-2 w-2">
         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-90"></span>
         <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-600"></span>
       </span>
       <WifiOff className="w-3 h-3 text-rose-400 shrink-0" />
-      <span>{compact ? 'Offline' : 'Tidak Terkoneksi Internet'}</span>
+      <span>{compact ? 'Offline (Terkunci)' : 'Tidak Terkoneksi Internet'}</span>
     </div>
   );
 };
 
-// Fullscreen Blocking Modal Guard
-// Muncul peringatan apabila dalam 60 detik tidak terkoneksi ke internet
+// Fullscreen Blocking Modal Guard & Transaction Lock Banner
+// Merah saat offline -> semua transaksi diblokir langsung; muncul peringatan blocking setelah 60 detik
 export interface NetworkStatusGuardProps {
   isOnline: boolean;
   showWarning: boolean;
@@ -233,41 +376,70 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
   isOnline,
   showWarning,
   countdown,
-  offlineSeconds = 60,
+  offlineSeconds = 0,
   isChecking,
   onCheckNow,
   onLogout,
   isSessionActive,
 }) => {
   const [showRestoredToast, setShowRestoredToast] = useState(false);
+  const [blockedMsg, setBlockedMsg] = useState<string | null>(snapshot.blockedMessage);
   const prevOnlineRef = useRef(isOnline);
 
   useEffect(() => {
-    if (!prevOnlineRef.current && isOnline) {
+    const syncBlocked = () => setBlockedMsg(snapshot.blockedMessage);
+    subscribers.add(syncBlocked);
+    return () => {
+      subscribers.delete(syncBlocked);
+    };
+  }, []);
+
+  useEffect(() => {
+    const wasOnline = prevOnlineRef.current;
+    prevOnlineRef.current = isOnline;
+
+    if (!wasOnline && isOnline) {
       setShowRestoredToast(true);
       const timer = setTimeout(() => setShowRestoredToast(false), 3500);
       return () => clearTimeout(timer);
     }
-    prevOnlineRef.current = isOnline;
   }, [isOnline]);
 
   return (
     <>
-      {/* Toast when internet connection is restored */}
+      {/* Toast when internet connection is restored (Hijau) */}
       {showRestoredToast && (
-        <div className="fixed top-4 inset-x-0 mx-auto w-fit z-[10000] px-4 py-2.5 bg-emerald-950/95 text-emerald-200 border-2 border-emerald-500/80 rounded-2xl shadow-2xl text-xs font-black flex items-center gap-2.5 backdrop-blur animate-in fade-in slide-in-from-top-4">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          <span>✓ Koneksi internet berhasil tersambung kembali. Sistem aktif realtime.</span>
+        <div className="fixed top-4 inset-x-0 mx-auto w-fit max-w-[92vw] z-[10000] px-4 py-2.5 bg-emerald-950/95 text-emerald-200 border-2 border-emerald-500/80 rounded-2xl shadow-2xl text-xs font-black flex items-center gap-2.5 backdrop-blur animate-in fade-in slide-in-from-top-4">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>✓ Koneksi internet tersambung kembali (Hijau). Semua transaksi aktif realtime.</span>
         </div>
       )}
 
-      {/* Immediate Reconnecting Notice whenever Internet Drops while app is open */}
+      {/* Blocked Transaction Alert Toast */}
+      {blockedMsg && !showWarning && (
+        <div className="fixed bottom-5 inset-x-0 mx-auto w-fit max-w-[92vw] z-[10001] px-4 py-3 bg-rose-950/95 text-rose-100 border-2 border-rose-500 rounded-2xl shadow-2xl text-xs font-extrabold flex items-center gap-2.5 backdrop-blur">
+          <Lock className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{blockedMsg}</span>
+        </div>
+      )}
+
+      {/* Immediate Red Connection & Transaction Lock Banner whenever Internet Drops */}
       {!isOnline && !showWarning && (
-        <div className="fixed top-3 inset-x-0 mx-auto w-fit max-w-[92vw] z-[9998] px-4 py-2 bg-rose-950/95 text-rose-100 border border-rose-500/80 rounded-2xl shadow-2xl text-[11px] font-bold flex items-center gap-2.5 backdrop-blur">
+        <div className="fixed top-3 inset-x-0 mx-auto w-fit max-w-[94vw] z-[9998] px-4 py-2.5 bg-rose-950/95 text-rose-100 border-2 border-rose-500/90 rounded-2xl shadow-2xl text-[11px] font-bold flex items-center gap-2.5 backdrop-blur">
           <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />
-          <WifiOff className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-          <span>Aplikasi harus terhubung internet. Menyambung ulang ({offlineSeconds}/{OFFLINE_WARNING_THRESHOLD_SEC} dtk)...</span>
+          <Lock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span>
+            Status Merah: Tidak ada data internet. <b>Semua transaksi dikunci</b> sementara ({offlineSeconds}/{OFFLINE_WARNING_THRESHOLD_SEC} dtk).
+          </span>
+          <button
+            type="button"
+            disabled={isChecking}
+            onClick={() => onCheckNow()}
+            className="ml-1 px-2.5 py-1 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-lg text-[10px] font-black cursor-pointer shrink-0"
+          >
+            {isChecking ? 'Cek...' : 'Cek Ulang'}
+          </button>
         </div>
       )}
 
@@ -278,7 +450,6 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
           style={{ pointerEvents: 'auto' }}
         >
           <div className="w-full max-w-md bg-[#0f172a] border-2 border-rose-500 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5 ring-4 ring-rose-500/20">
-            {/* Warning Icon with Pulsing Effect */}
             <div className="relative w-20 h-20 mx-auto flex items-center justify-center">
               <div className="absolute inset-0 rounded-3xl bg-rose-500/20 animate-ping opacity-60" />
               <div className="relative w-20 h-20 rounded-3xl bg-rose-600/20 border-2 border-rose-500 text-rose-400 flex items-center justify-center shadow-lg shadow-rose-950/50">
@@ -286,7 +457,6 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
               </div>
             </div>
 
-            {/* Typography */}
             <div className="space-y-2">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/50 text-[11px] font-black uppercase tracking-wider">
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
@@ -296,11 +466,10 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
                 Periksa Jaringan Koneksi Anda
               </h2>
               <p className="text-xs text-rose-200/90 leading-relaxed max-w-sm mx-auto">
-                Perangkat Anda telah <b>tidak terkoneksi ke internet selama 60 detik</b>. Aplikasi dibekukan dan <b>tidak bisa digunakan</b> demi menjaga keamanan data saldo & transaksi koperasi.
+                Perangkat Anda telah <b>tidak terkoneksi ke internet selama 60 detik</b>. Semua transaksi & aplikasi dibekukan sementara demi menjaga keamanan data saldo koperasi.
               </p>
             </div>
 
-            {/* Countdown Box */}
             <div className="p-4 bg-slate-900/90 rounded-2xl border border-rose-500/40 text-center space-y-2">
               <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                 Waktu Tersisa Menuju Auto-Logout:
@@ -313,7 +482,6 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
                   Detik
                 </span>
               </div>
-              {/* Progress bar */}
               <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                 <div
                   className="bg-rose-500 h-full transition-all duration-1000 ease-linear rounded-full"
@@ -334,7 +502,6 @@ export const NetworkStatusGuard: React.FC<NetworkStatusGuardProps> = ({
               </p>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row items-center gap-2.5 pt-1">
               <button
                 type="button"

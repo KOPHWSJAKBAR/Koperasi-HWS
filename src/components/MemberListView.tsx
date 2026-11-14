@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AppState,
   MemberUser,
@@ -7,10 +7,11 @@ import {
   LockPokokRequest,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, fetchStateFromServer } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
+import { useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Users,
   UserPlus,
@@ -43,13 +44,16 @@ interface MemberListViewProps {
   state: AppState;
   updateState: (updater: (prev: AppState) => AppState) => Promise<void>;
   currentAdmin: AdminUser;
+  onBackToDashboard?: () => void;
 }
 
 export const MemberListView: React.FC<MemberListViewProps> = ({
   state,
   updateState,
   currentAdmin,
+  onBackToDashboard,
 }) => {
+  const { isOnline } = useNetworkStatus();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedWilayah, setSelectedWilayah] = useState<string>('semua');
   const [selectedMemberForKta, setSelectedMemberForKta] = useState<MemberUser | null>(null);
@@ -64,6 +68,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [hapusTxInitialWilayah, setHapusTxInitialWilayah] = useState<WilayahKoperasi | 'semua'>('semua');
   const [hapusTxInitialTxId, setHapusTxInitialTxId] = useState<string | undefined>(undefined);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [isAddingMember, setIsAddingMember] = useState(false);
+  const isAddingMemberRef = useRef(false);
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -128,6 +134,30 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   // Visibility toggles
   const [showFormPassword, setShowFormPassword] = useState(false);
   const [showFormPin, setShowFormPin] = useState(false);
+
+  const resetAddMemberForm = () => {
+    setFormNama('');
+    setFormNik('');
+    setFormWhatsapp('');
+    setFormEmail('');
+    setFormWilayah('Cengkareng');
+    setFormAlamat('');
+    setFormProvinsi('DKI Jakarta');
+    setFormKota('Jakarta Barat');
+    setFormKecamatan('Cengkareng');
+    setFormKelurahan('');
+    setFormRt('001');
+    setFormRw('001');
+    setFormKodePos('11740');
+    setFormBank('Bank Central Asia (BCA)');
+    setFormRekPribadi('');
+    setFormAtasNama('');
+    setFormPassword('user123');
+    setFormJenisKelamin('Laki-laki');
+    setFormTanggalLahir('1990-01-01');
+    setFormPekerjaan('Wirausaha');
+    setFormPinTransaksi('123456');
+  };
   const [showEditPassword, setShowEditPassword] = useState(false);
   const [showEditPin, setShowEditPin] = useState(false);
 
@@ -158,6 +188,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Propose account freeze (Req 4: diajukan oleh admin write)
   const handleProposeFreeze = async (member: MemberUser, reason: string) => {
+    if (!assertInternetForTransaction('Bekukan Akun')) return;
     if (!reason.trim()) {
       alert('Harap masukkan alasan pembekuan akun.');
       return;
@@ -209,6 +240,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Approve account freeze by Kelola or Super Admin
   const handleApproveFreeze = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Setujui Pembekuan Akun')) return;
     const existingReq = member.freezeRequest || {
       requestedByRole: 'admin_write',
       requestedByName: 'Admin',
@@ -259,6 +291,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Reject account freeze
   const handleRejectFreeze = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Tolak Pembekuan Akun')) return;
     await updateState((prev) => ({
       ...prev,
       members: prev.members.map((m) =>
@@ -285,6 +318,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Unfreeze account
   const handleUnfreeze = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Buka Pembekuan Akun')) return;
     if (!isSuperAdmin && !isKelola) {
       alert('Hanya Super Admin atau Admin Kelola yang dapat membuka status pembekuan akun.');
       return;
@@ -371,6 +405,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Approve lock/unlock request (by Admin Approval or Super Admin)
   const handleApproveLockPokok = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Setujui Kunci Tabungan Pokok')) return;
     if (!member.lockPokokRequest) return;
     const req = member.lockPokokRequest;
     const newLockedStatus = req.action === 'lock';
@@ -405,6 +440,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Reject lock/unlock request (by Admin Approval or Super Admin)
   const handleRejectLockPokok = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Tolak Kunci Tabungan Pokok')) return;
     if (!member.lockPokokRequest) return;
     const req = member.lockPokokRequest;
 
@@ -438,6 +474,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   // Submit proposal or direct execution of Lock/Unlock Tabungan Pokok
   const handleSubmitLockPokokForm = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!assertInternetForTransaction('Ubah Status Kunci Tabungan Pokok')) return;
     setLockPokokError('');
 
     if (!lockPokokModalMember) return;
@@ -517,6 +554,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Delete Member (Admin write requires approval from super admin or admin kelola)
   const handleDeleteMember = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Hapus Anggota')) return;
     if (!isSuperAdmin && !isKelola && !isWriter) {
       alert('Anda tidak memiliki hak untuk menghapus anggota.');
       return;
@@ -553,6 +591,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Execute deletion and record to Cash Books per User Req 1
   const executeApprovedDelete = async (member: MemberUser) => {
+    if (!assertInternetForTransaction('Setujui Hapus Anggota')) return;
     const totalSaldo = member.saldoPokok + member.saldoUmum + member.saldoZakatFitrah + member.saldoQurban;
     const confirmDelete = confirm(
       `Setujui & hapus data anggota ${member.nama} (${member.nomorAnggota})?\n` +
@@ -688,116 +727,120 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   // Add Member by Admin
   const handleAddMemberSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAddingMemberRef.current || isAddingMember) return;
+    if (!assertInternetForTransaction('Pendaftaran Anggota')) return;
 
-    // Validate unique NIK, HP, & Email (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
-    const existNik = state.members.find((m) => m.nik === formNik.trim());
-    if (existNik) {
-      alert('NIK ini sudah terdaftar sebagai anggota koperasi.');
+    // Validasi biodata wajib & unik: Nama, NIK, Email, NO HP, No. Rekening Bank, Pemilik Rekening tidak boleh sama dengan anggota lain
+    const biodataErr = validateMemberBiodata(
+      {
+        nama: formNama.trim(),
+        nik: formNik.trim(),
+        email: formEmail.trim(),
+        whatsapp: formWhatsapp.trim(),
+        bankPribadi: {
+          namaBank: formBank,
+          nomorRekening: formRekPribadi.trim(),
+          atasNama: formAtasNama.trim(),
+        },
+      },
+      state.members
+    );
+    if (biodataErr) {
+      alert(biodataErr);
       return;
     }
-    const cleanHp = formWhatsapp.replace(/\D/g, '');
-    const existHp = state.members.find((m) => m.whatsapp.replace(/\D/g, '') === cleanHp);
-    if (existHp) {
-      alert(`Nomor telepon / WhatsApp ${formWhatsapp} sudah digunakan oleh anggota lain (${existHp.nama}).`);
-      return;
-    }
-    const cleanEmail = formEmail.trim().toLowerCase();
-    if (cleanEmail) {
-      const existEmail = state.members.find(
-        (m) => m.email && m.email.trim().toLowerCase() === cleanEmail
+
+    isAddingMemberRef.current = true;
+    setIsAddingMember(true);
+
+    try {
+      const { nomorRekening, nextRunningNumber } = generateNomorRekening(
+        formWilayah,
+        formWhatsapp,
+        state.lastRunningNumber,
+        state.usedAccountNumbers,
+        state.members,
+        false
       );
-      if (existEmail) {
-        alert(`Alamat email ${formEmail} sudah digunakan oleh anggota lain (${existEmail.nama}).`);
+      const nomorAnggota = generateNomorAnggota(
+        formWilayah,
+        state.members.length,
+        state.usedMemberNumbers,
+        state.members,
+        new Date().toISOString().split('T')[0],
+        false
+      );
+
+      const candidateMember: MemberUser = {
+        id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        nomorAnggota,
+        nomorRekening,
+        nama: formNama.trim(),
+        nik: formNik.trim(),
+        whatsapp: formWhatsapp.trim(),
+        email: formEmail.trim(),
+        wilayah: formWilayah,
+        jenisKelamin: formJenisKelamin,
+        tanggalLahir: formTanggalLahir,
+        pekerjaan: formPekerjaan,
+        alamatLengkap: formAlamat.trim(),
+        provinsi: formProvinsi,
+        kota: formKota,
+        kecamatan: formKecamatan,
+        kelurahan: formKelurahan || 'Cengkareng Barat',
+        rt: formRt || '001',
+        rw: formRw || '001',
+        kodePos: formKodePos || '11740',
+        bankPribadi: {
+          namaBank: formBank,
+          nomorRekening: formRekPribadi.trim(),
+          atasNama: formAtasNama.trim(),
+        },
+        password: formPassword || 'user123',
+        pinTransaksi: formPinTransaksi || '123456',
+        saldoPokok: 0,
+        isPokokLocked: true,
+        saldoZakatFitrah: 0,
+        saldoQurban: 0,
+        saldoUmum: 0,
+        totalSimpanan: 0,
+        status: 'aktif',
+        terdaftarSejak: new Date().toISOString().split('T')[0],
+      };
+
+      // Authoritative Realtime Online Registration (Anti-Meniban & Anti-Pendaftaran Berulang across all devices)
+      const regResult = await registerMemberOnline(
+        candidateMember,
+        nextRunningNumber,
+        currentAdmin.nama
+      );
+
+      if (!regResult.success || !regResult.member) {
+        alert(regResult.error || 'Gagal menambahkan anggota baru ke server.');
         return;
       }
+
+      const confirmedMember = regResult.member;
+      resetAddMemberForm();
+      setShowAddModal(false);
+      alert(`✓ Anggota ${confirmedMember.nama} berhasil ditambahkan secara realtime online!\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}`);
+      onBackToDashboard?.();
+    } finally {
+      isAddingMemberRef.current = false;
+      setIsAddingMember(false);
     }
-
-    const { nomorRekening, nextRunningNumber } = generateNomorRekening(
-      formWilayah,
-      formWhatsapp,
-      state.lastRunningNumber
-    );
-    const nomorAnggota = generateNomorAnggota(formWilayah, state.members.length);
-
-    const candidateMember: MemberUser = {
-      id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      nomorAnggota,
-      nomorRekening,
-      nama: formNama.trim(),
-      nik: formNik.trim(),
-      whatsapp: formWhatsapp.trim(),
-      email: formEmail.trim() || `${formNik.trim()}@anggota.hws.id`,
-      wilayah: formWilayah,
-      jenisKelamin: formJenisKelamin,
-      tanggalLahir: formTanggalLahir,
-      pekerjaan: formPekerjaan,
-      alamatLengkap: formAlamat.trim(),
-      provinsi: formProvinsi,
-      kota: formKota,
-      kecamatan: formKecamatan,
-      kelurahan: formKelurahan || 'Cengkareng Barat',
-      rt: formRt || '001',
-      rw: formRw || '001',
-      kodePos: formKodePos || '11740',
-      bankPribadi: {
-        namaBank: formBank,
-        nomorRekening: formRekPribadi || '0000000000',
-        atasNama: formAtasNama || formNama,
-      },
-      password: formPassword || 'user123',
-      pinTransaksi: formPinTransaksi || '123456',
-      saldoPokok: 0,
-      isPokokLocked: true,
-      saldoZakatFitrah: 0,
-      saldoQurban: 0,
-      saldoUmum: 0,
-      totalSimpanan: 0,
-      status: 'aktif',
-      terdaftarSejak: new Date().toISOString().split('T')[0],
-    };
-
-    // Authoritative Realtime Online Registration (Anti-Meniban across all devices)
-    const regResult = await registerMemberOnline(
-      candidateMember,
-      nextRunningNumber,
-      currentAdmin.nama
-    );
-
-    if (!regResult.success || !regResult.member) {
-      alert(regResult.error || 'Gagal menambahkan anggota baru ke server.');
-      return;
-    }
-
-    const confirmedMember = regResult.member;
-    setShowAddModal(false);
-    alert(`✓ Anggota ${confirmedMember.nama} berhasil ditambahkan secara realtime online!\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}`);
   };
 
-  // Edit Member Profile Save (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
+  // Edit Member Profile Save (Wajib isi & unik: Nama, NIK, Email, No HP, No Rek, Pemilik Rek)
   const handleSaveEditMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMember) return;
+    if (!assertInternetForTransaction('Simpan Perubahan Anggota')) return;
 
-    const cleanHp = editingMember.whatsapp ? editingMember.whatsapp.replace(/\D/g, '') : '';
-    if (cleanHp) {
-      const dupHp = state.members.find(
-        (m) => m.id !== editingMember.id && m.whatsapp && m.whatsapp.replace(/\D/g, '') === cleanHp
-      );
-      if (dupHp) {
-        alert(`Nomor telepon / WhatsApp ${editingMember.whatsapp} sudah digunakan oleh anggota lain (${dupHp.nama}).`);
-        return;
-      }
-    }
-
-    const cleanEmail = editingMember.email ? editingMember.email.trim().toLowerCase() : '';
-    if (cleanEmail) {
-      const dupEmail = state.members.find(
-        (m) => m.id !== editingMember.id && m.email && m.email.trim().toLowerCase() === cleanEmail
-      );
-      if (dupEmail) {
-        alert(`Alamat email ${editingMember.email} sudah digunakan oleh anggota lain (${dupEmail.nama}).`);
-        return;
-      }
+    const biodataErr = validateMemberBiodata(editingMember, state.members, editingMember.id);
+    if (biodataErr) {
+      alert(biodataErr);
+      return;
     }
 
     await updateState((prev) => ({
@@ -822,6 +865,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Hapus 1 Mutasi Anggota (Khusus Super Admin per Req 2)
   const handleDeleteSingleTx = async (tx: MemberTransaction) => {
+    if (!assertInternetForTransaction('Hapus Mutasi Transaksi')) return;
     if (!isSuperAdmin) {
       alert('Akses Ditolak: Hanya Super Admin yang dapat menghapus mutasi transaksi anggota.');
       return;
@@ -1126,11 +1170,16 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
             {(isSuperAdmin || isWriter) && (
               <button
                 type="button"
-                onClick={() => setShowAddModal(true)}
-                className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
+                disabled={!isOnline}
+                onClick={() => {
+                  if (!assertInternetForTransaction('Tambah Anggota')) return;
+                  resetAddMemberForm();
+                  setShowAddModal(true);
+                }}
+                className="py-2 px-3.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black rounded-xl shadow-lg flex items-center gap-1.5 transition-all"
               >
                 <UserPlus className="w-4 h-4" />
-                + Tambah Anggota Baru
+                {isOnline ? '+ Tambah Anggota Baru' : '🔒 Offline (Terkunci)'}
               </button>
             )}
 
@@ -1499,9 +1548,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-slate-300 mb-1">Email</label>
+                  <label className="block font-bold text-slate-300 mb-1">Email *</label>
                   <input
                     type="email"
+                    required
                     value={editingMember.email || ''}
                     onChange={(e) => setEditingMember({ ...editingMember, email: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
@@ -1589,12 +1639,13 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
               {/* Rekening Bank Pribadi */}
               <div className="p-3 bg-slate-900 rounded-2xl border border-slate-700/80 space-y-2">
-                <div className="text-[11px] font-bold text-amber-400">Rekening Bank Pribadi Anggota:</div>
+                <div className="text-[11px] font-bold text-amber-400">Rekening Bank Pribadi Anggota (Wajib & Unik):</div>
                 <div className="grid grid-cols-3 gap-2">
                   <div>
-                    <label className="block text-[10px] text-slate-400">Bank</label>
+                    <label className="block text-[10px] text-slate-400">Bank *</label>
                     <input
                       type="text"
+                      required
                       value={editingMember.bankPribadi?.namaBank || ''}
                       onChange={(e) => setEditingMember({
                         ...editingMember,
@@ -1604,9 +1655,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">No. Rekening</label>
+                    <label className="block text-[10px] text-slate-400">No. Rekening *</label>
                     <input
                       type="text"
+                      required
                       value={editingMember.bankPribadi?.nomorRekening || ''}
                       onChange={(e) => setEditingMember({
                         ...editingMember,
@@ -1616,9 +1668,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">Atas Nama</label>
+                    <label className="block text-[10px] text-slate-400">Pemilik Rekening *</label>
                     <input
                       type="text"
+                      required
                       value={editingMember.bankPribadi?.atasNama || ''}
                       onChange={(e) => setEditingMember({
                         ...editingMember,
@@ -1750,9 +1803,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 mb-1">Email</label>
+                    <label className="block text-slate-300 mb-1">Email *</label>
                     <input
                       type="email"
+                      required
                       value={formEmail}
                       onChange={(e) => setFormEmail(e.target.value)}
                       placeholder="email@example.com"
@@ -1870,11 +1924,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               </div>
 
               {/* 3. Rekening Bank Pribadi */}
-              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 space-y-2">
-                <div className="font-bold text-amber-400 text-xs">3. Rekening Bank Pribadi Anggota</div>
+              <div className="p-3 bg-slate-900 rounded-2xl border border-amber-500/30 space-y-2">
+                <div className="font-bold text-amber-400 text-xs">3. Rekening Bank Pribadi Anggota (Wajib & Unik)</div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
-                    <label className="block text-[10px] text-slate-400">Bank Pribadi</label>
+                    <label className="block text-[10px] text-slate-300">Bank Pribadi *</label>
                     <select
                       value={formBank}
                       onChange={(e) => setFormBank(e.target.value)}
@@ -1888,22 +1942,24 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">Nomor Rekening</label>
+                    <label className="block text-[10px] text-slate-300">Nomor Rekening *</label>
                     <input
                       type="text"
+                      required
                       value={formRekPribadi}
                       onChange={(e) => setFormRekPribadi(e.target.value)}
-                      placeholder="No. Rekening"
+                      placeholder="No. Rekening Unik"
                       className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">Atas Nama</label>
+                    <label className="block text-[10px] text-slate-300">Pemilik Rekening *</label>
                     <input
                       type="text"
+                      required
                       value={formAtasNama}
                       onChange={(e) => setFormAtasNama(e.target.value)}
-                      placeholder="Nama di buku tabungan"
+                      placeholder="Nama Pemilik Rekening"
                       className="w-full px-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-white"
                     />
                   </div>
@@ -1961,16 +2017,27 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
+                  disabled={isAddingMember}
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 py-2.5 bg-slate-800 text-slate-300 font-bold rounded-xl"
+                  className="flex-1 py-2.5 bg-slate-800 disabled:opacity-50 text-slate-300 font-bold rounded-xl"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow-lg transition-all"
+                  disabled={isAddingMember || !isOnline}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
                 >
-                  Daftarkan Anggota Baru
+                  {isAddingMember ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                      <span>Menyimpan Anggota...</span>
+                    </>
+                  ) : !isOnline ? (
+                    <span>🔒 Terkunci (Tidak Ada Koneksi Internet)</span>
+                  ) : (
+                    <span>Daftarkan Anggota Baru</span>
+                  )}
                 </button>
               </div>
             </form>

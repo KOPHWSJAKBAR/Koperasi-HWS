@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
-import { generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline } from '../lib/storage';
+import { generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, validateMemberBiodata } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
 import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
-import { ConnectionStatusBadge, useNetworkStatus } from './NetworkStatusGuard';
+import { ConnectionStatusBadge, useNetworkStatus, assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   Fingerprint,
   Lock,
@@ -242,8 +242,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setSuccessMessage('✓ Pemasangan & persetujuan syarat ketentuan selesai. Silakan login ke akun Anda!');
   };
 
-  // Register Form State
-  const [regForm, setRegForm] = useState({
+  const INITIAL_REG_FORM = {
     nama: '',
     nik: '',
     whatsapp: '',
@@ -267,11 +266,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
     securityQuestion: 'Nama hewan peliharaan pertama?',
     securityAnswer: '',
     ktpPhotoUrl: '',
-  });
+  };
+
+  // Register Form State
+  const [regForm, setRegForm] = useState(INITIAL_REG_FORM);
 
   // State untuk Registrasi Mandiri Anggota (Req 1)
   const [regError, setRegError] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
+  const isRegisterSubmittingRef = useRef(false);
   const [regSuccessMember, setRegSuccessMember] = useState<MemberUser | null>(null);
 
   // Forgot Password / ID State
@@ -584,6 +587,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
   // Handle Register Anggota Baru (Pendaftaran Mandiri - Req 1)
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isRegisterSubmittingRef.current || isRegistering) return;
+
+    if (!assertInternetForTransaction('Pendaftaran Anggota')) {
+      setRegError('Status jaringan MERAH: Tidak ada koneksi data internet. Semua transaksi & pendaftaran dikunci sampai koneksi internet pulih.');
+      return;
+    }
+
     setRegError('');
     setErrorMessage('');
 
@@ -602,46 +612,46 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // Validation: NIK, No HP, and Email cannot be used twice (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
-    const existingNik = state.members.find((m) => m.nik === regForm.nik.trim());
-    if (existingNik) {
-      setRegError('NIK ini sudah terdaftar sebagai anggota koperasi HWS.');
+    // Validasi biodata wajib & unik: Nama, NIK, Email, NO HP, No. Rekening Bank, Pemilik Rekening tidak boleh sama dengan anggota lain
+    const biodataErr = validateMemberBiodata(
+      {
+        nama: regForm.nama.trim(),
+        nik: regForm.nik.trim(),
+        email: regForm.email.trim(),
+        whatsapp: regForm.whatsapp.trim(),
+        bankPribadi: {
+          namaBank: regForm.namaBank || 'Bank Central Asia (BCA)',
+          nomorRekening: regForm.nomorRekeningBank.trim(),
+          atasNama: regForm.atasNamaBank.trim(),
+        },
+      },
+      state.members
+    );
+    if (biodataErr) {
+      setRegError(biodataErr);
       return;
     }
 
-    const cleanHp = regForm.whatsapp.replace(/\D/g, '');
-    const existingHp = state.members.find((m) => m.whatsapp.replace(/\D/g, '') === cleanHp);
-    if (existingHp) {
-      setRegError(`Nomor HP / WhatsApp ${regForm.whatsapp} sudah digunakan oleh anggota lain (${existingHp.nama}). Silakan gunakan nomor lain.`);
-      return;
-    }
-
-    const cleanEmail = regForm.email.trim().toLowerCase();
-    if (cleanEmail) {
-      const existingEmail = state.members.find(
-        (m) => m.email && m.email.trim().toLowerCase() === cleanEmail
-      );
-      if (existingEmail) {
-        setRegError(`Alamat email ${regForm.email} sudah digunakan oleh anggota lain (${existingEmail.nama}). Silakan gunakan email lain.`);
-        return;
-      }
-    }
-
+    isRegisterSubmittingRef.current = true;
     setIsRegistering(true);
 
     try {
-      // Generate Nomor Rekening & Nomor Anggota proposal
+      // Generate Nomor Rekening & Nomor Anggota proposal tanpa mengotori globalState sebelum konfirmasi server
       const { nomorRekening, nextRunningNumber } = generateNomorRekening(
         regForm.wilayah,
         regForm.whatsapp,
-        state.lastRunningNumber
+        state.lastRunningNumber,
+        state.usedAccountNumbers,
+        state.members,
+        false
       );
       const nomorAnggota = generateNomorAnggota(
         regForm.wilayah,
         state.members.length,
         state.usedMemberNumbers,
         state.members,
-        new Date().toISOString().split('T')[0]
+        new Date().toISOString().split('T')[0],
+        false
       );
 
       const candidateMember: MemberUser = {
@@ -664,8 +674,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
         ktpPhotoUrl: regForm.ktpPhotoUrl || '',
         bankPribadi: {
           namaBank: regForm.namaBank || 'Bank Central Asia (BCA)',
-          nomorRekening: regForm.nomorRekeningBank || '-',
-          atasNama: regForm.atasNamaBank || regForm.nama.trim(),
+          nomorRekening: regForm.nomorRekeningBank.trim(),
+          atasNama: regForm.atasNamaBank.trim(),
         },
         password: regForm.password,
         pinTransaksi: regForm.pinTransaksi,
@@ -681,24 +691,36 @@ export const LoginView: React.FC<LoginViewProps> = ({
         terdaftarSejak: new Date().toISOString().split('T')[0],
       };
 
-      // Authoritative Realtime Online Registration (Anti-Meniban across all devices)
+      // Authoritative Realtime Online Registration (Anti-Meniban & Anti-Pendaftaran Berulang across all devices)
       const regResult = await registerMemberOnline(candidateMember, nextRunningNumber);
       if (!regResult.success || !regResult.member) {
         setRegError(regResult.error || 'Pendaftaran gagal. Silakan coba lagi.');
-        setIsRegistering(false);
         return;
       }
 
       const confirmedMember = regResult.member;
 
-      // Set member identifier & password ready for immediate login
+      // Clear registration state & close modal, then immediately direct user to Dashboard Anggota
       setMemberIdentifier(confirmedMember.nomorAnggota);
       setMemberPassword(regForm.password);
-      setSuccessMessage(`✓ Pendaftaran berhasil secara realtime online! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}`);
-      setRegSuccessMember(confirmedMember);
+      setRegForm(INITIAL_REG_FORM);
+      setRegSuccessMember(null);
+      setShowRegisterModal(false);
+
+      if (state.maintenanceLock?.isLocked) {
+        setSuccessMessage(
+          `✓ Pendaftaran berhasil! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}. Sistem sedang dalam mode maintenance.`
+        );
+      } else {
+        alert(
+          `✓ Pendaftaran Berhasil!\nNama: ${confirmedMember.nama}\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}\n\nAnda langsung diarahkan ke Dashboard Anggota.`
+        );
+        onLoginMember(confirmedMember);
+      }
     } catch (err: any) {
       setRegError(err?.message || 'Terjadi kesalahan saat memproses pendaftaran. Silakan coba lagi.');
     } finally {
+      isRegisterSubmittingRef.current = false;
       setIsRegistering(false);
     }
   };
@@ -738,6 +760,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
   // Reset Password via Security Question
   const handleResetPasswordSubmit = async () => {
     if (!foundUser) return;
+    if (!assertInternetForTransaction('Reset Password')) {
+      setErrorMessage('Status jaringan MERAH: Tidak ada koneksi data internet. Pembaruan password dikunci saat offline.');
+      return;
+    }
     if (securityAnswerInput.trim().toLowerCase() !== (foundUser.securityAnswer || '').toLowerCase()) {
       setErrorMessage('Jawaban keamanan tidak cocok.');
       return;
@@ -1023,16 +1049,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </p>
                 <button
                   type="button"
+                  disabled={!isOnline}
                   onClick={() => {
+                    if (!assertInternetForTransaction('Pendaftaran Anggota')) return;
                     setErrorMessage('');
                     setRegError('');
                     setRegSuccessMember(null);
+                    setRegForm(INITIAL_REG_FORM);
                     setShowRegisterModal(true);
                   }}
-                  className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 text-xs font-black rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/20"
+                  className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black rounded-xl flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/20"
                 >
                   <UserPlus className="w-4 h-4 text-slate-950" />
-                  <span>Daftar Anggota Baru (Pendaftaran Mandiri Online)</span>
+                  <span>{isOnline ? 'Daftar Anggota Baru (Pendaftaran Mandiri Online)' : '🔒 Pendaftaran Terkunci (Tidak Ada Internet)'}</span>
                 </button>
               </div>
             </form>
@@ -1523,14 +1552,14 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
 
               {/* Rekening Bank Pribadi Anggota */}
-              <div className="bg-[#162035] p-3 rounded-xl border border-slate-700 space-y-2">
+              <div className="bg-[#162035] p-3 rounded-xl border border-amber-500/40 space-y-2">
                 <div className="text-xs font-bold text-white flex items-center justify-between">
-                  <span>Rekening Bank Pribadi (Untuk Penarikan Tabungan)</span>
-                  <span className="text-[10px] text-slate-400 font-normal">Opsional (bisa diisi nanti)</span>
+                  <span>Rekening Bank Pribadi (Untuk Penarikan Tabungan) *</span>
+                  <span className="text-[10px] text-amber-400 font-bold">Wajib Diisi & Unik</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
-                    <label className="block text-[10px] text-slate-400">Nama Bank</label>
+                    <label className="block text-[10px] text-slate-300">Nama Bank *</label>
                     <select
                       value={regForm.namaBank}
                       onChange={(e) => setRegForm({ ...regForm, namaBank: e.target.value })}
@@ -1547,20 +1576,22 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">No. Rekening Pribadi</label>
+                    <label className="block text-[10px] text-slate-300">No. Rekening Pribadi *</label>
                     <input
                       type="text"
-                      placeholder="Contoh: 1234567890 (Opsional)"
+                      required
+                      placeholder="Contoh: 1234567890"
                       value={regForm.nomorRekeningBank}
                       onChange={(e) => setRegForm({ ...regForm, nomorRekeningBank: e.target.value })}
                       className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-slate-400">Atas Nama Rekening</label>
+                    <label className="block text-[10px] text-slate-300">Pemilik Rekening (Atas Nama) *</label>
                     <input
                       type="text"
-                      placeholder="Nama di Rekening (Opsional)"
+                      required
+                      placeholder="Nama Pemilik Rekening"
                       value={regForm.atasNamaBank}
                       onChange={(e) => setRegForm({ ...regForm, atasNamaBank: e.target.value })}
                       className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs"
@@ -1699,14 +1730,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isRegistering}
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
+                  disabled={isRegistering || !isOnline}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
                 >
                   {isRegistering ? (
                     <>
                       <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
                       <span>Memproses Pendaftaran...</span>
                     </>
+                  ) : !isOnline ? (
+                    <span>🔒 Terkunci (Tidak Ada Koneksi Internet)</span>
                   ) : (
                     <span>Selesaikan Pendaftaran Mandiri</span>
                   )}

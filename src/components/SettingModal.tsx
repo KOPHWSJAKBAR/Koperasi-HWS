@@ -8,12 +8,13 @@ import {
   BankAccount,
   PengurusItem,
 } from '../types';
-import { formatRupiah, createAuditLog, syncStateToServer } from '../lib/storage';
+import { formatRupiah, createAuditLog, syncStateToServer, validateMemberBiodata } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { GoogleDriveModal } from './GoogleDriveModal';
 import { InstallAppModal } from './InstallAppModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
+import { assertInternetForTransaction } from './NetworkStatusGuard';
 import {
   X,
   User,
@@ -237,6 +238,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
   // Edit Profile State (Member)
   const [editMemberNama, setEditMemberNama] = useState(currentMember?.nama || '');
+  const [editMemberNik, setEditMemberNik] = useState(currentMember?.nik || '');
   const [editMemberWa, setEditMemberWa] = useState(currentMember?.whatsapp || '');
   const [editMemberEmail, setEditMemberEmail] = useState(currentMember?.email || '');
   const [editMemberAlamat, setEditMemberAlamat] = useState(currentMember?.alamatLengkap || '');
@@ -322,6 +324,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   useEffect(() => {
     if (currentMember) {
       setEditMemberNama(currentMember.nama || '');
+      setEditMemberNik(currentMember.nik || '');
       setEditMemberWa(currentMember.whatsapp || '');
       setEditMemberEmail(currentMember.email || '');
       setEditMemberAlamat(currentMember.alamatLengkap || '');
@@ -585,7 +588,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       await updateState(() => parsed);
 
-      // Push langsung ke Firestore
+      // Push lightweight metadata pulse ke Firestore (data lengkap disinkronkan otomatis per koleksi via updateState)
       const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
       await setDoc(
@@ -593,14 +596,14 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         {
           lastSynced: new Date().toISOString(),
           updatedBy: currentAdmin?.nama || 'Super Admin Restore',
-          payload: JSON.stringify(parsed),
+          isSharded: true,
           totalMembers: (parsed.members || []).length,
           totalKas: (parsed.kasList || []).length,
           totalSetoran: (parsed.setoranList || []).length,
           totalSedekah: (parsed.sedekahList || []).length,
         },
         { merge: true }
-      );
+      ).catch(() => {});
 
       alert('✓ Pemulihan basis data berhasil! Seluruh data koperasi telah dipulihkan dan disinkronkan ke Firestore.');
     } catch (err: any) {
@@ -704,6 +707,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const handleResetAppFromZero = async (e: React.FormEvent) => {
     e.preventDefault();
     setResetAppError('');
+    if (!assertInternetForTransaction('Reset Aplikasi')) {
+      setResetAppError('Status jaringan MERAH (tidak ada internet). Reset aplikasi dikunci saat offline.');
+      return;
+    }
     if (!isSuperAdmin) {
       setResetAppError('Akses ditolak: Hanya Super Admin yang berwenang mereset aplikasi.');
       return;
@@ -1079,31 +1086,29 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
-  // Save Member Profile (User Req 2: Nomer tlp dan email tidak bisa sama dengan anggota lainnya)
+  // Save Member Profile (Wajib isi & unik: Nama, NIK, Email, No HP, No Rek, Pemilik Rek)
   const handleSaveMemberProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMember) return;
 
-    const cleanHp = editMemberWa ? editMemberWa.replace(/\D/g, '') : '';
-    if (cleanHp) {
-      const dupHp = state.members.find(
-        (m) => m.id !== currentMember.id && m.whatsapp && m.whatsapp.replace(/\D/g, '') === cleanHp
-      );
-      if (dupHp) {
-        alert(`Nomor telepon / WhatsApp ${editMemberWa} sudah digunakan oleh anggota lain (${dupHp.nama}).`);
-        return;
-      }
-    }
-
-    const cleanEmail = editMemberEmail ? editMemberEmail.trim().toLowerCase() : '';
-    if (cleanEmail) {
-      const dupEmail = state.members.find(
-        (m) => m.id !== currentMember.id && m.email && m.email.trim().toLowerCase() === cleanEmail
-      );
-      if (dupEmail) {
-        alert(`Alamat email ${editMemberEmail} sudah digunakan oleh anggota lain (${dupEmail.nama}).`);
-        return;
-      }
+    const biodataErr = validateMemberBiodata(
+      {
+        nama: editMemberNama.trim(),
+        nik: editMemberNik.trim(),
+        email: editMemberEmail.trim(),
+        whatsapp: editMemberWa.trim(),
+        bankPribadi: {
+          namaBank: editMemberBankName,
+          nomorRekening: editMemberBankRek.trim(),
+          atasNama: editMemberBankHolder.trim(),
+        },
+      },
+      state.members,
+      currentMember.id
+    );
+    if (biodataErr) {
+      alert(biodataErr);
+      return;
     }
 
     await updateState((prev) => ({
@@ -1112,9 +1117,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         m.id === currentMember.id
           ? {
               ...m,
-              nama: editMemberNama.trim() || m.nama,
-              whatsapp: editMemberWa.trim() || m.whatsapp,
-              email: editMemberEmail.trim() || m.email,
+              nama: editMemberNama.trim(),
+              nik: editMemberNik.trim(),
+              whatsapp: editMemberWa.trim(),
+              email: editMemberEmail.trim(),
               alamatLengkap: editMemberAlamat.trim() || m.alamatLengkap,
               rt: editMemberRt.trim() || m.rt,
               rw: editMemberRw.trim() || m.rw,
@@ -1125,12 +1131,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               kodePos: editMemberKodePos.trim() || m.kodePos,
               bankPribadi: {
                 namaBank: editMemberBankName,
-                nomorRekening: editMemberBankRek.trim() || m.bankPribadi.nomorRekening,
-                atasNama: editMemberBankHolder.trim() || m.bankPribadi.atasNama,
+                nomorRekening: editMemberBankRek.trim(),
+                atasNama: editMemberBankHolder.trim(),
               },
               password: editMemberPassword.trim() ? editMemberPassword.trim() : m.password,
               pinTransaksi: editMemberPin.trim() ? editMemberPin.trim() : m.pinTransaksi,
-            }
+              isRestoredPlaceholder: false,
+            } as MemberUser
           : m
       ),
     }));
@@ -1221,7 +1228,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    // 3. Mirror directly to Firestore
+    // 3. Mirror metadata pulse directly to Firestore
     try {
       const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -1230,13 +1237,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         {
           lastSynced: new Date().toISOString(),
           updatedBy: currentAdmin.nama,
-          payload: JSON.stringify({
-            ...state,
-            profile: updatedProfile,
-          }),
+          isSharded: true,
         },
         { merge: true }
-      );
+      ).catch(() => {});
     } catch {}
 
     alert('✓ Biodata, susunan kepengurusan & legalitas koperasi berhasil disimpan permanen di server dan database!');
@@ -1684,7 +1688,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    // 3. Mirror directly to Firestore
+    // 3. Mirror metadata pulse directly to Firestore
     try {
       const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -1693,13 +1697,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         {
           lastSynced: new Date().toISOString(),
           updatedBy: currentAdmin.nama,
-          payload: JSON.stringify({
-            ...state,
-            admins: state.admins.map((a) => (a.id === selectedAdminToEdit.id ? updatedAdmin : a)),
-          }),
+          isSharded: true,
         },
         { merge: true }
-      );
+      ).catch(() => {});
     } catch {}
 
     alert(`✓ Data akun pengurus ${updatedAdmin.nama} (@${updatedAdmin.username}) berhasil diperbarui dan tersimpan permanen!`);
@@ -1768,7 +1769,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    // 3. Mirror directly to Firestore
+    // 3. Mirror metadata pulse directly to Firestore
     try {
       const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -1777,13 +1778,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         {
           lastSynced: new Date().toISOString(),
           updatedBy: currentAdmin.nama,
-          payload: JSON.stringify({
-            ...state,
-            admins: state.admins.filter((a) => a.id !== targetAdmin.id),
-          }),
+          isSharded: true,
         },
         { merge: true }
-      );
+      ).catch(() => {});
     } catch {}
 
     alert(`✓ Akun pengurus ${targetAdmin.nama} (@${targetAdmin.username}) telah berhasil dihapus dari sistem.`);
@@ -1889,7 +1887,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       ],
     }));
 
-    // 3. Mirror directly to Firestore
+    // 3. Mirror metadata pulse directly to Firestore
     try {
       const { db } = await import('../lib/firebase-init');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -1898,13 +1896,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         {
           lastSynced: new Date().toISOString(),
           updatedBy: currentAdmin.nama,
-          payload: JSON.stringify({
-            ...state,
-            admins: [...state.admins, newAdminUser],
-          }),
+          isSharded: true,
         },
         { merge: true }
-      );
+      ).catch(() => {});
     } catch {}
 
     alert(`✓ Pengurus baru ${newAdminUser.nama} (@${newAdminUser.username}) berhasil ditambahkan dan tersimpan permanen di database!`);
@@ -1967,6 +1962,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   // Penyesuaian Saldo Anggota (Req 5: Penyesuaian saldo anggota terinput di kas anggota)
   const handlePenyesuaianSaldoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!assertInternetForTransaction('Penyesuaian Saldo')) return;
     if (!currentAdmin) return;
     const amount = Number(adjNominal);
     if (!amount || amount <= 0) {
@@ -2977,7 +2973,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           <div className="pt-2">
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => onLogout()}
               className="w-full py-3 bg-red-950/40 hover:bg-red-900/60 border border-red-500/40 text-red-300 hover:text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-950/50"
             >
               <LogOut className="w-4 h-4" />
@@ -3002,20 +2998,34 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
             {isMember ? (
               <form onSubmit={handleSaveMemberProfile} className="space-y-3 text-xs">
-                <div>
-                  <label className="block font-bold text-slate-300 mb-1">Nama Lengkap</label>
-                  <input
-                    type="text"
-                    required
-                    value={editMemberNama}
-                    onChange={(e) => setEditMemberNama(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">Nama Lengkap *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editMemberNama}
+                      onChange={(e) => setEditMemberNama(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">NIK (16 Digit KTP) *</label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={16}
+                      value={editMemberNik}
+                      onChange={(e) => setEditMemberNik(e.target.value.replace(/\D/g, ''))}
+                      placeholder="16 digit NIK"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block font-bold text-slate-300 mb-1">No. WhatsApp</label>
+                    <label className="block font-bold text-slate-300 mb-1">No. WhatsApp / HP *</label>
                     <input
                       type="tel"
                       required
@@ -3025,7 +3035,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-300 mb-1">Email</label>
+                    <label className="block font-bold text-slate-300 mb-1">Email *</label>
                     <input
                       type="email"
                       required
@@ -3097,7 +3107,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[10px] text-slate-400">Nomor Rekening</label>
+                      <label className="block text-[10px] text-slate-300">Nomor Rekening *</label>
                       <input
                         type="text"
                         required
@@ -3107,7 +3117,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] text-slate-400">Atas Nama</label>
+                      <label className="block text-[10px] text-slate-300">Pemilik Rekening *</label>
                       <input
                         type="text"
                         required
