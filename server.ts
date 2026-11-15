@@ -3413,8 +3413,9 @@ async function startServer() {
   });
 
   // Dedicated Member Registration Endpoint for instant authoritative persistence (Login & Admin) - ANTI PENDAFTARAN BERULANG & ANTI MENIBAN
-  app.post('/api/members/register', (req: Request, res: Response) => {
+  app.post('/api/members/register', async (req: Request, res: Response) => {
     try {
+      await pullFromFirestoreServer().catch(() => {});
       const { member, nextRunningNumber, adminName, isUpdate } = req.body;
       if (!member || !member.nama) {
         return res.status(400).json({ error: 'Data nama anggota diperlukan' });
@@ -3591,9 +3592,8 @@ async function startServer() {
         currentState.deletedMemberIds = currentState.deletedMemberIds.filter((id: string) => id !== finalMember.id);
       }
 
-      currentState.auditLogs = currentState.auditLogs || [];
-      currentState.auditLogs.unshift({
-        id: `log-reg-${Date.now()}`,
+      const regLogEntry = {
+        id: `log-reg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         timestamp: new Date().toISOString(),
         adminId: adminName ? 'admin' : finalMember.id,
         adminNama: adminName || finalMember.nama,
@@ -3601,38 +3601,59 @@ async function startServer() {
         action: adminName ? 'Tambah Anggota (Admin)' : 'Pendaftaran Anggota (Mandiri)',
         detail: `Anggota ${finalMember.nama} (${finalMember.nomorAnggota}) tersimpan permanen di server realtime. Rekening: ${finalMember.nomorRekening}`,
         targetId: finalMember.id,
-      });
+      };
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift(regLogEntry);
 
-      saveDatabase(currentState);
+      saveDatabase(currentState, { skipFirestore: true });
 
-      // Asynchronous direct write to Cloud Firestore doc 'members/{id}' and 'settings/general'
-      (async () => {
-        try {
-          const { initializeApp, getApps } = await import('firebase/app');
-          const { getFirestore, doc, setDoc } = await import('firebase/firestore');
-          const configPath = path.join(__dirname, 'firebase-applet-config.json');
-          if (fs.existsSync(configPath)) {
-            const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-            const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
-            const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
-            const cleanDoc = { ...finalMember, updatedAt: new Date().toISOString() };
-            delete cleanDoc.biometricActive;
-            await setDoc(doc(db, 'members', finalMember.id), cleanDoc, { merge: true });
-            await setDoc(
+      // Authoritative direct write to Cloud Firestore doc 'members/{id}', 'settings/general', 'logs', and 'koperasi_state/main_database'
+      try {
+        const { initializeApp, getApps } = await import('firebase/app');
+        const { getFirestore, doc, setDoc } = await import('firebase/firestore');
+        const configPath = path.join(__dirname, 'firebase-applet-config.json');
+        if (fs.existsSync(configPath)) {
+          const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+          const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
+          const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+          const nowIso = new Date().toISOString();
+          const cleanDoc = { ...finalMember, updatedAt: nowIso };
+          delete cleanDoc.biometricActive;
+          if (cleanDoc.ktpPhotoUrl && String(cleanDoc.ktpPhotoUrl).length > 750000) {
+            cleanDoc.ktpPhotoUrl = '';
+          }
+          if (cleanDoc.avatarUrl && String(cleanDoc.avatarUrl).length > 350000) {
+            cleanDoc.avatarUrl = '';
+          }
+          await Promise.all([
+            setDoc(doc(db, 'members', finalMember.id), cleanDoc, { merge: true }),
+            setDoc(
               doc(db, 'settings', 'general'),
               {
                 lastRunningNumber: currentState.lastRunningNumber,
                 usedMemberNumbers: currentState.usedMemberNumbers,
                 usedAccountNumbers: currentState.usedAccountNumbers,
-                updatedAt: new Date().toISOString(),
+                updatedAt: nowIso,
+                updatedBy: 'server_realtime',
               },
               { merge: true }
-            );
-          }
-        } catch (e) {
-          console.warn('Firestore direct write on register notice:', e);
+            ),
+            setDoc(doc(db, 'logs', regLogEntry.id), regLogEntry, { merge: true }),
+            setDoc(
+              doc(db, 'koperasi_state', 'main_database'),
+              {
+                id: 'main_database',
+                lastSynced: nowIso,
+                updatedBy: 'server_realtime',
+                totalMembers: (currentState.members || []).length,
+              },
+              { merge: true }
+            ),
+          ]);
         }
-      })();
+      } catch (e) {
+        console.warn('Firestore direct write on register notice:', e);
+      }
 
       // Realtime online broadcast to ALL connected devices (Android, iOS, PC, Web, AI Studio)
       broadcastEvent('MEMBER_REGISTERED', { member: finalMember });
@@ -5273,20 +5294,36 @@ async function startServer() {
     }
   });
 
-  // Download Official Android Package (.APK / .APP raw installer package)
-  app.get(['/api/download/apk', '/api/download/app', '/api/download/raw-app', '/api/download/koperasi-hws.app', '/api/download/koperasi-hws.apk'], (req: Request, res: Response) => {
-    const apkPath = path.join(DATA_DIR, 'koperasi-hws-v2.4.apk');
-    if (fs.existsSync(apkPath)) {
-      const stat = fs.statSync(apkPath);
-      // Ensure Android device browsers and package managers recognize it directly as installable app package
-      res.setHeader('Content-Disposition', 'attachment; filename="koperasi-hws-v2.4.apk"');
-      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-      res.setHeader('Content-Length', stat.size);
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      return res.sendFile(apkPath);
-    }
-    res.status(404).send('File mentah aplikasi Android sedang disiapkan');
+  // Download Official Android WebApp Launcher (replaces broken legacy Zashboard APK so Android installs always connect to Koperasi HWS)
+  app.get(['/api/download/android-launcher', '/api/download/apk', '/api/download/app', '/api/download/raw-app', '/api/download/koperasi-hws.app', '/api/download/koperasi-hws.apk'], (req: Request, res: Response) => {
+    const hostUrl = getHostUrl(req);
+    res.setHeader('Content-Disposition', 'attachment; filename="Koperasi-HWS-Android.html"');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const launcherHtml = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="refresh" content="0;url=${hostUrl}" />
+  <title>Koperasi HWS - Launcher Resmi Android</title>
+  <style>
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b1120;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif;padding:20px;text-align:center}
+    .card{max-width:420px;background:#111c33;border:1px solid #334155;border-radius:20px;padding:24px}
+    .btn{display:inline-block;margin-top:16px;padding:12px 20px;background:#f59e0b;color:#0f172a;font-weight:800;border-radius:12px;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Koperasi Himpunan Wirausaha Sejahtera</h2>
+    <p>Membuka portal resmi Koperasi HWS yang terhubung langsung ke Cloud Firestore...</p>
+    <a class="btn" href="${hostUrl}">Buka Aplikasi Koperasi HWS</a>
+    <p style="font-size:12px;color:#94a3b8;margin-top:14px">Setelah terbuka di Chrome Android, ketuk menu titik tiga (⋮) &gt; <b>Instal Aplikasi</b> atau <b>Tambahkan ke Layar Utama</b>.</p>
+  </div>
+  <script>window.location.replace(${JSON.stringify(hostUrl)});</script>
+</body>
+</html>`;
+    res.send(launcherHtml);
   });
 
   // Download Official Android Firebase Config (google-services.json for com.koperasi.hws)

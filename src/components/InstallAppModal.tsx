@@ -128,8 +128,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   const handleDownload = (type: DownloadPackageType) => {
     directDownload(type);
     let label = '';
-    if (type === 'apk') label = 'Paket Android (.APK)';
-    else if (type === 'app') label = 'File Mentah Android (.APP / .APK)';
+    if (type === 'apk' || type === 'app') label = 'Launcher Resmi Android (Koperasi-HWS-Android.html)';
     else if (type === 'exe') label = 'PC Windows (.EXE)';
     else if (type === 'ios') label = 'iOS WebClip Profile';
     else if (type === 'database') label = 'Database Koperasi (koperasi_db.json)';
@@ -138,7 +137,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
     else label = 'Shortcut Desktop';
 
     setNotificationMsg({
-      text: `✓ Berkas ${label} langsung terunduh dari database ke perangkat Anda.`,
+      text: `✓ Berkas ${label} langsung terunduh ke perangkat Anda.`,
       type: 'success',
     });
   };
@@ -252,7 +251,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                   <div className="text-[10px] text-slate-300">
                     {installed
                       ? 'Aplikasi telah terpasang di perangkat Anda'
-                      : 'Terdownload langsung pada database dan otomatis install'}
+                      : 'Terhubung langsung ke server & Cloud Firestore Koperasi HWS'}
                   </div>
                 </div>
               </div>
@@ -275,7 +274,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                   ? 'Sedang Memproses Pemasangan...'
                   : installed
                   ? '✓ Buka / Perbarui Aplikasi Terpasang'
-                  : '⚡ Pasang Sekarang (Download & Otomatis Install)'}
+                  : '⚡ Pasang Sekarang (Otomatis ke Layar Utama)'}
               </span>
             </button>
           </div>
@@ -304,7 +303,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                     <div className="text-xs font-extrabold text-white flex items-center gap-1.5 flex-wrap">
                       <span>Android (Smartphone & Tablet)</span>
                       <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">
-                        File Mentah .APP / .APK v2.4
+                        PWA Resmi & Launcher Online
                       </span>
                       <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">
                         Demo Off (Produksi)
@@ -321,7 +320,7 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                     onClick={() => handleInstallDevice('apk')}
                     disabled={isProcessing}
                     className="px-3 py-2 bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 text-slate-950 text-xs font-black rounded-xl shadow-md flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                    title="Tombol Pasang: langsung download database dan otomatis install ke Android"
+                    title="Pasang langsung aplikasi Koperasi HWS ke layar utama Android"
                   >
                     <Zap className="w-3.5 h-3.5 fill-slate-950" />
                     <span>Pasang Cepat</span>
@@ -330,19 +329,19 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                     type="button"
                     onClick={() => handleDownload('app')}
                     className="px-2.5 py-2 bg-slate-750 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
-                    title="Unduh File Mentah .APP / .APK untuk diinstall manual"
+                    title="Unduh Launcher Android resmi yang langsung membuka URL Koperasi HWS"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    <span>File Mentah (.APP)</span>
+                    <span>Launcher Android</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setAndroidGuideOpen(!androidGuideOpen)}
                     className="px-2.5 py-2 bg-slate-750 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 text-xs font-bold rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
-                    title="Setting file mentah agar terbaca baik untuk Android"
+                    title="Petunjuk pemasangan di Android"
                   >
                     <Smartphone className="w-3.5 h-3.5" />
-                    <span>Setting Android</span>
+                    <span>Cara Pasang</span>
                   </button>
                 </div>
               </div>
@@ -351,29 +350,20 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
                 <div className="p-3 bg-slate-900 rounded-xl border border-emerald-500/30 text-[11px] text-slate-300 space-y-2">
                   <div className="font-bold text-emerald-300 flex items-center gap-1.5">
                     <span>📱</span>
-                    <span>Petunjuk Setting Agar File Mentah Terbaca & Terpasang Baik di Android:</span>
+                    <span>Petunjuk Pemasangan Resmi di Android (Terhubung Cloud Firestore):</span>
                   </div>
                   <div className="space-y-1.5 pl-1 text-slate-300">
                     <div className="flex items-start gap-1.5">
                       <span className="font-bold text-amber-400 shrink-0">1.</span>
-                      <span>Ketuk tombol <b>"File Mentah (.APP)"</b> di atas untuk mengunduh berkas installer resmi.</span>
+                      <span>Buka link resmi Koperasi HWS di browser <b>Google Chrome</b> pada HP Android Anda, atau buka berkas <b>Koperasi-HWS-Android.html</b> yang terunduh.</span>
                     </div>
                     <div className="flex items-start gap-1.5">
                       <span className="font-bold text-amber-400 shrink-0">2.</span>
-                      <span>Buka bilah notifikasi HP Anda atau buka aplikasi <b>File Manager &gt; Download</b>, lalu ketuk berkas <b>koperasi-hws-v2.4.apk</b>.</span>
+                      <span>Ketuk tombol <b>"Pasang Cepat"</b> atau menu titik tiga Chrome (⋮) lalu pilih <b>"Instal Aplikasi"</b> / <b>"Tambahkan ke Layar Utama"</b>.</span>
                     </div>
                     <div className="flex items-start gap-1.5">
-                      <span className="font-bold text-amber-400 shrink-0">3.</span>
-                      <span>Jika muncul pop-up keamanan <i>"Untuk keamanan, ponsel Anda tidak diizinkan memasang aplikasi tidak dikenal"</i>:</span>
-                    </div>
-                    <div className="ml-4 p-2 bg-slate-950/70 rounded-lg border border-slate-700 text-[10px] space-y-1 text-slate-300">
-                      <div>• Ketuk <b>"Setelan" (Settings)</b> pada dialog yang muncul.</div>
-                      <div>• Geser tombol <b>"Izinkan dari sumber ini" (Allow from this source)</b> ke posisi AKTIF (ON).</div>
-                      <div>• Tekan tombol Kembali (Back) lalu ketuk <b>"Instal" (Install)</b>.</div>
-                    </div>
-                    <div className="flex items-start gap-1.5">
-                      <span className="font-bold text-emerald-400 shrink-0">4.</span>
-                      <span>Selesai! Ikon <b>KHWS</b> akan terpasang di layar utama HP Anda dan langsung terhubung secara otomatis ke database online server & Firestore web.</span>
+                      <span className="font-bold text-emerald-400 shrink-0">3.</span>
+                      <span>Ikon resmi <b>Koperasi HWS</b> langsung terpasang di layar utama HP Anda dan pendaftaran anggota baru otomatis masuk ke database Cloud Firestore.</span>
                     </div>
                   </div>
                 </div>

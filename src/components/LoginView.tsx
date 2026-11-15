@@ -217,12 +217,12 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       if (installWizardApp === 'apk') {
         const a = document.createElement('a');
-        a.href = '/api/download/apk';
-        a.download = 'koperasi-hws-v2.4.apk';
+        a.href = '/api/download/android-launcher';
+        a.download = 'Koperasi-HWS-Android.html';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setSuccessMessage('✓ Berkas mentah .APK resmi Koperasi HWS berhasil diunduh dan diverifikasi SDK!');
+        setSuccessMessage('✓ Launcher resmi Android Koperasi HWS berhasil diunduh! Buka lewat Chrome lalu pilih "Instal Aplikasi".');
       } else if (installWizardApp === 'exe') {
         const a = document.createElement('a');
         a.href = '/api/download/exe';
@@ -667,13 +667,54 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  // Upload KTP image handler
+  // Upload KTP image handler with automatic compression so Firestore 1MB limit is never exceeded
   const handleKtpUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      setRegForm((prev) => ({ ...prev, ktpPhotoUrl: reader.result as string }));
+      const rawDataUrl = reader.result as string;
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxDim = 960;
+          let w = img.width || maxDim;
+          let h = img.height || maxDim;
+          if (w > maxDim || h > maxDim) {
+            if (w >= h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            let compressed = canvas.toDataURL('image/jpeg', 0.72);
+            if (compressed.length > 260000) {
+              compressed = canvas.toDataURL('image/jpeg', 0.5);
+            }
+            setRegForm((prev) => ({ ...prev, ktpPhotoUrl: compressed }));
+            return;
+          }
+        } catch {}
+        setRegForm((prev) => ({
+          ...prev,
+          ktpPhotoUrl: rawDataUrl.length <= 700000 ? rawDataUrl : '',
+        }));
+      };
+      img.onerror = () => {
+        setRegForm((prev) => ({
+          ...prev,
+          ktpPhotoUrl: rawDataUrl.length <= 700000 ? rawDataUrl : '',
+        }));
+      };
+      img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
   };
@@ -801,8 +842,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
           `✓ Pendaftaran berhasil! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}. Sistem sedang dalam mode maintenance.`
         );
       } else {
-        alert(
-          `✓ Pendaftaran Berhasil!\nNama: ${confirmedMember.nama}\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}\n\nAnda langsung diarahkan ke Dashboard Anggota.`
+        setSuccessMessage(
+          `✓ Pendaftaran berhasil! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}.`
         );
         onLoginMember(confirmedMember);
       }

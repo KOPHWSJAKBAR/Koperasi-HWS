@@ -268,12 +268,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       if (installWizardApp === 'apk') {
         const a = document.createElement('a');
-        a.href = '/api/download/apk';
-        a.download = 'koperasi-hws-v2.4.apk';
+        a.href = '/api/download/android-launcher';
+        a.download = 'Koperasi-HWS-Android.html';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        setInstallSuccessMsg('✓ File mentah .APK resmi Android berhasil diunduh dan diverifikasi!');
+        setInstallSuccessMsg('✓ Launcher resmi Android Koperasi HWS berhasil diunduh!');
       } else if (installWizardApp === 'exe') {
         const a = document.createElement('a');
         a.href = '/api/download/exe';

@@ -117,12 +117,9 @@ export function directDownload(type: DownloadPackageType) {
   let url = '';
   let filename = '';
 
-  if (type === 'apk') {
-    url = '/api/download/apk';
-    filename = 'koperasi-hws-v2.4.apk';
-  } else if (type === 'app') {
-    url = '/api/download/raw-app';
-    filename = 'koperasi-hws.app';
+  if (type === 'apk' || type === 'app') {
+    url = '/api/download/android-launcher';
+    filename = 'Koperasi-HWS-Android.html';
   } else if (type === 'exe') {
     url = '/api/download/exe';
     filename = 'koperasi-hws-setup.exe';
@@ -172,10 +169,8 @@ export async function installAndDownload(type: DownloadPackageType): Promise<{
     | 'downloaded';
   message: string;
 }> {
-  // 1. Immediately trigger download of installer package from database
-  directDownload(type);
-
   if (type === 'database' || type === 'google-services') {
+    directDownload(type);
     return {
       status: 'downloaded',
       message:
@@ -184,6 +179,26 @@ export async function installAndDownload(type: DownloadPackageType): Promise<{
           : '✓ Berkas konfigurasi google-services.json berhasil diunduh.',
     };
   }
+
+  // Untuk Android (apk/app), utamakan instalasi PWA Resmi terlebih dahulu agar langsung terhubung ke server & Firestore Koperasi HWS
+  if (type === 'apk' || type === 'app') {
+    const promptRes = await promptInstallDirectly();
+    if (promptRes.status === 'installed' || promptRes.status === 'already_installed') {
+      return {
+        status: promptRes.status,
+        message: '✓ Aplikasi resmi Koperasi HWS berhasil terpasang dan terhubung langsung ke Cloud Firestore!',
+      };
+    }
+    directDownload('apk');
+    return {
+      status: 'downloaded_and_prompted',
+      message:
+        '✓ Launcher resmi Android (Koperasi-HWS-Android.html) telah diunduh. Buka file tersebut di Chrome Android lalu ketuk "Instal Aplikasi / Tambah ke Layar Utama".',
+    };
+  }
+
+  // 1. Trigger download of installer package from server
+  directDownload(type);
 
   // 2. Prompt direct installation on device
   const promptRes = await promptInstallDirectly();
@@ -214,8 +229,6 @@ export async function installAndDownload(type: DownloadPackageType): Promise<{
 
   return {
     status: 'downloaded_and_prompted',
-    message: `✓ Berkas installer ${
-      type === 'apk' ? 'Android (.APK)' : 'PC Desktop (.EXE)'
-    } langsung terunduh dari database. Klik berkas atau pilih "Pasang" untuk instalasi otomatis.`,
+    message: '✓ Berkas installer PC Desktop (.EXE) langsung terunduh dari database. Klik berkas untuk membuka aplikasi Koperasi HWS.',
   };
 }

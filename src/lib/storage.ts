@@ -3285,37 +3285,170 @@ export async function registerMemberOnline(
       candidateToSave.nomorRekening = generatedRek.nomorRekening;
     }
 
-    // 5. Kirim ke backend endpoint pendaftaran otoritatif terlebih dahulu agar validasi 400 ditangani penuh
-    const res = await fetch('/api/members/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        member: candidateToSave,
-        nextRunningNumber,
-        adminName,
-        isUpdate: false,
-      }),
-    });
+    // 4b. Pastikan ukuran ktpPhotoUrl / avatarUrl aman untuk batas 1MB dokumen Firestore
+    if (candidateToSave.ktpPhotoUrl && candidateToSave.ktpPhotoUrl.length > 750000) {
+      candidateToSave.ktpPhotoUrl = '';
+    }
+    if (candidateToSave.avatarUrl && candidateToSave.avatarUrl.length > 350000) {
+      candidateToSave.avatarUrl = '';
+    }
 
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
+    // 5. Kirim ke backend endpoint pendaftaran otoritatif terlebih dahulu agar validasi 400 ditangani penuh
+    let res: Response | null = null;
+    let data: any = null;
+    let serverTransportFailed = false;
+
+    try {
+      res = await fetch('/api/members/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          member: candidateToSave,
+          nextRunningNumber,
+          adminName,
+          isUpdate: false,
+        }),
+      });
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await res.json().catch(() => null);
+      } else {
+        serverTransportFailed = true;
+      }
+    } catch {
+      serverTransportFailed = true;
+    }
+
+    if (res && !res.ok && !serverTransportFailed && res.status >= 400 && res.status < 500 && data?.error) {
       return {
         success: false,
-        error: data?.error || 'Pendaftaran ditolak: periksa kelengkapan atau duplikasi biodata anggota.',
+        error: data.error,
       };
     }
 
     let savedMember: MemberUser = candidateToSave;
-    if (data && data.success && data.member) {
+    const isServerAuthorized = Boolean(res && res.ok && data && data.success && data.member);
+
+    if (isServerAuthorized) {
       savedMember = data.member as MemberUser;
       if (data.state) {
         globalState = mergeStates(globalState, data.state);
       }
+    } else {
+      // Fallback otoritatif langsung ke Cloud Firestore jika endpoint /api/members/register tidak terjangkau (mis. PWA standalone, cache, atau container terpisah)
+      const { db, ensureFirestoreOnline } = await import('./firebase-init');
+      await ensureFirestoreOnline();
+      const { collection, getDocs, doc, getDoc, setDoc } = await import('firebase/firestore');
+
+      const [memSnap, genSnap] = await Promise.all([
+        getDocs(collection(db, 'members')),
+        getDoc(doc(db, 'settings', 'general')),
+      ]);
+
+      const genData = genSnap.exists() ? genSnap.data() || {} : {};
+      const delIds = new Set<string>([
+        ...(globalState.deletedMemberIds || []),
+        ...(Array.isArray(genData.deletedMemberIds) ? genData.deletedMemberIds : []),
+      ]);
+      const remoteMembers = memSnap.docs
+        .map((d) => d.data() as MemberUser)
+        .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delIds.has(m.id));
+      const authoritativeMembers = deduplicateMembersClient(
+        [...(globalState.members || []), ...remoteMembers],
+        Array.from(delIds)
+      );
+
+      const fsBiodataErr = validateMemberBiodata(candidateToSave, authoritativeMembers);
+      if (fsBiodataErr) {
+        return { success: false, error: fsBiodataErr };
+      }
+
+      const mergedUsedNo = sanitizeUsedMemberNumbersClient(
+        [
+          ...(globalState.usedMemberNumbers || []),
+          ...(Array.isArray(genData.usedMemberNumbers) ? genData.usedMemberNumbers : []),
+          ...authoritativeMembers.map((m) => m.nomorAnggota).filter(Boolean),
+        ],
+        authoritativeMembers
+      );
+      const mergedUsedRek = Array.from(
+        new Set<string>([
+          ...(globalState.usedAccountNumbers || []),
+          ...(Array.isArray(genData.usedAccountNumbers) ? genData.usedAccountNumbers : []),
+          ...authoritativeMembers.map((m) => m.nomorRekening).filter(Boolean),
+        ])
+      );
+
+      const fallbackNomorAnggota = generateNomorAnggota(
+        candidateToSave.wilayah,
+        authoritativeMembers.length,
+        mergedUsedNo,
+        authoritativeMembers,
+        candidateToSave.terdaftarSejak,
+        false
+      );
+      const fallbackRek = generateNomorRekening(
+        candidateToSave.wilayah,
+        candidateToSave.whatsapp,
+        Math.max(Number(genData.lastRunningNumber) || 66666, Number(nextRunningNumber) || 66666, globalState.lastRunningNumber || 66666),
+        mergedUsedRek,
+        authoritativeMembers,
+        false
+      );
+
+      savedMember = {
+        ...candidateToSave,
+        nomorAnggota: fallbackNomorAnggota,
+        nomorRekening: mergedUsedRek.includes(candidateToSave.nomorRekening)
+          ? fallbackRek.nomorRekening
+          : candidateToSave.nomorRekening,
+      };
+
+      const cleanMem = sanitizeForFirestore({ ...savedMember, updatedAt: new Date().toISOString() });
+      delete (cleanMem as any).biometricActive;
+      await setDoc(doc(db, 'members', savedMember.id), cleanMem, { merge: true });
+
+      const nextUsedMemberNumbers = sanitizeUsedMemberNumbersClient(
+        [...mergedUsedNo, savedMember.nomorAnggota],
+        [...authoritativeMembers, savedMember]
+      );
+      const nextUsedAccountNumbers = Array.from(
+        new Set([...mergedUsedRek, savedMember.nomorRekening].filter(Boolean))
+      );
+
+      await setDoc(
+        doc(db, 'settings', 'general'),
+        {
+          lastRunningNumber: Math.max(fallbackRek.nextRunningNumber, Number(genData.lastRunningNumber) || 66666),
+          usedMemberNumbers: nextUsedMemberNumbers,
+          usedAccountNumbers: nextUsedAccountNumbers,
+          updatedAt: new Date().toISOString(),
+          updatedBy: CLIENT_ID,
+        },
+        { merge: true }
+      ).catch(() => {});
+
+      const fallbackLogId = `log-reg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      await setDoc(
+        doc(db, 'logs', fallbackLogId),
+        {
+          id: fallbackLogId,
+          timestamp: new Date().toISOString(),
+          adminId: adminName ? 'admin' : savedMember.id,
+          adminNama: adminName || savedMember.nama,
+          adminRole: adminName ? 'admin_write' : 'member',
+          action: adminName ? 'Tambah Anggota (Admin)' : 'Pendaftaran Anggota (Mandiri)',
+          detail: `Anggota ${savedMember.nama} (${savedMember.nomorAnggota}) tersimpan langsung ke Cloud Firestore. Rekening: ${savedMember.nomorRekening}`,
+          targetId: savedMember.id,
+        },
+        { merge: true }
+      ).catch(() => {});
     }
 
-    // 6. Langsung sinkronkan ke Cloud Firestore doc 'members/{id}' setelah otorisasi server sukses
+    // 6. Pastikan dokumen anggota & log tersinkron penuh ke Cloud Firestore doc 'members/{id}'
     try {
-      const { db } = await import('./firebase');
+      const { db, ensureFirestoreOnline } = await import('./firebase-init');
+      await ensureFirestoreOnline();
       const { doc, setDoc } = await import('firebase/firestore');
       const cleanMem = sanitizeForFirestore({ ...savedMember, updatedAt: new Date().toISOString() });
       delete (cleanMem as any).biometricActive;
@@ -3326,7 +3459,7 @@ export async function registerMemberOnline(
           id: 'main_database',
           lastSynced: new Date().toISOString(),
           updatedBy: CLIENT_ID,
-          totalMembers: (globalState.members || []).length,
+          totalMembers: Math.max((globalState.members || []).length, 1),
         },
         { merge: true }
       ).catch(() => {});
