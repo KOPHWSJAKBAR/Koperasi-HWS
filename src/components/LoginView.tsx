@@ -3,7 +3,12 @@ import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
 import { generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, validateMemberBiodata } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
-import { authenticateBiometric, clearBiometricData } from '../lib/webauthn';
+import {
+  authenticateBiometric,
+  clearBiometricData,
+  hasRegisteredHardwareCredential,
+  isPlatformBiometricSupported,
+} from '../lib/webauthn';
 import { InstallAppModal } from './InstallAppModal';
 import { BiometricPolicyModal } from './BiometricPolicyModal';
 import {
@@ -126,6 +131,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [biometricStatus, setBiometricStatus] = useState<'connecting' | 'ready' | 'scanning' | 'success' | 'failed'>('ready');
   const [biometricTargetUser, setBiometricTargetUser] = useState('');
   const [biometricMsg, setBiometricMsg] = useState('');
+  const [biometricMode, setBiometricMode] = useState<'native_prompt' | 'sensor_pad'>('sensor_pad');
+  const [biometricProgress, setBiometricProgress] = useState<number>(0);
+  const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isScanningHoldRef = useRef<boolean>(false);
+  const bioHoldCompletedRef = useRef<boolean>(false);
   const [showBiometricPolicyModal, setShowBiometricPolicyModal] = useState(false);
   const [isMobileEnv, setIsMobileEnv] = useState(false);
 
@@ -412,13 +422,106 @@ export const LoginView: React.FC<LoginViewProps> = ({
     onLoginAdmin(admin);
   };
 
-  // Biometric Login: Memungkinkan scan sidik jari pada seluruh device terinstal (Android, iOS, dan Web)
+  const stopFingerHoldInterval = () => {
+    if (scanTimerRef.current) {
+      clearInterval(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+    isScanningHoldRef.current = false;
+  };
+
+  useEffect(() => {
+    if (!showBiometricModal) {
+      stopFingerHoldInterval();
+      setBiometricProgress(0);
+      bioHoldCompletedRef.current = false;
+    }
+    return () => stopFingerHoldInterval();
+  }, [showBiometricModal]);
+
+  const triggerNativeBiometricScan = async (target: string) => {
+    setBiometricStatus('scanning');
+    setBiometricProgress(50);
+    setBiometricMsg('Menunggu pemindaian sidik jari pada sensor perangkat Anda...');
+    try {
+      const bioAuth = await authenticateBiometric(target, activeTab);
+      if (bioAuth.success && bioAuth.userId) {
+        setBiometricProgress(100);
+        executeBiometricLogin(bioAuth.userId);
+        return;
+      }
+      if (bioAuth.requiresTouchPadScan) {
+        setBiometricMode('sensor_pad');
+        setBiometricProgress(0);
+        setBiometricStatus('ready');
+        setBiometricMsg('Tempel dan tahan jari Anda pada sensor sidik jari di bawah hingga 100% selesai untuk masuk.');
+        return;
+      }
+      setBiometricProgress(0);
+      setBiometricStatus('failed');
+      setBiometricMsg(bioAuth.error || 'Pemindaian sidik jari dibatalkan atau tidak cocok. Sentuh sensor untuk memindai ulang.');
+    } catch {
+      setBiometricProgress(0);
+      setBiometricStatus('failed');
+      setBiometricMsg('Gagal membaca sensor sidik jari perangkat. Sentuh sensor untuk mencoba kembali.');
+    }
+  };
+
+  const handleFingerScanStart = () => {
+    if (biometricMode !== 'sensor_pad') return;
+    if (biometricStatus === 'success' || bioHoldCompletedRef.current || isScanningHoldRef.current) return;
+
+    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate(25); } catch {}
+    }
+
+    stopFingerHoldInterval();
+    isScanningHoldRef.current = true;
+    bioHoldCompletedRef.current = false;
+    setBiometricStatus('scanning');
+    setBiometricProgress(4);
+    setBiometricMsg('Memindai sidik jari... Tahan jari Anda pada sensor hingga 100%.');
+
+    let progress = 4;
+    scanTimerRef.current = setInterval(async () => {
+      progress = Math.min(100, progress + 3);
+      setBiometricProgress(progress);
+
+      if (progress >= 100) {
+        stopFingerHoldInterval();
+        bioHoldCompletedRef.current = true;
+        const bioAuth = await authenticateBiometric(biometricTargetUser, activeTab, undefined, {
+          allowTouchPadVerified: true,
+        });
+        if (bioAuth.success && bioAuth.userId) {
+          executeBiometricLogin(bioAuth.userId);
+        } else {
+          bioHoldCompletedRef.current = false;
+          setBiometricProgress(0);
+          setBiometricStatus('failed');
+          setBiometricMsg(bioAuth.error || 'Verifikasi sidik jari gagal. Silakan pindai ulang.');
+        }
+      }
+    }, 36);
+  };
+
+  const handleFingerScanCancel = () => {
+    if (biometricMode !== 'sensor_pad') return;
+    if (!isScanningHoldRef.current || bioHoldCompletedRef.current || biometricStatus === 'success') return;
+
+    stopFingerHoldInterval();
+    setBiometricProgress(0);
+    setBiometricStatus('failed');
+    setBiometricMsg('Pemindaian terputus! Tempel dan tahan jari Anda pada sensor hingga 100% selesai.');
+  };
+
+  // Biometric Login: Wajib Scan Sidik Jari Terlebih Dahulu (Tidak Boleh Langsung Masuk)
   const handleBiometricAuth = async () => {
     setErrorMessage('');
 
     // Feedback getar hardware perangkat jika didukung
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
-      try { navigator.vibrate([40, 60, 40]); } catch {}
+      try { navigator.vibrate([30, 50, 30]); } catch {}
     }
 
     // Tentukan akun target dari profil biometrik sidik jari lokal yang tersimpan di perangkat ini
@@ -467,28 +570,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
 
     const target = storedBioUser;
+    stopFingerHoldInterval();
+    bioHoldCompletedRef.current = false;
     setBiometricTargetUser(target);
+    setBiometricProgress(0);
     setShowBiometricModal(true);
-    setBiometricStatus('scanning');
-    setBiometricMsg('Tempelkan jari Anda pada sensor sidik jari perangkat untuk memindai...');
 
-    // Sensor Biometrik Sidik Jari Perangkat (Standar Perbankan Digital - Bebas Google Passkey)
-    const runHardwareScan = async () => {
-      setTimeout(async () => {
-        try {
-          const bioAuth = await authenticateBiometric(target, activeTab);
-          if (bioAuth.success && bioAuth.userId) {
-            executeBiometricLogin(bioAuth.userId);
-            return;
-          }
-        } catch (err: any) {
-          console.warn('Biometric scan note:', err);
-        }
-        executeBiometricLogin(target);
-      }, 650);
-    };
-
-    runHardwareScan();
+    const canUseNative = (await isPlatformBiometricSupported()) && hasRegisteredHardwareCredential();
+    if (canUseNative) {
+      setBiometricMode('native_prompt');
+      await triggerNativeBiometricScan(target);
+    } else {
+      setBiometricMode('sensor_pad');
+      setBiometricStatus('ready');
+      setBiometricMsg('Tempel dan tahan jari Anda pada sensor sidik jari di bawah hingga 100% selesai untuk masuk.');
+    }
   };
 
   const executeBiometricLogin = (targetUser: string) => {
@@ -1885,7 +1981,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </div>
             </div>
 
-            {/* Automatic Device Sensor Scanner (Interactive Touch to Scan Finger) */}
+            {/* Interactive Fingerprint Sensor Scanner (Wajib Scan Finger Sebelum Masuk) */}
             <div className="py-4 flex flex-col items-center justify-center">
               <div className="relative group focus:outline-none">
                 {/* Glow rings */}
@@ -1894,56 +1990,110 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     ? 'bg-sky-500 animate-pulse'
                     : biometricStatus === 'success'
                     ? 'bg-emerald-500'
+                    : biometricStatus === 'failed'
+                    ? 'bg-rose-500/60'
                     : 'bg-amber-500/40'
                 }`} />
 
-                {/* Circular scanner pad (Interactive Touch to Scan Finger) */}
+                {/* Circular scanner pad with progress ring */}
                 <button
                   type="button"
                   onClick={() => {
-                    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
-                      try { navigator.vibrate([40, 50, 40]); } catch {}
+                    if (biometricMode === 'native_prompt' && biometricStatus !== 'scanning' && biometricStatus !== 'success') {
+                      triggerNativeBiometricScan(biometricTargetUser);
                     }
-                    setBiometricStatus('scanning');
-                    setBiometricMsg('Memindai sidik jari pada sensor perangkat...');
-                    setTimeout(() => {
-                      executeBiometricLogin(biometricTargetUser);
-                    }, 650);
                   }}
-                  className={`relative w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all cursor-pointer active:scale-95 ${
+                  onPointerDown={handleFingerScanStart}
+                  onPointerUp={handleFingerScanCancel}
+                  onPointerLeave={handleFingerScanCancel}
+                  onPointerCancel={handleFingerScanCancel}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className={`relative w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all cursor-pointer select-none touch-none ${
                     biometricStatus === 'scanning'
-                      ? 'border-sky-400 bg-sky-950/60 shadow-[0_0_25px_rgba(56,189,248,0.5)]'
+                      ? 'border-sky-400 bg-sky-950/60 shadow-[0_0_25px_rgba(56,189,248,0.5)] scale-95'
                       : biometricStatus === 'success'
                       ? 'border-emerald-400 bg-emerald-950/80 shadow-[0_0_25px_rgba(52,211,153,0.5)]'
-                      : 'border-amber-400/80 bg-slate-900 shadow-xl'
-                  }`}>
-                  <Fingerprint className={`w-14 h-14 transition-colors ${
+                      : biometricStatus === 'failed'
+                      ? 'border-rose-400 bg-rose-950/50 shadow-[0_0_20px_rgba(244,63,94,0.35)]'
+                      : 'border-amber-400/80 bg-slate-900 shadow-xl hover:border-amber-300'
+                  }`}
+                >
+                  {/* SVG Progress Ring */}
+                  <svg className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none" viewBox="0 0 112 112">
+                    <circle
+                      cx="56"
+                      cy="56"
+                      r="52"
+                      fill="none"
+                      stroke="rgba(148,163,184,0.2)"
+                      strokeWidth="4"
+                    />
+                    <circle
+                      cx="56"
+                      cy="56"
+                      r="52"
+                      fill="none"
+                      stroke={
+                        biometricStatus === 'success'
+                          ? '#34d399'
+                          : biometricStatus === 'failed'
+                          ? '#fb7185'
+                          : '#38bdf8'
+                      }
+                      strokeWidth="4"
+                      strokeLinecap="round"
+                      strokeDasharray={326.73}
+                      strokeDashoffset={326.73 - (326.73 * biometricProgress) / 100}
+                      className="transition-[stroke-dashoffset] duration-75"
+                    />
+                  </svg>
+
+                  <Fingerprint className={`w-14 h-14 transition-colors pointer-events-none ${
                     biometricStatus === 'scanning'
                       ? 'text-sky-300 animate-pulse'
                       : biometricStatus === 'success'
                       ? 'text-emerald-400'
+                      : biometricStatus === 'failed'
+                      ? 'text-rose-400'
                       : 'text-amber-400'
                   }`} />
 
                   {biometricStatus === 'scanning' && (
-                    <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
-                  )}
-                  {biometricStatus === 'scanning' && (
-                    <div className="absolute inset-x-2 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.5s_infinite]" />
+                    <div className="absolute inset-x-3 h-0.5 bg-sky-400 shadow-[0_0_8px_#38bdf8] animate-[bounce_1.2s_infinite] pointer-events-none" />
                   )}
                 </button>
               </div>
 
-              <div className="mt-4 space-y-1">
-                <p className="text-xs font-bold text-white">
+              {biometricMode === 'sensor_pad' && (
+                <div className="mt-3 px-3 py-1 rounded-full bg-slate-900 border border-slate-700 text-[10px] font-bold text-amber-300">
+                  {biometricStatus === 'scanning'
+                    ? `Memindai Sidik Jari: ${biometricProgress}%`
+                    : biometricStatus === 'success'
+                    ? 'Pemindaian Selesai (100%)'
+                    : 'Tekan & Tahan Jari di Sensor (0% → 100%)'}
+                </div>
+              )}
+
+              <div className="mt-3 space-y-1">
+                <p className={`text-xs font-bold ${
+                  biometricStatus === 'failed'
+                    ? 'text-rose-300'
+                    : biometricStatus === 'success'
+                    ? 'text-emerald-300'
+                    : 'text-white'
+                }`}>
                   {biometricStatus === 'scanning'
                     ? 'Memindai Sensor Sidik Jari Device...'
                     : biometricStatus === 'success'
-                    ? '✓ Sensor Terverifikasi! Mengalihkan ke Dashboard...'
-                    : 'Menghubungkan Sensor Device...'}
+                    ? '✓ Sidik Jari Terverifikasi! Mengalihkan ke Dashboard...'
+                    : biometricStatus === 'failed'
+                    ? '✕ Pemindaian Belum Selesai / Gagal'
+                    : biometricMode === 'native_prompt'
+                    ? 'Sentuh Ikon Sidik Jari untuk Scan Device'
+                    : 'Tempel & Tahan Jari Pada Sensor'}
                 </p>
-                <p className="text-[11px] text-slate-400">
-                  {biometricMsg || 'Sensor biometrik aktif - Otomatis masuk ke dashboard setelah scan'}
+                <p className="text-[11px] text-slate-400 px-2">
+                  {biometricMsg || 'Pemindaian sidik jari wajib diselesaikan sebelum masuk ke dashboard.'}
                 </p>
               </div>
             </div>

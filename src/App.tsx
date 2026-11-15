@@ -15,24 +15,49 @@ import { detectPlatform } from './lib/activityLogger';
 import { useNetworkStatus, getIsInternetConnected } from './components/NetworkStatusGuard';
 
 const SESSION_KEY = 'koperasi_hws_active_session';
-const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Req 12: Buat aplikasi ini auto logout dalam 2 menit apabila tidak tertutup)
+const LAST_ACTIVITY_KEY = 'koperasi_hws_last_activity';
+const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Auto-Logout apabila aplikasi tidak dipergunakan)
+const AUTO_LOGOUT_MESSAGE =
+  'Sesi Anda telah berakhir secara otomatis karena aplikasi tidak dipergunakan selama 2 menit (Auto-Logout demi keamanan akun).';
 
 export default function App() {
   const { state, updateState } = useKoperasiState();
+
+  const [initialExpired] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(SESSION_KEY);
+      if (!saved) return false;
+      const lastAt = Number(localStorage.getItem(LAST_ACTIVITY_KEY) || '0');
+      if (lastAt > 0 && Date.now() - lastAt >= AUTO_LOGOUT_MS) {
+        localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(LAST_ACTIVITY_KEY);
+        return true;
+      }
+    } catch {}
+    return false;
+  });
 
   const [activeSession, setActiveSession] = useState<{
     type: 'member' | 'admin';
     id: string;
   } | null>(() => {
+    if (initialExpired) return null;
     try {
       const saved = localStorage.getItem(SESSION_KEY);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        if (!localStorage.getItem(LAST_ACTIVITY_KEY)) {
+          localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
+        }
+        return JSON.parse(saved);
+      }
     } catch {}
     return null;
   });
 
   const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
-  const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
+  const [logoutNotice, setLogoutNotice] = useState<string | null>(() =>
+    initialExpired ? AUTO_LOGOUT_MESSAGE : null
+  );
 
   // Pasang penjaga kesalahan stream Firestore di level App & sinkronisasi sesi antar-tab
   useEffect(() => {
@@ -58,6 +83,7 @@ export default function App() {
   const handleLogout = useCallback(async (reason?: unknown) => {
     try {
       localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(LAST_ACTIVITY_KEY);
     } catch {}
     setActiveSession(null);
     if (typeof reason === 'string' && reason.trim()) {
@@ -71,8 +97,11 @@ export default function App() {
   // Handle Login Member
   const handleLoginMember = async (member: MemberUser) => {
     const session = { type: 'member' as const, id: member.id };
+    const now = Date.now();
+    lastActivityRef.current = now;
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
     } catch {}
     setLogoutNotice(null);
     setActiveSession(session);
@@ -81,8 +110,11 @@ export default function App() {
   // Handle Login Admin
   const handleLoginAdmin = async (admin: AdminUser) => {
     const session = { type: 'admin' as const, id: admin.id };
+    const now = Date.now();
+    lastActivityRef.current = now;
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
     } catch {}
     setLogoutNotice(null);
     setActiveSession(session);
@@ -99,49 +131,116 @@ export default function App() {
       ? state.admins.find((a) => a.id === activeSession.id) || null
       : null;
 
-  // Auto-logout dalam 2 menit (120 detik) apabila tidak ada aktivitas
+  // Auto-logout dalam 2 menit (120 detik) apabila tidak dipergunakan
   const lastActivityRef = useRef<number>(Date.now());
 
   useEffect(() => {
     if (!activeSession) return;
 
-    // Inisialisasi waktu aktivitas saat sesi aktif
-    lastActivityRef.current = Date.now();
-
-    const recordActivity = () => {
-      lastActivityRef.current = Date.now();
+    const getPersistedLastActivity = () => {
+      try {
+        const stored = Number(localStorage.getItem(LAST_ACTIVITY_KEY) || '0');
+        return stored > 0 && stored <= Date.now() ? stored : 0;
+      } catch {
+        return 0;
+      }
     };
 
-    // Periksa inaktivitas setiap 1 detik
-    const checkInterval = setInterval(() => {
-      const idleTime = Date.now() - lastActivityRef.current;
+    const persisted = getPersistedLastActivity();
+    if (persisted > 0) {
+      lastActivityRef.current = persisted;
+    } else {
+      const now = Date.now();
+      lastActivityRef.current = now;
+      try {
+        localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
+      } catch {}
+    }
+
+    const checkAndExpireIfIdle = () => {
+      const effectiveLast = Math.max(lastActivityRef.current, getPersistedLastActivity());
+      const idleTime = Date.now() - effectiveLast;
       if (idleTime >= AUTO_LOGOUT_MS) {
         clearInterval(checkInterval);
-        handleLogout('Sesi Anda telah berakhir secara otomatis karena tidak ada aktivitas selama 2 menit (Auto-Logout demi keamanan akun).');
+        handleLogout(AUTO_LOGOUT_MESSAGE);
+        return true;
       }
-    }, 1000);
+      return false;
+    };
 
-    // Cek juga saat tab kembali aktif (visibility change)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        const idleTime = Date.now() - lastActivityRef.current;
-        if (idleTime >= AUTO_LOGOUT_MS) {
-          clearInterval(checkInterval);
-          handleLogout('Sesi Anda telah berakhir secara otomatis karena tidak ada aktivitas selama 2 menit (Auto-Logout demi keamanan akun).');
+    let lastSavedAt = 0;
+    const recordActivity = (ev?: Event) => {
+      if (ev && ev.type === 'mousemove') {
+        const me = ev as MouseEvent;
+        if (me.movementX === 0 && me.movementY === 0) return;
+      }
+      const now = Date.now();
+      lastActivityRef.current = now;
+      if (now - lastSavedAt >= 1000) {
+        lastSavedAt = now;
+        try {
+          localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
+        } catch {}
+      }
+    };
+
+    // Periksa segera saat sesi dipulihkan & setiap 1 detik
+    const checkInterval = setInterval(checkAndExpireIfIdle, 1000);
+    if (checkAndExpireIfIdle()) {
+      return () => clearInterval(checkInterval);
+    }
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'hidden') {
+        try {
+          localStorage.setItem(LAST_ACTIVITY_KEY, String(lastActivityRef.current));
+        } catch {}
+      } else {
+        checkAndExpireIfIdle();
+      }
+    };
+
+    const handleStorageActivity = (ev: StorageEvent) => {
+      if (ev.key === LAST_ACTIVITY_KEY && ev.newValue) {
+        const ts = Number(ev.newValue);
+        if (ts > lastActivityRef.current) {
+          lastActivityRef.current = ts;
         }
       }
     };
 
-    const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click', 'wheel', 'pointerdown'];
-    activityEvents.forEach((ev) => window.addEventListener(ev, recordActivity, { passive: true }));
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const activityEvents = [
+      'mousedown',
+      'mousemove',
+      'keydown',
+      'scroll',
+      'touchstart',
+      'click',
+      'wheel',
+      'pointerdown',
+      'input',
+    ];
+    activityEvents.forEach((ev) =>
+      window.addEventListener(ev, recordActivity, { passive: true, capture: true })
+    );
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('pageshow', handleVisibilityOrFocus);
+    window.addEventListener('pagehide', handleVisibilityOrFocus);
+    window.addEventListener('storage', handleStorageActivity);
 
     return () => {
       clearInterval(checkInterval);
-      activityEvents.forEach((ev) => window.removeEventListener(ev, recordActivity));
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      activityEvents.forEach((ev) =>
+        window.removeEventListener(ev, recordActivity, { capture: true })
+      );
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('pageshow', handleVisibilityOrFocus);
+      window.removeEventListener('pagehide', handleVisibilityOrFocus);
+      window.removeEventListener('storage', handleStorageActivity);
     };
-  }, [activeSession?.id, activeSession?.type]);
+  }, [activeSession?.id, activeSession?.type, handleLogout]);
 
   // Requirement 7: Apabila masuk kedalam suatu menu tombol 1x klik Kembali ke menu sebelumnya, 3 klik logout
   useEffect(() => {

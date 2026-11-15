@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AppState,
   AdminUser,
@@ -401,7 +401,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   );
   // User Req 1: Pendaftaran Biometrik via Scan Finger
   const [showBioEnrollModal, setShowBioEnrollModal] = useState(false);
-  const [bioEnrollStep, setBioEnrollStep] = useState<'prompt' | 'scanning' | 'success'>('prompt');
+  const [bioEnrollStep, setBioEnrollStep] = useState<'prompt' | 'sensor_pad' | 'scanning' | 'success'>('prompt');
+  const [bioEnrollProgress, setBioEnrollProgress] = useState(0);
+  const [bioEnrollError, setBioEnrollError] = useState('');
+  const bioScanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bioHoldActiveRef = useRef(false);
+  const bioHoldDoneRef = useRef(false);
   const [mobileNotifEnabled, setMobileNotifEnabled] = useState(
     () => typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
   );
@@ -826,11 +831,33 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   }, [subModal]);
 
+  const stopBioEnrollTimer = () => {
+    if (bioScanTimerRef.current) {
+      clearInterval(bioScanTimerRef.current);
+      bioScanTimerRef.current = null;
+    }
+    bioHoldActiveRef.current = false;
+  };
+
+  useEffect(() => {
+    if (!showBioEnrollModal) {
+      stopBioEnrollTimer();
+      setBioEnrollProgress(0);
+      setBioEnrollError('');
+      bioHoldDoneRef.current = false;
+    }
+    return () => stopBioEnrollTimer();
+  }, [showBioEnrollModal]);
+
   // Toggle Biometric (User Req 1: Meminta scan finger sebagai pendaftaran biometric login)
   const handleToggleBiometric = async () => {
     try {
       if (!biometricEnabled) {
         // Buka modal pendaftaran biometrik dan minta scan finger
+        stopBioEnrollTimer();
+        bioHoldDoneRef.current = false;
+        setBioEnrollProgress(0);
+        setBioEnrollError('');
         setBioEnrollStep('prompt');
         setShowBioEnrollModal(true);
       } else {
@@ -847,6 +874,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   };
 
   const handleExecuteBioEnroll = async () => {
+    setBioEnrollError('');
     setBioEnrollStep('scanning');
     const userId = currentMember ? currentMember.nomorAnggota : currentAdmin?.username || 'admin';
     const userName = currentMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus';
@@ -854,15 +882,71 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
     const res = await registerBiometricCredentials(userId, userName, userRole);
     if (res.success) {
+      setBioEnrollProgress(100);
       setBioEnrollStep('success');
       setBiometricEnabled(true);
       setTimeout(() => {
         setShowBioEnrollModal(false);
       }, 1000);
+    } else if (res.requiresTouchPadScan) {
+      stopBioEnrollTimer();
+      bioHoldDoneRef.current = false;
+      setBioEnrollProgress(0);
+      setBioEnrollError('');
+      setBioEnrollStep('sensor_pad');
     } else {
-      alert(`Pendaftaran sidik jari: ${res.error || 'Dibatalkan'}`);
-      setShowBioEnrollModal(false);
+      setBioEnrollError(res.error || 'Pemindaian sidik jari dibatalkan. Silakan coba lagi.');
+      setBioEnrollStep('prompt');
     }
+  };
+
+  const handleEnrollFingerStart = () => {
+    if (bioEnrollStep !== 'sensor_pad' || bioHoldDoneRef.current || bioHoldActiveRef.current) return;
+    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate(25); } catch {}
+    }
+
+    stopBioEnrollTimer();
+    bioHoldActiveRef.current = true;
+    bioHoldDoneRef.current = false;
+    setBioEnrollError('');
+    setBioEnrollProgress(4);
+
+    let progress = 4;
+    bioScanTimerRef.current = setInterval(async () => {
+      progress = Math.min(100, progress + 3);
+      setBioEnrollProgress(progress);
+
+      if (progress >= 100) {
+        stopBioEnrollTimer();
+        bioHoldDoneRef.current = true;
+        const userId = currentMember ? currentMember.nomorAnggota : currentAdmin?.username || 'admin';
+        const userName = currentMember ? currentMember.nama : currentAdmin?.nama || 'Pengurus';
+        const userRole = currentMember ? 'member' : 'admin';
+
+        const res = await registerBiometricCredentials(userId, userName, userRole, {
+          allowTouchPadVerified: true,
+        });
+        if (res.success) {
+          setBioEnrollStep('success');
+          setBiometricEnabled(true);
+          setTimeout(() => {
+            setShowBioEnrollModal(false);
+          }, 1000);
+        } else {
+          bioHoldDoneRef.current = false;
+          setBioEnrollProgress(0);
+          setBioEnrollError(res.error || 'Gagal menyimpan tautan sidik jari.');
+        }
+      }
+    }, 36);
+  };
+
+  const handleEnrollFingerCancel = () => {
+    if (bioEnrollStep !== 'sensor_pad' || !bioHoldActiveRef.current || bioHoldDoneRef.current) return;
+    stopBioEnrollTimer();
+    setBioEnrollProgress(0);
+    setBioEnrollError('Pemindaian terputus! Tekan dan tahan jari pada sensor hingga 100% selesai.');
   };
 
   // Lock / Unlock Maintenance Sistem (Req 3: Bekukan berlaku semua anggota & admin, masukkan note & password, buka kembali)
@@ -5637,25 +5721,67 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             </div>
 
             <div className="py-2 space-y-3">
-              <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
-                <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all ${
-                  bioEnrollStep === 'scanning'
-                    ? 'bg-amber-500/20 text-amber-400 border-2 border-amber-400 animate-pulse'
-                    : bioEnrollStep === 'success'
-                    ? 'bg-emerald-500/20 text-emerald-400 border-2 border-emerald-400'
-                    : 'bg-slate-800 text-amber-400 border border-slate-700'
-                }`}>
-                  <Fingerprint className={`w-10 h-10 ${bioEnrollStep === 'scanning' ? 'animate-bounce' : ''}`} />
+              {bioEnrollStep === 'sensor_pad' ? (
+                <div className="flex flex-col items-center space-y-2.5">
+                  <button
+                    type="button"
+                    onPointerDown={handleEnrollFingerStart}
+                    onPointerUp={handleEnrollFingerCancel}
+                    onPointerLeave={handleEnrollFingerCancel}
+                    onPointerCancel={handleEnrollFingerCancel}
+                    onContextMenu={(e) => e.preventDefault()}
+                    className={`relative w-24 h-24 rounded-full flex items-center justify-center border-2 transition-all cursor-pointer select-none touch-none ${
+                      bioEnrollProgress > 0
+                        ? 'border-sky-400 bg-sky-950/60 shadow-[0_0_25px_rgba(56,189,248,0.45)] scale-95'
+                        : bioEnrollError
+                        ? 'border-rose-400 bg-rose-950/40'
+                        : 'border-amber-400/80 bg-slate-900 hover:border-amber-300'
+                    }`}
+                  >
+                    <svg className="absolute inset-0 w-full h-full -rotate-90 pointer-events-none" viewBox="0 0 96 96">
+                      <circle cx="48" cy="48" r="44" fill="none" stroke="rgba(148,163,184,0.2)" strokeWidth="4" />
+                      <circle
+                        cx="48"
+                        cy="48"
+                        r="44"
+                        fill="none"
+                        stroke={bioEnrollProgress >= 100 ? '#34d399' : '#38bdf8'}
+                        strokeWidth="4"
+                        strokeLinecap="round"
+                        strokeDasharray={276.46}
+                        strokeDashoffset={276.46 - (276.46 * bioEnrollProgress) / 100}
+                        className="transition-[stroke-dashoffset] duration-75"
+                      />
+                    </svg>
+                    <Fingerprint className={`w-12 h-12 pointer-events-none ${bioEnrollProgress > 0 ? 'text-sky-300 animate-pulse' : 'text-amber-400'}`} />
+                  </button>
+                  <div className="px-3 py-1 rounded-full bg-slate-900 border border-slate-700 text-[10px] font-bold text-amber-300">
+                    {bioEnrollProgress > 0 ? `Merekam Sidik Jari: ${bioEnrollProgress}%` : 'Tekan & Tahan Jari di Sensor (0% → 100%)'}
+                  </div>
                 </div>
-                {bioEnrollStep === 'scanning' && (
-                  <div className="absolute inset-0 border-2 border-amber-400/60 rounded-full animate-ping pointer-events-none" />
-                )}
-              </div>
+              ) : (
+                <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
+                  <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all ${
+                    bioEnrollStep === 'scanning'
+                      ? 'bg-amber-500/20 text-amber-400 border-2 border-amber-400 animate-pulse'
+                      : bioEnrollStep === 'success'
+                      ? 'bg-emerald-500/20 text-emerald-400 border-2 border-emerald-400'
+                      : 'bg-slate-800 text-amber-400 border border-slate-700'
+                  }`}>
+                    <Fingerprint className={`w-10 h-10 ${bioEnrollStep === 'scanning' ? 'animate-bounce' : ''}`} />
+                  </div>
+                  {bioEnrollStep === 'scanning' && (
+                    <div className="absolute inset-0 border-2 border-amber-400/60 rounded-full animate-ping pointer-events-none" />
+                  )}
+                </div>
+              )}
 
               <div>
                 <h4 className="text-sm font-black text-white">
                   {bioEnrollStep === 'scanning'
                     ? 'Memindai Sidik Jari...'
+                    : bioEnrollStep === 'sensor_pad'
+                    ? 'Tempel & Tahan Jari Pada Sensor'
                     : bioEnrollStep === 'success'
                     ? '✓ Sidik Jari Terdaftar!'
                     : 'Tempelkan Sidik Jari'}
@@ -5663,11 +5789,19 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <p className="text-[11px] text-slate-300 mt-1 max-w-[260px] mx-auto">
                   {bioEnrollStep === 'scanning'
                     ? 'Pindai sensor biometrik perangkat Anda untuk merekam sidik jari...'
+                    : bioEnrollStep === 'sensor_pad'
+                    ? `Tekan dan tahan sensor sidik jari di atas hingga 100% untuk mendaftarkan akun ${currentMember?.nama || currentAdmin?.nama}.`
                     : bioEnrollStep === 'success'
-                    ? 'Sensor biometrik aktif untuk login di versi mobile aplikasi'
+                    ? 'Sensor biometrik aktif untuk login di perangkat ini'
                     : `Silakan tempelkan jari Anda pada sensor perangkat untuk mendaftarkan akun ${currentMember?.nama || currentAdmin?.nama}.`}
                 </p>
               </div>
+
+              {bioEnrollError && (
+                <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-500/60 text-[11px] text-rose-200 font-semibold">
+                  {bioEnrollError}
+                </div>
+              )}
 
               <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[10px] text-slate-400 text-left space-y-1">
                 <div>• Biometrik sidik jari hanya tersimpan lokal pada hardware sensor perangkat ini.</div>
