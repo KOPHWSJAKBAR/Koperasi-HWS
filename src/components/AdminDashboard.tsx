@@ -53,10 +53,8 @@ import {
   Sparkles,
   Activity,
   SlidersHorizontal,
-  Smartphone,
   Lock,
   Fingerprint,
-  RefreshCw,
   Trash2,
   CheckCheck,
 } from 'lucide-react';
@@ -458,21 +456,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     printDocumentHtml(html, 'Ringkasan_Kas_HWS');
   };
 
-  const [isPushSyncing, setIsPushSyncing] = useState(false);
-  const [realtimeAnalytics, setRealtimeAnalytics] = useState<{
-    onlineCount: number;
-    devices: Array<{ clientId: string; userName: string; role: string; platform: string; currentView?: string; lastSeen: string }>;
-    lastEventName: string;
-    lastEventPlatform: string;
-    lastEventTime: string;
-  }>({
-    onlineCount: 1,
-    devices: [],
-    lastEventName: 'admin_dashboard_active',
-    lastEventPlatform: 'Web / PC',
-    lastEventTime: new Date().toISOString(),
-  });
-
   useEffect(() => {
     import('../lib/firebase').then(({ logAnalyticsEvent }) => {
       logAnalyticsEvent('admin_view_tab', {
@@ -482,110 +465,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     }).catch(() => {});
   }, [activeTab, currentAdmin.role, currentAdmin.nama]);
-
-  useEffect(() => {
-    if (!isSuperAdmin) return;
-    let isMounted = true;
-    let unsubAnalytics: (() => void) | null = null;
-
-    const fetchPresence = async () => {
-      try {
-        const res = await fetch('/api/presence');
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          setRealtimeAnalytics((prev) => ({
-            ...prev,
-            onlineCount: Math.max(1, data.onlineCount || (data.devices?.length ?? 1)),
-            devices: Array.isArray(data.devices) ? data.devices : prev.devices,
-          }));
-        }
-      } catch {}
-    };
-
-    fetchPresence();
-    const timer = setInterval(fetchPresence, 5000);
-
-    import('../lib/firebase').then(({ db }) => {
-      import('firebase/firestore').then(({ doc, onSnapshot }) => {
-        if (!isMounted) return;
-        unsubAnalytics = onSnapshot(
-          doc(db, 'settings', 'analytics_realtime'),
-          (snap) => {
-            if (snap.exists() && isMounted) {
-              const d = snap.data();
-              setRealtimeAnalytics((prev) => ({
-                ...prev,
-                lastEventName: d.lastEventName || prev.lastEventName,
-                lastEventPlatform: d.lastEventPlatform || prev.lastEventPlatform,
-                lastEventTime: d.lastEventTime || prev.lastEventTime,
-              }));
-            }
-          },
-          () => {}
-        );
-      });
-    }).catch(() => {});
-
-    return () => {
-      isMounted = false;
-      clearInterval(timer);
-      if (unsubAnalytics) {
-        try { unsubAnalytics(); } catch {}
-      }
-    };
-  }, [isSuperAdmin]);
-
-  const handlePushSyncToAiStudio = async () => {
-    setIsPushSyncing(true);
-    try {
-      const res = await fetch('/api/balance/reconcile-deposits', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.state) {
-          const { syncStateToServer } = await import('../lib/storage');
-          await syncStateToServer(data.state);
-        }
-      } else {
-        const { syncStateToServer, reconcileBalancesWithDeposits } = await import('../lib/storage');
-        await syncStateToServer(reconcileBalancesWithDeposits(state));
-      }
-
-      const { logAnalyticsEvent } = await import('../lib/firebase');
-      await logAnalyticsEvent('super_admin_realtime_sync', {
-        admin: currentAdmin.nama,
-        members_count: state.members.length,
-        kas_count: state.kasList.length,
-        sedekah_count: (state.sedekahList || []).length,
-      });
-
-      setToasts((prev) => [
-        {
-          id: `toast-sync-${Date.now()}`,
-          type: 'test',
-          title: 'Sinkronisasi Realtime Berhasil!',
-          message: `Saldo Anggota (${state.members.length}), Buku Kas (${state.kasList.length}), & Sedekah telah disinkronkan ke Android, iOS, PC, Web & Cloud Firestore.`,
-          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-        },
-        ...prev,
-      ]);
-    } catch {
-      setToasts((prev) => [
-        {
-          id: `toast-sync-${Date.now()}`,
-          type: 'test',
-          title: 'Database Tersinkronisasi',
-          message: 'Seluruh saldo dan buku kas telah disinkronkan secara realtime.',
-          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-        },
-        ...prev,
-      ]);
-    } finally {
-      setIsPushSyncing(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
@@ -1498,89 +1377,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             </div>
-
-            {/* ================= FIREBASE REALTIME ANALYTICS & MULTI-DEVICE SYNC (KHUSUS SUPER ADMIN) ================= */}
-            {isSuperAdmin && (
-              <div className="bg-gradient-to-br from-[#0d1424] via-[#111c33] to-[#0f172a] border border-emerald-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
-                      <Activity className="w-5 h-5 animate-pulse" />
-                    </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-sm sm:text-base font-black text-white">
-                          Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat
-                        </h4>
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px] uppercase">
-                          Khusus Super Admin
-                        </span>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-extrabold text-[10px] flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                          LIVE ONLINE (G-7PGPBDM652)
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        Sinkronisasi realtime AI Studio, Android (.APK), iOS, PC & Web • Proteksi Anti-Resurrection Data Terhapus Aktif
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handlePushSyncToAiStudio}
-                      disabled={isPushSyncing}
-                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isPushSyncing ? 'animate-spin' : ''}`} />
-                      <span>{isPushSyncing ? 'Mensinkronkan...' : 'Sinkronkan Saldo & Perangkat Realtime'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Perangkat Aktif Online</div>
-                    <div className="text-xl font-black text-emerald-400 mt-1 flex items-center gap-1.5">
-                      <Smartphone className="w-4 h-4 text-emerald-400" />
-                      <span>{realtimeAnalytics.onlineCount} Device</span>
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">Android • iOS • PC • Web</div>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Saldo Kas Berjalan</div>
-                    <div className="text-xl font-black text-emerald-400 mt-1 font-mono">
-                      {formatRupiah(saldoKasBerjalan)}
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      Total Saldo Anggota + Saldo Buku Kas Koperasi
-                    </div>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Dashboard Sedekah</div>
-                    <div className="text-xl font-black text-rose-400 mt-1 font-mono">
-                      {formatRupiah(saldoSedekahTersedia)}
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      {(state.sedekahList || []).filter((s) => s.status === 'approved').length} Transaksi Terverifikasi
-                    </div>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase">Event Analytics Terakhir</div>
-                    <div className="text-xs font-extrabold text-sky-400 mt-1 truncate">
-                      {realtimeAnalytics.lastEventName}
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-0.5">
-                      {realtimeAnalytics.lastEventPlatform} • Proteksi {(state.deletedSetoranIds?.length || 0) + (state.deletedKasIds?.length || 0)} ID Terhapus
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* Mobile Vertical Menu Stack (Matching Tampilan Pada Dasbord mobile Admin.png) */}
             <div className="lg:hidden space-y-3 pt-2">

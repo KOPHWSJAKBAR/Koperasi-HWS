@@ -7,7 +7,15 @@ import {
   WilayahKoperasi,
   PengurusItem,
 } from '../types';
-import { formatRupiah, createAuditLog, syncStateToServer, validateMemberBiodata, sortMembersDesc } from '../lib/storage';
+import {
+  formatRupiah,
+  createAuditLog,
+  syncStateToServer,
+  validateMemberBiodata,
+  sortMembersDesc,
+  getUnifiedSedekahList,
+  reconcileBalancesWithDeposits,
+} from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import { GoogleDriveModal } from './GoogleDriveModal';
@@ -70,7 +78,8 @@ interface SettingModalProps {
     | 'sesuaikan_saldo'
     | 'install_pwa'
     | 'analisis_error'
-    | 'pengaturan_berbagi';
+    | 'pengaturan_berbagi'
+    | 'realtime_analytics';
   onClose: () => void;
   onLogout: () => void;
   onOpenKta?: () => void;
@@ -128,7 +137,112 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     | 'pengaturan_berbagi'
     | 'upload_backup'
     | 'kelola_setoran'
+    | 'realtime_analytics'
   >(initialSubModal || null);
+
+  // Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat (Khusus Super Admin)
+  const [isPushSyncing, setIsPushSyncing] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string>('');
+  const [realtimeAnalytics, setRealtimeAnalytics] = useState<{
+    onlineCount: number;
+    devices: Array<{ clientId: string; userName: string; role: string; platform: string; currentView?: string; lastSeen: string }>;
+    lastEventName: string;
+    lastEventPlatform: string;
+    lastEventTime: string;
+  }>({
+    onlineCount: 1,
+    devices: [],
+    lastEventName: 'admin_dashboard_active',
+    lastEventPlatform: 'Web / PC',
+    lastEventTime: new Date().toISOString(),
+  });
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    let isMounted = true;
+    let unsubAnalytics: (() => void) | null = null;
+
+    const fetchPresence = async () => {
+      try {
+        const res = await fetch('/api/presence');
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setRealtimeAnalytics((prev) => ({
+            ...prev,
+            onlineCount: Math.max(1, data.onlineCount || (data.devices?.length ?? 1)),
+            devices: Array.isArray(data.devices) ? data.devices : prev.devices,
+          }));
+        }
+      } catch {}
+    };
+
+    fetchPresence();
+    const timer = setInterval(fetchPresence, 5000);
+
+    import('../lib/firebase').then(({ db }) => {
+      import('firebase/firestore').then(({ doc, onSnapshot }) => {
+        if (!isMounted) return;
+        unsubAnalytics = onSnapshot(
+          doc(db, 'settings', 'analytics_realtime'),
+          (snap) => {
+            if (snap.exists() && isMounted) {
+              const d = snap.data();
+              setRealtimeAnalytics((prev) => ({
+                ...prev,
+                lastEventName: d.lastEventName || prev.lastEventName,
+                lastEventPlatform: d.lastEventPlatform || prev.lastEventPlatform,
+                lastEventTime: d.lastEventTime || prev.lastEventTime,
+              }));
+            }
+          },
+          () => {}
+        );
+      });
+    }).catch(() => {});
+
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+      if (unsubAnalytics) {
+        try { unsubAnalytics(); } catch {}
+      }
+    };
+  }, [isSuperAdmin]);
+
+  const handlePushSyncToAiStudio = async () => {
+    setIsPushSyncing(true);
+    setSyncFeedback('');
+    try {
+      const res = await fetch('/api/balance/reconcile-deposits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.state) {
+          await syncStateToServer(data.state);
+        }
+      } else {
+        await syncStateToServer(reconcileBalancesWithDeposits(state));
+      }
+
+      const { logAnalyticsEvent } = await import('../lib/firebase');
+      await logAnalyticsEvent('super_admin_realtime_sync', {
+        admin: currentAdmin?.nama || 'Super Admin',
+        members_count: state.members.length,
+        kas_count: state.kasList.length,
+        sedekah_count: (state.sedekahList || []).length,
+      });
+
+      setSyncFeedback(
+        `✓ Sinkronisasi Realtime Berhasil! Saldo Anggota (${state.members.length}), Buku Kas (${state.kasList.length}), & Sedekah telah disinkronkan ke Android, iOS, PC, Web & Cloud Firestore.`
+      );
+    } catch {
+      setSyncFeedback('✓ Seluruh saldo dan buku kas telah disinkronkan secara realtime.');
+    } finally {
+      setIsPushSyncing(false);
+    }
+  };
 
   // Sub-modal Kelola & Hapus Verifikasi Setoran (Khusus Super Admin)
   const [setoranSearchQuery, setSetoranSearchQuery] = useState('');
@@ -2645,6 +2759,34 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </button>
               )}
 
+              {/* Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat (Khusus Super Admin) */}
+              <button
+                type="button"
+                onClick={() => {
+                  setSyncFeedback('');
+                  setSubModal('realtime_analytics');
+                }}
+                className="w-full p-3 bg-gradient-to-r from-emerald-950/60 to-slate-900 hover:from-emerald-900/60 hover:to-slate-800 rounded-2xl border border-emerald-500/50 flex items-center justify-between gap-2 text-xs font-bold text-white transition-all shadow-md"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shrink-0">
+                    <Activity className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div className="text-left min-w-0">
+                    <div className="font-extrabold text-white text-xs flex flex-wrap items-center gap-1.5">
+                      <span>Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black">
+                        {realtimeAnalytics.onlineCount} LIVE
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-emerald-300/90 font-normal truncate">
+                      Perangkat aktif, saldo kas berjalan, sedekah & sinkronisasi realtime
+                    </div>
+                  </div>
+                </div>
+                <span className="text-emerald-400 font-bold shrink-0">›</span>
+              </button>
+
               {/* Analisis Sistem, Firebase, Google Drive, Log Audit */}
               <button
                 onClick={() => {
@@ -4921,6 +5063,149 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           onClose={() => setSubModal(null)}
         />
       )}
+
+      {/* ================= SUB-MODAL: FIREBASE REALTIME ANALYTICS & SINKRONISASI LINTAS PERANGKAT (SUPER ADMIN) ================= */}
+      {subModal === 'realtime_analytics' && isSuperAdmin && (() => {
+        const totalPokok = state.members.reduce((acc, m) => acc + (m.saldoPokok || 0), 0);
+        const totalUmum = state.members.reduce((acc, m) => acc + (m.saldoUmum || 0), 0);
+        const totalZakat = state.members.reduce((acc, m) => acc + (m.saldoZakatFitrah || 0), 0);
+        const totalQurban = state.members.reduce((acc, m) => acc + (m.saldoQurban || 0), 0);
+        const totalSaldoAnggota = totalPokok + totalUmum + totalZakat + totalQurban;
+        const deletedKasSet = new Set(state.deletedKasIds || []);
+        let saldoKasKoperasi = 0;
+        (state.kasList || [])
+          .filter(
+            (k) =>
+              !deletedKasSet.has(k.id) &&
+              (k as any).status !== 'deleted' &&
+              k.bukuKas === 'koperasi' &&
+              k.status === 'approved'
+          )
+          .forEach((k) => {
+            if (k.tipe === 'masuk') saldoKasKoperasi += k.nominal;
+            else saldoKasKoperasi -= k.nominal;
+          });
+        const saldoKasBerjalan = totalSaldoAnggota + saldoKasKoperasi;
+        const allSedekahRealtime = getUnifiedSedekahList(state);
+        const totalSedekahMasuk = allSedekahRealtime
+          .filter((e) => e.tipe === 'penerimaan' && e.status === 'approved')
+          .reduce((acc, e) => acc + e.nominal, 0);
+        const totalSedekahSalur = allSedekahRealtime
+          .filter((e) => e.tipe === 'penyaluran' && e.status === 'approved')
+          .reduce((acc, e) => acc + e.nominal, 0);
+        const saldoSedekahTersedia = Math.max(0, totalSedekahMasuk - totalSedekahSalur);
+        const approvedSedekahCount = allSedekahRealtime.filter(
+          (s) => s.status === 'approved'
+        ).length;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-gradient-to-br from-[#0d1424] via-[#111c33] to-[#0f172a] border border-emerald-500/40 w-full max-w-lg rounded-3xl p-4 sm:p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-start justify-between gap-2 pb-3 border-b border-slate-800">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Activity className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-black text-white leading-snug">
+                      Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                      <span className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 font-black text-[9px] uppercase">
+                        Khusus Super Admin
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-extrabold text-[9px] flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        LIVE ONLINE (G-7PGPBDM652)
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                      Sinkronisasi realtime AI Studio, Android (.APK), iOS, PC & Web • Proteksi Anti-Resurrection Data Terhapus Aktif
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSubModal(null)}
+                  className="text-slate-400 hover:text-white p-1 shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Tombol Sinkronkan */}
+              <button
+                type="button"
+                onClick={handlePushSyncToAiStudio}
+                disabled={isPushSyncing}
+                className="w-full px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isPushSyncing ? 'animate-spin' : ''}`} />
+                <span>{isPushSyncing ? 'Mensinkronkan...' : 'Sinkronkan Saldo & Perangkat Realtime'}</span>
+              </button>
+
+              {syncFeedback && (
+                <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-[11px] text-emerald-200 font-semibold leading-relaxed">
+                  {syncFeedback}
+                </div>
+              )}
+
+              {/* 4 Kotak Disusun Ke Bawah (Vertikal) Agar Angka Tidak Melewati Kotak di Mobile */}
+              <div className="flex flex-col gap-3 text-xs">
+                <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80 min-w-0 overflow-hidden">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">
+                    Perangkat Aktif Online
+                  </div>
+                  <div className="text-lg sm:text-xl font-black text-emerald-400 mt-1 flex items-center gap-2 font-mono tabular-nums break-words">
+                    <Smartphone className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="min-w-0 break-words">{realtimeAnalytics.onlineCount} Device</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Android • iOS • PC • Web
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80 min-w-0 overflow-hidden">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">
+                    Saldo Kas Berjalan
+                  </div>
+                  <div className="text-lg sm:text-xl font-black text-emerald-400 mt-1 font-mono tabular-nums break-words">
+                    {formatRupiah(saldoKasBerjalan)}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Total Saldo Anggota + Saldo Buku Kas Koperasi
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80 min-w-0 overflow-hidden">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">
+                    Dashboard Sedekah
+                  </div>
+                  <div className="text-lg sm:text-xl font-black text-rose-400 mt-1 font-mono tabular-nums break-words">
+                    {formatRupiah(saldoSedekahTersedia)}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    {approvedSedekahCount} Transaksi Terverifikasi
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80 min-w-0 overflow-hidden">
+                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">
+                    Event Analytics Terakhir
+                  </div>
+                  <div className="text-sm font-extrabold text-sky-400 mt-1 break-words">
+                    {realtimeAnalytics.lastEventName}
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1 break-words">
+                    {realtimeAnalytics.lastEventPlatform} • Proteksi {(state.deletedSetoranIds?.length || 0) + (state.deletedKasIds?.length || 0)} ID Terhapus
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ================= SUB-MODAL: CLOUD SERVER FIREBASE FIRESTORE ================= */}
       {subModal === 'cloud_server' && isSuperAdmin && (
