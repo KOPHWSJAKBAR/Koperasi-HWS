@@ -10,6 +10,7 @@ import {
   WilayahKoperasi,
 } from '../types';
 import { formatRupiah, createAuditLog, sortMembersDesc } from '../lib/storage';
+import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { exportLaporanBerbagiPdf, exportLaporanBerbagiExcel } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import {
@@ -22,7 +23,6 @@ import {
   FileSpreadsheet,
   Printer,
   Filter,
-  AlertCircle,
   Clock,
   ShieldCheck,
   Send,
@@ -36,6 +36,8 @@ import {
   XCircle,
   Download,
   History,
+  Wallet,
+  Lock,
 } from 'lucide-react';
 
 interface MenuBerbagiModalProps {
@@ -64,7 +66,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   // Nama berbagi dari setting admin (dapat diubah oleh admin write, approval, super admin)
   const namaSubuh = state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh';
   const namaJumat = state.pengaturanBerbagi?.namaJumat || 'Sedekah Jumat';
-  const namaUmum = state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum';
+  const rawUmumName = state.pengaturanBerbagi?.namaUmum || 'Sedekah Umum';
+  const namaUmum = rawUmumName === 'Sedekah' ? 'Sedekah Umum' : rawUmumName;
   const namaPemilikRekening = state.pengaturanBerbagi?.namaPemilikRekening || 'Koperasi Berbagi Mandiri HWS';
   // Gambar QRIS khusus sedekah dari pengaturan berbagi atau fallback profil koperasi
   const sedekahQrisUrl = state.pengaturanBerbagi?.qrisImageUrl || state.profile.qrisImageUrl;
@@ -161,7 +164,9 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
   const [selectedJenis, setSelectedJenis] = useState<JenisSedekahBerbagi>('sedekah_subuh');
   // User Req: hapuskan nominal angka berbagi hanya input nominal manual
   const [customNominal, setCustomNominal] = useState<string>('');
-  const sumberDana = 'qris' as const;
+  const [sumberDana, setSumberDana] = useState<'qris' | 'tabungan_umum'>('qris');
+  const [pinTftu, setPinTftu] = useState<string>('');
+  const [tftuError, setTftuError] = useState<string>('');
   const [doaPesan, setDoaPesan] = useState<string>('');
   const [buktiTransferUrl, setBuktiTransferUrl] = useState<string>('');
   const [isSubmittingDonasi, setIsSubmittingDonasi] = useState(false);
@@ -251,20 +256,46 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     .reduce((sum, e) => sum + e.nominal, 0);
   const umumSaldo = Math.max(0, umumMasuk - umumKeluar);
 
-  // Upload Bukti Pembayaran QRIS JPG/PNG
+  // Upload Bukti Pembayaran QRIS JPG/PNG (Kompresi otomatis agar ringan & sinkron realtime)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert('Ukuran file maksimal 5MB.');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setBuktiTransferUrl(event.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Ukuran file maksimal 5MB.');
+      return;
     }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        setBuktiTransferUrl(compressedDataUrl);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
   // Label Periode Laporan
@@ -300,25 +331,240 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     return m ? `${m.nama} (${m.nomorAnggota})` : 'Per Anggota';
   };
 
-  // Submit Donasi Berbagi (Anggota / Donatur) - Req: berbagi akan dikonfirmasi admin
+  // Submit Donasi Berbagi (Metode 1: QRIS wajib bukti transfer; Metode 2: Dari Tabungan Umum Anggota / TFTU)
   const handleKirimDonasi = async (e: React.FormEvent) => {
     e.preventDefault();
+    setTftuError('');
     const nominal = Number(customNominal);
-    if (!nominal || nominal <= 0) {
-      alert('Silakan ketik nominal berbagi yang ingin disalurkan (minimal Rp 1.000).');
-      return;
-    }
-
-    // User Req: Sedekah hanya dapat menggunakan QRIS dan wajib melampirkan foto bukti/resi QRIS
-    if (!buktiTransferUrl || !buktiTransferUrl.trim()) {
-      alert('Foto bukti pembayaran / resi QRIS wajib di-upload saat melakukan sedekah.');
+    if (!nominal || nominal < 1000) {
+      alert('Silakan ketik nominal sedekah minimal Rp 1.000.');
       return;
     }
 
     const jenisLabel = getJenisLabel(selectedJenis);
+    const memberNama = currentMember ? currentMember.nama : 'Donatur Hamba Allah';
+
+    if (sumberDana === 'tabungan_umum') {
+      if (!currentMember) {
+        alert('Silakan masuk sebagai Anggota untuk menggunakan metode Dari Tabungan Umum Anggota.');
+        return;
+      }
+      const saldoUmumTersedia = Number(currentMember.saldoUmum) || 0;
+      if (nominal > saldoUmumTersedia) {
+        setTftuError(`Saldo Tabungan Umum tidak mencukupi (Tersedia: ${formatRupiah(saldoUmumTersedia)}).`);
+        return;
+      }
+      const validPin = String(currentMember.pinTransaksi || '123456').trim();
+      if (!pinTftu || pinTftu.trim().length < 6) {
+        setTftuError('Masukkan PIN Transaksi 6-digit untuk memproses pemindahan saldo Tabungan Umum.');
+        return;
+      }
+      if (pinTftu.trim() !== validPin) {
+        setTftuError('PIN Transaksi 6-digit tidak sesuai (Default: 123456 jika belum diubah).');
+        return;
+      }
+
+      const confirmTftu = confirm(
+        `Konfirmasi Sedekah Dari Tabungan Umum (TFTU):\n\nProgram: ${jenisLabel}\nNominal: ${formatRupiah(nominal)}\nSumber: Tabungan Umum Anggota (Buku Kas Anggota)\nTujuan: Buku Kas Koperasi (${jenisLabel})\nKeterangan Kas: TFTU Sedekah dari ${currentMember.nama}\n\nSaldo Tabungan Umum Anda di Buku Kas Anggota akan berpindah ke Buku Kas Koperasi & tercatat di Mutasi Anggota. Lanjutkan?`
+      );
+      if (!confirmTftu) return;
+
+      setIsSubmittingDonasi(true);
+      try {
+        const entryId = `sdk-${Date.now()}`;
+        let serverHandled = false;
+        let successEntry: SedekahBerbagiEntry | null = null;
+
+        try {
+          const res = await fetch('/api/sedekah/tftu', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              memberId: currentMember.id,
+              jenis: selectedJenis,
+              namaBerbagiKustom: jenisLabel,
+              nominal,
+              pinTransaksi: pinTftu.trim(),
+              doaPesan: doaPesan.trim(),
+              entryId,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            if (res.status >= 400 && res.status < 500) {
+              setTftuError(data.error || 'Gagal memproses TFTU Sedekah.');
+              setIsSubmittingDonasi(false);
+              return;
+            }
+          } else {
+            serverHandled = true;
+            successEntry = data.entry;
+            if (data.state) {
+              await updateState(() => data.state);
+            }
+          }
+        } catch (err) {
+          console.warn('TFTU offline fallback:', err);
+        }
+
+        if (!serverHandled) {
+          const now = new Date();
+          const tanggal = now.toISOString().slice(0, 10);
+          const jam = now.toTimeString().slice(0, 5);
+          const cleanNote = doaPesan.trim();
+          const kasKopId = `kas-sedekah-${entryId}`;
+          const kasAngId = `kas-ang-tftu-${entryId}`;
+          const txId = `tx-sdk-${entryId}`;
+
+          const localEntry: SedekahBerbagiEntry = {
+            id: entryId,
+            tanggal,
+            jam,
+            jenis: selectedJenis,
+            namaBerbagiKustom: jenisLabel,
+            tipe: 'penerimaan',
+            nominal,
+            status: 'approved',
+            donaturNama: currentMember.nama,
+            donaturWilayah: currentMember.wilayah,
+            donaturMemberId: currentMember.id,
+            donaturRekening: currentMember.nomorRekening,
+            donaturNomorAnggota: currentMember.nomorAnggota,
+            keterangan: `TFTU Sedekah dari ${currentMember.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+            sumberDana: 'tabungan_umum',
+            kasKoperasiId: kasKopId,
+            kasAnggotaId: kasAngId,
+            inputBy: `Anggota (${currentMember.nama})`,
+            verifiedBy: 'Sistem TFTU Otomatis',
+            verifiedAt: now.toISOString(),
+            createdAt: now.toISOString(),
+          };
+          successEntry = localEntry;
+
+          const localSetoran = {
+            id: entryId,
+            nomorReferensi: `SDK-${String(entryId).slice(-6).toUpperCase()}`,
+            memberId: currentMember.id,
+            memberNama: currentMember.nama,
+            memberRekening: currentMember.nomorRekening,
+            memberNomorAnggota: currentMember.nomorAnggota,
+            memberWilayah: currentMember.wilayah,
+            jenis: 'sedekah' as const,
+            nominal,
+            rekeningTujuan: 'Tabungan Umum Anggota (TFTU)',
+            metode: 'tabungan_umum' as const,
+            catatanAnggota: `TFTU Sedekah ${jenisLabel} dari ${currentMember.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+            status: 'disetujui' as const,
+            verifiedBy: 'Sistem TFTU Otomatis',
+            verifiedAt: now.toISOString(),
+            createdAt: now.toISOString(),
+          };
+
+          await updateState((prev) => {
+            const target = prev.members.find((m) => m.id === currentMember.id);
+            const newUmum = Math.max(0, (Number(target?.saldoUmum) || 0) - nominal);
+            const newPokok = Number(target?.saldoPokok) || 0;
+            const newZakat = Number(target?.saldoZakatFitrah) || 0;
+            const newQurban = Number(target?.saldoQurban) || 0;
+
+            const updatedMembers = prev.members.map((m) =>
+              m.id === currentMember.id
+                ? {
+                    ...m,
+                    saldoUmum: newUmum,
+                    totalSimpanan: newPokok + newUmum + newZakat + newQurban,
+                  }
+                : m
+            );
+
+            const kasAnggotaKeluar: KasEntry = {
+              id: kasAngId,
+              bukuKas: 'anggota',
+              tanggal,
+              jam,
+              kategori: 'Tabungan Bebas',
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${currentMember.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+              namaPenerima: currentMember.nama,
+              memberId: currentMember.id,
+              referensiId: entryId,
+              tipe: 'keluar',
+              nominal,
+              saldoKasSetelah: 0,
+              inputBy: currentMember.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            };
+
+            const kasKoperasiMasuk: KasEntry = {
+              id: kasKopId,
+              bukuKas: 'koperasi',
+              tanggal,
+              jam,
+              kategori: jenisLabel,
+              keterangan: `TFTU Sedekah dari ${currentMember.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+              namaPenerima: currentMember.nama,
+              memberId: currentMember.id,
+              referensiId: entryId,
+              tipe: 'masuk',
+              nominal,
+              saldoKasSetelah: 0,
+              inputBy: currentMember.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            };
+
+            const memberTx: MemberTransaction = {
+              id: txId,
+              memberId: currentMember.id,
+              tanggal,
+              jam,
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${currentMember.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+              cbg: `KCP ${(currentMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'keluar',
+              nominal,
+              saldoSetelah: newPokok + newUmum,
+              kategori: 'umum',
+              referensiId: entryId,
+            };
+
+            const audit = createAuditLog(
+              currentMember as any,
+              'Setoran Sedekah TFTU Tabungan Umum',
+              `${currentMember.nama} menyetor ${jenisLabel} senilai ${formatRupiah(nominal)} dari Tabungan Umum (Buku Kas Anggota -> Buku Kas Koperasi).`
+            );
+
+            return {
+              ...prev,
+              members: updatedMembers,
+              memberTransactions: [memberTx, ...(prev.memberTransactions || [])],
+              kasList: [kasKoperasiMasuk, kasAnggotaKeluar, ...(prev.kasList || [])],
+              sedekahList: [localEntry, ...(prev.sedekahList || [])],
+              setoranList: [localSetoran, ...(prev.setoranList || [])],
+              auditLogs: [audit, ...(prev.auditLogs || [])],
+            };
+          });
+        }
+
+        if (successEntry) {
+          setDonasiSuccessEntry(successEntry);
+        }
+        setCustomNominal('');
+        setDoaPesan('');
+        setPinTftu('');
+      } finally {
+        setIsSubmittingDonasi(false);
+      }
+      return;
+    }
+
+    // Metode 1: QRIS (Wajib upload bukti transfer)
+    if (!buktiTransferUrl || !buktiTransferUrl.trim()) {
+      alert('Foto bukti transfer / resi pembayaran QRIS wajib di-upload.');
+      return;
+    }
 
     const confirmMsg = confirm(
-      `Konfirmasi ${jenisLabel}:\nNominal: ${formatRupiah(nominal)}\nMetode: QRIS Resmi Kas Berbagi\n\nPengajuan berbagi ini akan dikirim dan diverifikasi / dikonfirmasi oleh Admin. Setelah disetujui, dana akan resmi tercatat pada Buku Kas Koperasi dan tidak dapat ditarik kembali oleh anggota. Lanjutkan?`
+      `Konfirmasi ${jenisLabel}:\nNominal: ${formatRupiah(nominal)}\nMetode: QRIS Resmi Kas Berbagi\n\nPengajuan sedekah ini akan diverifikasi Admin. Setelah disetujui, dana tercatat resmi di Buku Kas Koperasi (${jenisLabel}: Sedekah dari ${memberNama}) dan tercatat pada Mutasi Anggota. Lanjutkan?`
     );
     if (!confirmMsg) return;
 
@@ -328,6 +574,20 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       const tanggal = now.toISOString().slice(0, 10);
       const jam = now.toTimeString().slice(0, 5);
       const entryId = `sdk-${Date.now()}`;
+      const cleanNote = doaPesan.trim();
+
+      let finalBukti = buktiTransferUrl;
+      if (finalBukti && finalBukti.startsWith('data:image')) {
+        try {
+          const cloudUrl = await uploadToCloudStorage(finalBukti, {
+            folder: 'bukti_transfer',
+            customFileName: `sdk_${currentMember?.id || 'donatur'}_${Date.now()}.jpg`,
+          });
+          if (cloudUrl && cloudUrl.startsWith('http')) {
+            finalBukti = cloudUrl;
+          }
+        } catch {}
+      }
 
       const newSedekahEntry: SedekahBerbagiEntry = {
         id: entryId,
@@ -337,14 +597,15 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         namaBerbagiKustom: jenisLabel,
         tipe: 'penerimaan',
         nominal,
-        status: 'pending', // Req: Berbagi akan di-konfirmasi admin!
-        donaturNama: currentMember ? currentMember.nama : 'Donatur Hamba Allah',
+        status: 'pending',
+        donaturNama: memberNama,
         donaturWilayah: currentMember ? currentMember.wilayah : 'Cengkareng',
         donaturMemberId: currentMember?.id,
         donaturRekening: currentMember?.nomorRekening,
-        ...(buktiTransferUrl ? { buktiTransferUrl } : {}),
-        keterangan: doaPesan.trim() ? `[${jenisLabel}] ${doaPesan.trim()}` : `Penerimaan ${jenisLabel} Berbagi Koperasi`,
-        sumberDana,
+        donaturNomorAnggota: currentMember?.nomorAnggota,
+        ...(finalBukti ? { buktiTransferUrl: finalBukti } : {}),
+        keterangan: cleanNote ? `Sedekah dari ${memberNama} - ${cleanNote}` : `Sedekah dari ${memberNama}`,
+        sumberDana: 'qris',
         inputBy: currentMember ? `Anggota (${currentMember.nama})` : 'Sistem Donasi',
         createdAt: now.toISOString(),
       };
@@ -352,15 +613,16 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       const newSetoranEntry = {
         id: entryId,
         memberId: currentMember ? currentMember.id : 'donatur-umum',
-        memberNama: currentMember ? currentMember.nama : 'Donatur Hamba Allah',
+        memberNama,
         memberRekening: currentMember ? currentMember.nomorRekening : '-',
         memberNomorAnggota: currentMember?.nomorAnggota,
+        memberWilayah: currentMember?.wilayah,
         jenis: 'sedekah' as const,
         nominal,
         rekeningTujuan: 'QRIS Resmi Kas Berbagi',
-        metode: 'qris' as any,
-        ...(buktiTransferUrl ? { buktiTransferUrl } : {}),
-        catatanAnggota: doaPesan.trim() ? `[${jenisLabel}] ${doaPesan.trim()}` : `Donasi ${jenisLabel}`,
+        metode: 'qris' as const,
+        ...(finalBukti ? { buktiTransferUrl: finalBukti } : {}),
+        catatanAnggota: cleanNote ? `[${jenisLabel}] ${cleanNote}` : `[${jenisLabel}] Sedekah dari ${memberNama}`,
         status: 'pending' as const,
         createdAt: now.toISOString(),
         nomorReferensi: `SDK-${Date.now().toString().slice(-6)}`,
@@ -382,8 +644,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       await updateState((prev) => {
         const audit = createAuditLog(
           currentMember || ({ nama: 'Donatur', role: 'member' } as any),
-          'Pengajuan Donasi Berbagi',
-          `${currentMember?.nama || 'Donatur'} mengajukan ${jenisLabel} senilai ${formatRupiah(nominal)} via ${sumberDana}. Status: PENDING VERIFIKASI (Menunggu Konfirmasi Admin).`
+          'Pengajuan Donasi Berbagi (QRIS)',
+          `${memberNama} mengajukan ${jenisLabel} senilai ${formatRupiah(nominal)} via QRIS Resmi. Status: PENDING VERIFIKASI.`
         );
 
         return {
@@ -403,119 +665,24 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     }
   };
 
-  // Konfirmasi / Setujui Donasi Berbagi (Admin Only - Req: berbagi akan di konfirmasi admin)
+  // Konfirmasi / Setujui Donasi Berbagi (Admin Only)
   const handleApproveDonasi = async (entry: SedekahBerbagiEntry) => {
     if (!isAdmin) return;
 
-    const jenisLabel = entry.namaBerbagiKustom || getJenisLabel(entry.jenis);
+    const rawKustom = entry.namaBerbagiKustom === 'Sedekah' ? 'Sedekah Umum' : entry.namaBerbagiKustom;
+    const jenisLabel = rawKustom || getJenisLabel(entry.jenis);
+    const memberNama = entry.donaturNama || 'Anggota Koperasi';
+    const isTftu = entry.sumberDana === 'tabungan_umum';
+
     const confirmApprove = confirm(
-      `Setujui & Konfirmasi Donasi:\n\nDonatur: ${entry.donaturNama || 'Hamba Allah'}\nWilayah: ${entry.donaturWilayah || '-'}\nProgram: ${jenisLabel}\nNominal: ${formatRupiah(entry.nominal)}\n\nSetelah disetujui, dana akan resmi tercatat pada Buku Kas Koperasi sebagai pemasukan sedekah. Lanjutkan?`
+      `Setujui & Konfirmasi Sedekah:\n\nNama: ${memberNama}\nWilayah: ${entry.donaturWilayah || '-'}\nKategori: ${jenisLabel}\nMetode: ${isTftu ? 'Tabungan Umum Anggota (TFTU)' : 'QRIS Resmi'}\nNominal: ${formatRupiah(entry.nominal)}\n\nSetelah disetujui, dana tercatat resmi di Buku Kas Koperasi (${jenisLabel}) serta tercatat di Mutasi Anggota. Lanjutkan?`
     );
     if (!confirmApprove) return;
 
     try {
-      const now = new Date();
-      const tanggal = now.toISOString().slice(0, 10);
-      const kasId = `kas-kop-${Date.now()}`;
-
-      // Buat entri pencatatan di Buku Kas Koperasi
-      const kasKoperasiEntry: KasEntry = {
-        id: kasId,
-        bukuKas: 'koperasi',
-        tanggal,
-        kategori: jenisLabel,
-        keterangan: `Penerimaan ${jenisLabel} dari ${entry.donaturNama || 'Donatur'}${entry.keterangan ? ` - ${entry.keterangan}` : ''}`,
-        namaPenerima: currentAdmin?.nama || 'Kasir Koperasi',
-        tipe: 'masuk',
-        nominal: entry.nominal,
-        saldoKasSetelah: 0,
-        inputBy: currentAdmin?.nama || 'Admin Berbagi',
-        status: 'approved',
-        createdAt: now.toISOString(),
-      };
-
-      // Jika potong tabungan umum anggota
-      let updatedMemberTx: MemberTransaction | null = null;
-      if (entry.sumberDana === 'tabungan_umum' && entry.donaturMemberId) {
-        const mem = state.members.find((m) => m.id === entry.donaturMemberId);
-        if (mem) {
-          updatedMemberTx = {
-            id: `tx-sdk-${Date.now()}`,
-            memberId: mem.id,
-            tanggal,
-            jam: now.toTimeString().slice(0, 5),
-            keterangan: `[${jenisLabel}] Program Berbagi Koperasi (Telah Dikonfirmasi Admin)`,
-            cbg: `KCP ${mem.wilayah}`,
-            tipe: 'keluar',
-            nominal: entry.nominal,
-            saldoSetelah: Math.max(0, mem.saldoUmum - entry.nominal),
-            kategori: 'umum',
-          };
-        }
-      }
-
-      await updateState((prev) => {
-        let updatedMembers = prev.members;
-        let updatedMemberTransactions = prev.memberTransactions || [];
-
-        if (entry.sumberDana === 'tabungan_umum' && entry.donaturMemberId && updatedMemberTx) {
-          updatedMembers = prev.members.map((m) =>
-            m.id === entry.donaturMemberId
-              ? {
-                  ...m,
-                  saldoUmum: Math.max(0, m.saldoUmum - entry.nominal),
-                  totalSimpanan: Math.max(
-                    0,
-                    (m.totalSimpanan ?? (m.saldoPokok + m.saldoUmum + m.saldoZakatFitrah + m.saldoQurban)) - entry.nominal
-                  ),
-                }
-              : m
-          );
-          updatedMemberTransactions = [updatedMemberTx, ...updatedMemberTransactions];
-        }
-
-        const updatedSedekahList = (prev.sedekahList || []).map((s) =>
-          s.id === entry.id
-            ? {
-                ...s,
-                status: 'approved' as const,
-                kasKoperasiId: kasId,
-                verifiedBy: currentAdmin?.nama || 'Admin',
-                verifiedAt: now.toISOString(),
-              }
-            : s
-        );
-
-        const updatedSetoranList = (prev.setoranList || []).map((st) =>
-          st.id === entry.id
-            ? {
-                ...st,
-                status: 'disetujui' as const,
-                verifiedBy: currentAdmin?.nama || 'Admin',
-                verifiedAt: now.toISOString(),
-              }
-            : st
-        );
-
-        const audit = createAuditLog(
-          currentAdmin!,
-          'Konfirmasi Donasi Berbagi',
-          `Admin ${currentAdmin?.nama || 'Admin'} menyetujui donasi ${jenisLabel} senilai ${formatRupiah(entry.nominal)} dari ${entry.donaturNama || 'Donatur'}. Tercatat di Buku Kas Koperasi.`
-        );
-
-        return {
-          ...prev,
-          members: updatedMembers,
-          memberTransactions: updatedMemberTransactions,
-          kasList: [kasKoperasiEntry, ...(prev.kasList || [])],
-          sedekahList: updatedSedekahList,
-          setoranList: updatedSetoranList,
-          auditLogs: [audit, ...(prev.auditLogs || [])],
-        };
-      });
-
+      let verifyHandled = false;
       try {
-        await fetch('/api/setoran/verify', {
+        const res = await fetch('/api/setoran/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -524,9 +691,152 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             adminName: currentAdmin?.nama || 'Admin',
           }),
         });
+        if (res.ok) {
+          const data = await res.json();
+          verifyHandled = true;
+          if (data.state) {
+            await updateState(() => data.state);
+          }
+        }
       } catch {}
 
-      alert(`✓ Donasi ${jenisLabel} senilai ${formatRupiah(entry.nominal)} berhasil dikonfirmasi dan dicatat pada Buku Kas Koperasi!`);
+      if (!verifyHandled) {
+        const now = new Date();
+        const tanggal = now.toISOString().slice(0, 10);
+        const jam = now.toTimeString().slice(0, 5);
+        const kasKopId = entry.kasKoperasiId || `kas-sedekah-${entry.id}`;
+        const kasAngId = `kas-ang-tftu-${entry.id}`;
+        const txId = `tx-sdk-${entry.id}`;
+
+        await updateState((prev) => {
+          const mem = entry.donaturMemberId
+            ? prev.members.find((m) => m.id === entry.donaturMemberId)
+            : undefined;
+          let updatedMembers = prev.members;
+          const newKasEntries: KasEntry[] = [];
+          const newTxEntries: MemberTransaction[] = [];
+
+          if (isTftu && mem) {
+            const newUmum = Math.max(0, (Number(mem.saldoUmum) || 0) - entry.nominal);
+            const newPokok = Number(mem.saldoPokok) || 0;
+            updatedMembers = prev.members.map((m) =>
+              m.id === mem.id
+                ? {
+                    ...m,
+                    saldoUmum: newUmum,
+                    totalSimpanan: newPokok + newUmum + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0),
+                  }
+                : m
+            );
+
+            newKasEntries.push({
+              id: kasAngId,
+              bukuKas: 'anggota',
+              tanggal,
+              jam,
+              kategori: 'Tabungan Bebas',
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+              namaPenerima: memberNama,
+              memberId: mem.id,
+              referensiId: entry.id,
+              tipe: 'keluar',
+              nominal: entry.nominal,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin?.nama || 'Admin Berbagi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+
+            newTxEntries.push({
+              id: txId,
+              memberId: mem.id,
+              tanggal,
+              jam,
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+              cbg: `KCP ${(mem.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'keluar',
+              nominal: entry.nominal,
+              saldoSetelah: newPokok + newUmum,
+              kategori: 'umum',
+              referensiId: entry.id,
+            });
+          } else if (mem) {
+            newTxEntries.push({
+              id: txId,
+              memberId: mem.id,
+              tanggal,
+              jam,
+              keterangan: `Sedekah ${jenisLabel} dari ${memberNama} (QRIS)`,
+              cbg: `KCP ${(mem.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'masuk',
+              nominal: entry.nominal,
+              saldoSetelah: (Number(mem.saldoPokok) || 0) + (Number(mem.saldoUmum) || 0),
+              kategori: 'sedekah',
+              referensiId: entry.id,
+            });
+          }
+
+          newKasEntries.push({
+            id: kasKopId,
+            bukuKas: 'koperasi',
+            tanggal,
+            jam,
+            kategori: jenisLabel,
+            keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
+            namaPenerima: memberNama,
+            memberId: mem?.id || entry.donaturMemberId,
+            referensiId: entry.id,
+            tipe: 'masuk',
+            nominal: entry.nominal,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin?.nama || 'Admin Berbagi',
+            status: 'approved',
+            createdAt: now.toISOString(),
+          });
+
+          const updatedSedekahList = (prev.sedekahList || []).map((s) =>
+            s.id === entry.id
+              ? {
+                  ...s,
+                  status: 'approved' as const,
+                  kasKoperasiId: kasKopId,
+                  ...(isTftu ? { kasAnggotaId: kasAngId } : {}),
+                  verifiedBy: currentAdmin?.nama || 'Admin',
+                  verifiedAt: now.toISOString(),
+                }
+              : s
+          );
+
+          const updatedSetoranList = (prev.setoranList || []).map((st) =>
+            st.id === entry.id
+              ? {
+                  ...st,
+                  status: 'disetujui' as const,
+                  verifiedBy: currentAdmin?.nama || 'Admin',
+                  verifiedAt: now.toISOString(),
+                }
+              : st
+          );
+
+          const audit = createAuditLog(
+            currentAdmin!,
+            'Konfirmasi Donasi Berbagi',
+            `Admin ${currentAdmin?.nama || 'Admin'} menyetujui ${jenisLabel} senilai ${formatRupiah(entry.nominal)} dari ${memberNama}. Tercatat di Buku Kas Koperasi & Mutasi Anggota.`
+          );
+
+          return {
+            ...prev,
+            members: updatedMembers,
+            memberTransactions: [...newTxEntries, ...(prev.memberTransactions || [])],
+            kasList: [...newKasEntries, ...(prev.kasList || [])],
+            sedekahList: updatedSedekahList,
+            setoranList: updatedSetoranList,
+            auditLogs: [audit, ...(prev.auditLogs || [])],
+          };
+        });
+      }
+
+      alert(`✓ Sedekah ${jenisLabel} senilai ${formatRupiah(entry.nominal)} berhasil dikonfirmasi dan dicatat pada Buku Kas Koperasi & Mutasi Anggota!`);
       onClose();
       onBackToDashboard?.();
     } catch (err: any) {
@@ -1054,7 +1364,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                   {formatRupiah(memberSaldoSedekah)}
                 </div>
                 <div className="text-[10px] text-rose-300/80">
-                  • Berkurang saat penyaluran resmi disahkan pengurus • Tidak tercatat di mutasi tabungan anggota
+                  • Tercatat di Buku Kas Koperasi & Mutasi Anggota • Berkurang saat penyaluran resmi disahkan pengurus
                 </div>
               </div>
               <div className="sm:text-right">
@@ -1184,172 +1494,266 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </p>
               </div>
 
-              {/* TAMPILKAN QRIS KAS BERBAGI RESMI (User Req: Bersedekah hanya menggunakan QRIS) */}
-              <div className="p-3.5 bg-gradient-to-br from-slate-900 via-[#131d35] to-slate-900 border border-rose-500/30 rounded-2xl space-y-3">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    {/* Logo QRIS Badge */}
-                    <div className="flex items-center bg-white px-2 py-0.5 rounded-lg border border-slate-300 shadow-sm">
-                      <span className="text-red-600 font-black tracking-tighter text-xs">QRIS</span>
-                      <span className="text-[8px] text-slate-700 font-bold ml-1 border-l border-slate-300 pl-1">NASIONAL</span>
-                    </div>
-                    <span className="text-xs font-extrabold text-white">
-                      QRIS Resmi Kas Berbagi Koperasi
-                    </span>
-                  </div>
-                  <span className="text-[10px] px-2 py-0.5 bg-rose-500/25 text-rose-300 font-extrabold rounded-full border border-rose-500/40">
-                    Khusus QRIS
-                  </span>
-                </div>
+              {/* Metode Pembayaran Sedekah: 1. QRIS (Wajib Bukti) atau 2. Dari Tabungan Umum Anggota (TFTU) */}
+              <div className="space-y-2.5">
+                <label className="block text-xs font-bold text-slate-300">
+                  3. Pilih Metode Setoran Sedekah:
+                </label>
 
-                <div className="p-2.5 bg-slate-800/90 rounded-xl border border-slate-700 flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/30">
-                    <ShieldCheck className="w-5 h-5 text-rose-400" />
-                  </div>
-                  <div className="text-[11px] text-slate-300 leading-tight">
-                    <div className="font-bold text-white">Kas Berbagi Khusus Koperasi</div>
-                    <div>Penyaluran sedekah resmi khusus menggunakan pembayaran scan QRIS.</div>
-                  </div>
-                </div>
-
-                {/* QRIS Code Preview Box */}
-                <div className="p-4 bg-white rounded-2xl text-slate-900 text-center space-y-2.5 border-2 border-rose-500 shadow-xl max-w-xs mx-auto animate-in zoom-in-95">
-                    <div className="flex items-center justify-between border-b pb-1.5 border-slate-200">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-red-600 font-black text-base tracking-tighter">QRIS</span>
-                        <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">
-                          Resmi Kas Berbagi
-                        </span>
+                <div className={`grid grid-cols-1 ${currentMember ? 'sm:grid-cols-2' : ''} gap-2.5`}>
+                  {/* Metode 1: QRIS */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSumberDana('qris');
+                      setTftuError('');
+                    }}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                      sumberDana === 'qris'
+                        ? 'bg-rose-950/50 border-rose-500 ring-2 ring-rose-500/40 shadow'
+                        : 'bg-slate-800/80 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+                          <QrCode className="w-4 h-4" />
+                        </div>
+                        <div className="text-xs font-extrabold text-white">1. QRIS Resmi</div>
                       </div>
-                      <span className="text-[9px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded">
-                        Koperasi HWS
-                      </span>
-                    </div>
-
-                    <div className="font-extrabold text-xs text-slate-800">
-                      {namaPemilikRekening}
-                    </div>
-
-                    {/* QR Code Container */}
-                    <div className="w-48 h-48 mx-auto bg-slate-50 rounded-xl p-2 border-2 border-slate-800 flex items-center justify-center relative overflow-hidden">
-                      {sedekahQrisUrl ? (
-                        <img
-                          src={sedekahQrisUrl}
-                          alt="QRIS Resmi Sedekah Koperasi"
-                          className="w-full h-full object-contain"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-white p-1 grid grid-cols-7 grid-rows-7 gap-0.5">
-                          {Array.from({ length: 49 }).map((_, i) => {
-                            const isCorner =
-                              (i < 3 || (i >= 4 && i < 7) || (i >= 42 && i < 45)) ||
-                              (i % 7 < 3 && i < 21) ||
-                              (i % 7 >= 4 && i < 21) ||
-                              (i % 7 < 3 && i >= 28);
-                            const isDark = (i * 17 + 3) % 2 === 0 || isCorner;
-                            return (
-                              <div
-                                key={i}
-                                className={`${isDark ? 'bg-slate-950' : 'bg-white'} rounded-[1px]`}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
-                      {!sedekahQrisUrl && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="bg-white p-1 rounded-md border border-slate-400 shadow">
-                            <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
-                          </div>
-                        </div>
+                      {sumberDana === 'qris' && (
+                        <span className="text-[10px] text-rose-300 font-black">✓ Dipilih</span>
                       )}
                     </div>
-
-                    <div className="text-[10px] text-slate-600 font-semibold leading-tight">
-                      Scan via BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay
+                    <div className="text-[10px] text-slate-300 mt-1.5 leading-snug">
+                      Wajib upload bukti transfer • Tercatat di Buku Kas Koperasi & Mutasi Anggota
                     </div>
+                  </button>
 
-                    {sedekahQrisUrl && (
-                      <button
-                        type="button"
-                        onClick={handleDownloadQrisJpg}
-                        className="w-full py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
-                        title="Unduh Berkas Gambar QRIS"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Unduh QRIS (JPG)</span>
-                      </button>
-                    )}
-                  </div>
-              </div>
-
-              {/* Metode Pembayaran: Khusus QRIS */}
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  3. Metode Pembayaran Sedekah:
-                </label>
-                <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
-                      <QrCode className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold text-white flex items-center gap-1.5">
-                        <span>QRIS Resmi Kas Berbagi</span>
-                        <span className="text-[9px] px-1.5 py-0.5 bg-rose-500/25 text-rose-300 font-extrabold rounded">
-                          Khusus QRIS
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-rose-300/80">
-                        Scan via BCA Mobile, Livin, BRImo, DANA, OVO, GoPay, ShopeePay
-                      </div>
-                    </div>
-                  </div>
-                  <span className="text-rose-400 text-xs font-black">✓ Aktif</span>
-                </div>
-              </div>
-
-              {/* Upload Foto Bukti Resi QRIS (Wajib) */}
-              <div className="bg-slate-850 p-3 rounded-2xl border border-dashed border-slate-700 space-y-1.5">
-                <label className="block text-xs font-bold text-slate-300 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <span>Foto Bukti Transaksi / Resi QRIS:</span>
-                    <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
-                  </span>
-                  {buktiTransferUrl ? (
-                    <span className="text-emerald-400 text-[10px] font-bold">✓ Foto terlampir</span>
-                  ) : (
-                    <span className="text-amber-400 text-[10px]">Format JPG / PNG</span>
-                  )}
-                </label>
-                <div className="flex items-center gap-3">
-                  <label className={`flex-1 p-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors ${
-                    buktiTransferUrl
-                      ? 'bg-slate-800 border border-emerald-500/50 text-emerald-300'
-                      : 'bg-slate-800 border border-slate-700 hover:border-slate-500 text-slate-300'
-                  }`}>
-                    <Upload className="w-4 h-4 text-amber-400" />
-                    <span>{buktiTransferUrl ? 'Ganti Foto Bukti Resi QRIS' : 'Pilih File Foto Bukti Resi QRIS *'}</span>
-                    <input
-                      type="file"
-                      required
-                      accept="image/jpeg,image/png,image/jpg"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                  {buktiTransferUrl && (
+                  {/* Metode 2: Dari Tabungan Umum Anggota (TFTU) */}
+                  {currentMember && (
                     <button
                       type="button"
-                      onClick={() => setPreviewBukti(buktiTransferUrl)}
-                      className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-xl text-xs font-bold border border-sky-500/30 flex items-center gap-1 cursor-pointer shrink-0"
+                      onClick={() => {
+                        setSumberDana('tabungan_umum');
+                        setTftuError('');
+                      }}
+                      className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                        sumberDana === 'tabungan_umum'
+                          ? 'bg-emerald-950/50 border-emerald-500 ring-2 ring-emerald-500/40 shadow'
+                          : 'bg-slate-800/80 border-slate-700 hover:border-slate-600'
+                      }`}
                     >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>Pratinjau</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                            <Wallet className="w-4 h-4" />
+                          </div>
+                          <div className="text-xs font-extrabold text-white">2. Tabungan Umum (TFTU)</div>
+                        </div>
+                        {sumberDana === 'tabungan_umum' && (
+                          <span className="text-[10px] text-emerald-300 font-black">✓ Dipilih</span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-300 mt-1.5 leading-snug">
+                        Saldo Tabungan Umum: <b className="text-emerald-400 font-mono">{formatRupiah(currentMember.saldoUmum)}</b> • Pindah dari Buku Kas Anggota ke Buku Kas Koperasi
+                      </div>
                     </button>
                   )}
                 </div>
               </div>
+
+              {sumberDana === 'qris' ? (
+                <>
+                  {/* TAMPILKAN QRIS KAS BERBAGI RESMI */}
+                  <div className="p-3.5 bg-gradient-to-br from-slate-900 via-[#131d35] to-slate-900 border border-rose-500/30 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center bg-white px-2 py-0.5 rounded-lg border border-slate-300 shadow-sm">
+                          <span className="text-red-600 font-black tracking-tighter text-xs">QRIS</span>
+                          <span className="text-[8px] text-slate-700 font-bold ml-1 border-l border-slate-300 pl-1">NASIONAL</span>
+                        </div>
+                        <span className="text-xs font-extrabold text-white">
+                          QRIS Resmi Kas Berbagi Koperasi
+                        </span>
+                      </div>
+                      <span className="text-[10px] px-2 py-0.5 bg-rose-500/25 text-rose-300 font-extrabold rounded-full border border-rose-500/40">
+                        Wajib Bukti Transfer
+                      </span>
+                    </div>
+
+                    {/* QRIS Code Preview Box */}
+                    <div className="p-4 bg-white rounded-2xl text-slate-900 text-center space-y-2.5 border-2 border-rose-500 shadow-xl max-w-xs mx-auto animate-in zoom-in-95">
+                      <div className="flex items-center justify-between border-b pb-1.5 border-slate-200">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-red-600 font-black text-base tracking-tighter">QRIS</span>
+                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wide">
+                            Resmi Kas Berbagi
+                          </span>
+                        </div>
+                        <span className="text-[9px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.5 rounded">
+                          Koperasi HWS
+                        </span>
+                      </div>
+
+                      <div className="font-extrabold text-xs text-slate-800">
+                        {namaPemilikRekening}
+                      </div>
+
+                      <div className="w-48 h-48 mx-auto bg-slate-50 rounded-xl p-2 border-2 border-slate-800 flex items-center justify-center relative overflow-hidden">
+                        {sedekahQrisUrl ? (
+                          <img
+                            src={sedekahQrisUrl}
+                            alt="QRIS Resmi Sedekah Koperasi"
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-white p-1 grid grid-cols-7 grid-rows-7 gap-0.5">
+                            {Array.from({ length: 49 }).map((_, i) => {
+                              const isCorner =
+                                (i < 3 || (i >= 4 && i < 7) || (i >= 42 && i < 45)) ||
+                                (i % 7 < 3 && i < 21) ||
+                                (i % 7 >= 4 && i < 21) ||
+                                (i % 7 < 3 && i >= 28);
+                              const isDark = (i * 17 + 3) % 2 === 0 || isCorner;
+                              return (
+                                <div
+                                  key={i}
+                                  className={`${isDark ? 'bg-slate-950' : 'bg-white'} rounded-[1px]`}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                        {!sedekahQrisUrl && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="bg-white p-1 rounded-md border border-slate-400 shadow">
+                              <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="text-[10px] text-slate-600 font-semibold leading-tight">
+                        Scan via BCA Mobile, Livin Mandiri, BRImo, BNI, GoPay, OVO, DANA, ShopeePay
+                      </div>
+
+                      {sedekahQrisUrl && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadQrisJpg}
+                          className="w-full py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow transition-all cursor-pointer"
+                          title="Unduh Berkas Gambar QRIS"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Unduh QRIS (JPG)</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Upload Foto Bukti Resi QRIS (Wajib) */}
+                  <div className="bg-slate-850 p-3 rounded-2xl border border-dashed border-slate-700 space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span>Foto Bukti Transfer / Resi QRIS:</span>
+                        <span className="text-[10px] text-rose-400 font-extrabold">* Wajib Di-upload</span>
+                      </span>
+                      {buktiTransferUrl ? (
+                        <span className="text-emerald-400 text-[10px] font-bold">✓ Foto terlampir</span>
+                      ) : (
+                        <span className="text-amber-400 text-[10px]">Format JPG / PNG</span>
+                      )}
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className={`flex-1 p-2.5 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+                        buktiTransferUrl
+                          ? 'bg-slate-800 border border-emerald-500/50 text-emerald-300'
+                          : 'bg-slate-800 border border-slate-700 hover:border-slate-500 text-slate-300'
+                      }`}>
+                        <Upload className="w-4 h-4 text-amber-400" />
+                        <span>{buktiTransferUrl ? 'Ganti Foto Bukti Transfer QRIS' : 'Pilih File Foto Bukti Transfer QRIS *'}</span>
+                        <input
+                          type="file"
+                          required
+                          accept="image/jpeg,image/png,image/jpg"
+                          onChange={handleFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+                      {buktiTransferUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewBukti(buktiTransferUrl)}
+                          className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-xl text-xs font-bold border border-sky-500/30 flex items-center gap-1 cursor-pointer shrink-0"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Pratinjau</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* Metode 2: Dari Tabungan Umum Anggota (TFTU) */
+                <div className="p-3.5 bg-gradient-to-br from-emerald-950/50 via-[#131d35] to-slate-900 border border-emerald-500/40 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <Wallet className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-extrabold text-white">
+                        Mekanisme TFTU Dari Tabungan Umum Anggota
+                      </span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-300 font-bold rounded-full border border-emerald-500/40">
+                      Tanpa Upload Bukti
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-700">
+                      <span className="text-[10px] text-slate-400 block">Saldo Tabungan Umum Anda (Buku Kas Anggota):</span>
+                      <span className="font-mono font-black text-emerald-400 text-sm">
+                        {formatRupiah(currentMember?.saldoUmum || 0)}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-700">
+                      <span className="text-[10px] text-slate-400 block">Tujuan Pemindahan Kas:</span>
+                      <span className="font-bold text-amber-300 text-xs">
+                        Buku Kas Koperasi • {getJenisLabel(selectedJenis)}
+                      </span>
+                      <div className="text-[10px] text-slate-400 truncate">
+                        Ket: TFTU Sedekah dari {currentMember?.nama}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1 flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Masukkan PIN Transaksi 6-Digit Anggota *</span>
+                    </label>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={6}
+                      required
+                      value={pinTftu}
+                      onChange={(e) => {
+                        setPinTftu(e.target.value.replace(/\D/g, '').slice(0, 6));
+                        setTftuError('');
+                      }}
+                      placeholder="•••••• (Default: 123456 jika belum diubah)"
+                      className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-xl text-sm font-mono font-bold text-white tracking-widest focus:outline-none"
+                    />
+                  </div>
+
+                  {tftuError && (
+                    <div className="p-2.5 bg-red-950/70 border border-red-500/40 rounded-xl text-xs text-red-300 font-semibold">
+                      {tftuError}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Doa / Pesan Kebaikan */}
               <div>
@@ -1365,21 +1769,6 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 />
               </div>
 
-              {/* Ketentuan Syariah & Alur Konfirmasi */}
-              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-[11px] text-amber-300 space-y-1">
-                <div className="font-bold flex items-center gap-1.5 text-amber-400">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Ketentuan Donasi & Konfirmasi Admin:</span>
-                </div>
-                <ul className="list-disc pl-4 space-y-0.5 text-[10px] text-slate-300">
-                  <li>Setiap pengajuan donasi berbagi akan <b>dikonfirmasi dan diverifikasi oleh Admin Koperasi</b>.</li>
-                  <li>Setelah disetujui, dana tercatat resmi pada <b>Buku Kas Koperasi</b> sebagai penerimaan sosial.</li>
-                  <li className="text-amber-300 font-semibold">
-                    Sesuai ketentuan, dana sedekah <b>tidak dapat ditarik kembali oleh anggota</b> dan murni untuk kemaslahatan umat.
-                  </li>
-                </ul>
-              </div>
-
               {/* Tombol Kirim */}
               <div className="pt-2">
                 <button
@@ -1387,18 +1776,26 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                   disabled={
                     isSubmittingDonasi ||
                     !customNominal ||
-                    Number(customNominal) <= 0 ||
-                    !buktiTransferUrl
+                    Number(customNominal) < 1000 ||
+                    (sumberDana === 'qris' && !buktiTransferUrl) ||
+                    (sumberDana === 'tabungan_umum' &&
+                      (!currentMember ||
+                        Number(customNominal) > (currentMember?.saldoUmum || 0) ||
+                        pinTftu.trim().length < 6))
                   }
                   className="w-full py-3 bg-gradient-to-r from-rose-500 via-rose-600 to-amber-600 hover:from-rose-400 hover:to-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-sm rounded-2xl shadow-lg shadow-rose-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
                   <Heart className="w-4 h-4 fill-white" />
                   <span>
                     {isSubmittingDonasi
-                      ? 'Mengirim Pengajuan Sedekah...'
-                      : !buktiTransferUrl
-                      ? '⚠️ Upload Bukti Resi QRIS Dahulu'
-                      : `Bismillah, Kirim Donasi ${formatRupiah(Number(customNominal) || 0)} (Konfirmasi Admin)`}
+                      ? 'Memproses Setoran Sedekah...'
+                      : sumberDana === 'qris' && !buktiTransferUrl
+                      ? '⚠️ Upload Bukti Transfer QRIS Dahulu'
+                      : sumberDana === 'tabungan_umum' && currentMember && Number(customNominal) > (currentMember.saldoUmum || 0)
+                      ? '⚠️ Saldo Tabungan Umum Tidak Mencukupi'
+                      : sumberDana === 'tabungan_umum'
+                      ? `Bismillah, TFTU Sedekah ${formatRupiah(Number(customNominal) || 0)} Dari Tabungan Umum`
+                      : `Bismillah, Kirim Sedekah QRIS ${formatRupiah(Number(customNominal) || 0)}`}
                   </span>
                 </button>
               </div>
@@ -1412,17 +1809,29 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 ✓
               </div>
               <div>
-                <h4 className="text-base font-extrabold text-white">Alhamdulillah, Pengajuan Donasi Terkirim!</h4>
+                <h4 className="text-base font-extrabold text-white">
+                  {donasiSuccessEntry.status === 'approved'
+                    ? 'Alhamdulillah, Sedekah TFTU Berhasil Diproses!'
+                    : 'Alhamdulillah, Pengajuan Sedekah QRIS Terkirim!'}
+                </h4>
                 <p className="text-xs text-emerald-300 mt-1">
-                  Donasi Anda masuk dalam status <b>Menunggu Konfirmasi Admin</b>. Setelah diverifikasi, dana akan tercatat di Buku Kas Koperasi.
+                  {donasiSuccessEntry.status === 'approved'
+                    ? 'Saldo Tabungan Umum dari Buku Kas Anggota telah berpindah ke Buku Kas Koperasi dan tercatat pada Mutasi Anggota Anda.'
+                    : 'Sedekah QRIS Anda menunggu konfirmasi Admin. Setelah disetujui, tercatat di Buku Kas Koperasi & Mutasi Anggota.'}
                 </p>
               </div>
 
               <div className="bg-slate-900/90 rounded-2xl p-3 border border-slate-700 text-left text-xs space-y-1.5 max-w-sm mx-auto">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Program:</span>
+                  <span className="text-slate-400">Kategori:</span>
                   <span className="font-bold text-white">
                     {donasiSuccessEntry.namaBerbagiKustom || getJenisLabel(donasiSuccessEntry.jenis)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Metode:</span>
+                  <span className="font-bold text-sky-300">
+                    {donasiSuccessEntry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum (TFTU)' : 'QRIS Resmi'}
                   </span>
                 </div>
                 <div className="flex justify-between">
@@ -1433,9 +1842,15 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Status:</span>
-                  <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[10px]">
-                    Pending Konfirmasi Admin
-                  </span>
+                  {donasiSuccessEntry.status === 'approved' ? (
+                    <span className="px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30 text-[10px]">
+                      Berhasil (Tercatat di Kas & Mutasi)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[10px]">
+                      Pending Konfirmasi Admin
+                    </span>
+                  )}
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Tanggal:</span>
@@ -1633,7 +2048,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                         <div className="text-[11px] text-slate-400 flex items-center gap-2">
                           <span className="font-mono text-slate-300">{entry.tanggal} {entry.jam}</span>
                           <span>•</span>
-                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum (Arsip)' : 'QRIS Resmi'}</b></span>
+                          <span>Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum (TFTU)' : 'QRIS Resmi'}</b></span>
                         </div>
 
                         {entry.keterangan && (
@@ -1717,7 +2132,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
                           </span>
                         </div>
                         <div className="text-[11px] text-slate-400">
-                          {entry.tanggal} {entry.jam} • Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum' : 'QRIS Resmi'}</b>
+                          {entry.tanggal} {entry.jam} • Metode: <b className="text-slate-200">{entry.sumberDana === 'tabungan_umum' ? 'Tabungan Umum (TFTU)' : 'QRIS Resmi'}</b>
                         </div>
                         {entry.keterangan && (
                           <div className="text-[11px] text-slate-300 italic bg-slate-800/60 p-1.5 rounded-lg border border-slate-700/50">

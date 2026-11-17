@@ -169,6 +169,12 @@ export function generateMutasiRekeningPdf(
     endDate?: string;
   }
 ) {
+  const isSedekahTx = (t: MemberTransaction) =>
+    t.kategori === 'sedekah' ||
+    String(t.id || '').startsWith('tx-sdk-') ||
+    String(t.keterangan || '').toLowerCase().includes('tftu sedekah') ||
+    String(t.keterangan || '').toLowerCase().includes('sedekah');
+
   // 1. Calculate REAL Saldo Awal from days strictly before options.startDate (1 hari sebelumnya)
   let saldoAwal = 0;
   const prevDate = options.startDate ? getOneDayBefore(options.startDate) : '';
@@ -178,11 +184,18 @@ export function generateMutasiRekeningPdf(
   if (options.startDate) {
     const priorTransactions = transactions
       .filter((t) => t.memberId === member.id && (t as any).status !== 'deleted')
-      .filter((t) => options.kategori === 'semua' || t.kategori === options.kategori)
+      .filter((t) => {
+        if (options.kategori === 'sedekah') return isSedekahTx(t);
+        return options.kategori === 'semua' || t.kategori === options.kategori;
+      })
       .filter((t) => t.tanggal < options.startDate!);
 
     priorTransactions.forEach((t) => {
-      saldoAwal += t.tipe === 'masuk' ? t.nominal : -t.nominal;
+      if (options.kategori === 'sedekah') {
+        saldoAwal += t.nominal;
+      } else if (t.kategori !== 'sedekah') {
+        saldoAwal += t.tipe === 'masuk' ? t.nominal : -t.nominal;
+      }
     });
   }
   if (saldoAwal < 0) saldoAwal = 0;
@@ -192,7 +205,9 @@ export function generateMutasiRekeningPdf(
     (t) => t.memberId === member.id && (t as any).status !== 'deleted'
   );
 
-  if (options.kategori !== 'semua') {
+  if (options.kategori === 'sedekah') {
+    filtered = filtered.filter((t) => isSedekahTx(t));
+  } else if (options.kategori !== 'semua') {
     filtered = filtered.filter((t) => t.kategori === options.kategori);
   }
 
@@ -218,7 +233,13 @@ export function generateMutasiRekeningPdf(
   let runningSaldo = saldoAwal;
 
   const enrichedTransactions = filtered.map((t) => {
-    if (t.tipe === 'masuk') {
+    if (options.kategori === 'sedekah') {
+      totalMasuk += t.nominal;
+      countMasuk++;
+      runningSaldo += t.nominal;
+    } else if (t.kategori === 'sedekah') {
+      // Mutasi Sedekah QRIS tercatat di mutasi anggota tanpa mengubah saldo tabungan
+    } else if (t.tipe === 'masuk') {
       totalMasuk += t.nominal;
       countMasuk++;
       runningSaldo += t.nominal;
@@ -235,11 +256,12 @@ export function generateMutasiRekeningPdf(
 
   const saldoAkhir = runningSaldo;
 
-  let kategoriTitle = 'SEMUA TABUNGAN';
+  let kategoriTitle = 'SEMUA TABUNGAN & SEDEKAH';
   if (options.kategori === 'pokok') kategoriTitle = 'TABUNGAN POKOK / WAJIB';
   if (options.kategori === 'umum') kategoriTitle = 'TABUNGAN UMUM BEBAS';
   if (options.kategori === 'zakat') kategoriTitle = 'SIMPANAN ZAKAT FITRAH';
   if (options.kategori === 'qurban') kategoriTitle = 'TABUNGAN QURBAN';
+  if (options.kategori === 'sedekah') kategoriTitle = 'MUTASI SETORAN SEDEKAH / BERBAGI';
 
   // First row: SALDO AWAL (dari 1 hari sebelumnya)
   const saldoAwalRow = `
@@ -265,8 +287,8 @@ export function generateMutasiRekeningPdf(
         saldoAwalRow,
         ...enrichedTransactions.map((tx) => {
           const formattedTgl = tx.tanggal.split('-').reverse().slice(0, 2).join('/');
-          const isMasuk = tx.tipe === 'masuk';
-          const mutasiStr = `${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.nominal)} ${isMasuk ? 'CR' : 'DB'}`;
+          const isMasuk = options.kategori === 'sedekah' ? true : tx.tipe === 'masuk';
+          const mutasiStr = `${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.nominal)} ${tx.kategori === 'sedekah' ? 'SDK' : isMasuk ? 'CR' : 'DB'}`;
           const saldoStr = new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.computedSaldo);
 
           return `

@@ -17,8 +17,6 @@ import { useNetworkStatus, getIsInternetConnected } from './components/NetworkSt
 const SESSION_KEY = 'koperasi_hws_active_session';
 const LAST_ACTIVITY_KEY = 'koperasi_hws_last_activity';
 const AUTO_LOGOUT_MS = 2 * 60 * 1000; // 2 Menit (Auto-Logout apabila aplikasi tidak dipergunakan)
-const AUTO_LOGOUT_MESSAGE =
-  'Sesi Anda telah berakhir secara otomatis karena aplikasi tidak dipergunakan selama 2 menit (Auto-Logout demi keamanan akun).';
 
 export default function App() {
   const { state, updateState } = useKoperasiState();
@@ -55,9 +53,7 @@ export default function App() {
   });
 
   const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
-  const [logoutNotice, setLogoutNotice] = useState<string | null>(() =>
-    initialExpired ? AUTO_LOGOUT_MESSAGE : null
-  );
+  const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
 
   // Pasang penjaga kesalahan stream Firestore di level App & sinkronisasi sesi antar-tab
   useEffect(() => {
@@ -162,7 +158,7 @@ export default function App() {
       const idleTime = Date.now() - effectiveLast;
       if (idleTime >= AUTO_LOGOUT_MS) {
         clearInterval(checkInterval);
-        handleLogout(AUTO_LOGOUT_MESSAGE);
+        handleLogout();
         return true;
       }
       return false;

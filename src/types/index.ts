@@ -214,7 +214,7 @@ export interface SetoranVerifikasi {
 }
 
 export type TipeMutasi = 'masuk' | 'keluar'; // Kredit = masuk, Debit = keluar
-export type KategoriTabunganMutasi = 'pokok' | 'umum' | 'zakat' | 'qurban' | 'semua';
+export type KategoriTabunganMutasi = 'pokok' | 'umum' | 'zakat' | 'qurban' | 'sedekah' | 'semua';
 
 export interface MemberTransaction {
   id: string;
@@ -355,6 +355,7 @@ export interface SedekahBerbagiEntry {
   keterangan: string;
   sumberDana?: 'tabungan_umum' | 'transfer_bank' | 'qris';
   kasKoperasiId?: string; // id transaksi pencatatan di Buku Kas Koperasi
+  kasAnggotaId?: string; // id transaksi pencatatan pindah saldo keluar di Buku Kas Anggota (TFTU)
   inputBy: string;
   verifiedBy?: string;
   verifiedAt?: string;

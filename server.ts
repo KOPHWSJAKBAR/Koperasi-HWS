@@ -1676,13 +1676,28 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     }
   });
 
+  const resolveSedekahCategoryLabel = (jenisSdk?: string, kustom?: string, catatan?: string) => {
+    const pb = state.pengaturanBerbagi || {};
+    const namaSubuh = pb.namaSubuh || 'Sedekah Subuh';
+    const namaJumat = pb.namaJumat || 'Sedekah Jumat';
+    const rawUmum = pb.namaUmum || 'Sedekah Umum';
+    const namaUmum = rawUmum === 'Sedekah' ? 'Sedekah Umum' : rawUmum;
+    if (kustom && kustom.trim() && kustom.trim() !== 'Sedekah') return kustom.trim();
+    const j = String(jenisSdk || '').toLowerCase();
+    const ket = String(catatan || '').toLowerCase();
+    if (j === 'sedekah_jumat' || ket.includes('jumat')) return namaJumat;
+    if (j === 'sedekah_umum' || ket.includes('sedekah umum')) return namaUmum;
+    if (j === 'sedekah_subuh' || ket.includes('subuh')) return namaSubuh;
+    return namaUmum;
+  };
+
   validSetoran.forEach((s: any) => {
     if (s.jenis === 'sedekah' || String(s.id).startsWith('sdk-')) {
       const m = memberMap.get(s.memberId);
       const existingSdk = sedekahMap.get(s.id);
       const ketLower = String(s.catatanAnggota || existingSdk?.keterangan || '').toLowerCase();
-      const jenisSdk = existingSdk?.jenis || (ketLower.includes('jumat') ? 'sedekah_jumat' : ketLower.includes('umum') ? 'sedekah_umum' : 'sedekah_subuh');
-      const namaKustom = existingSdk?.namaBerbagiKustom || (jenisSdk === 'sedekah_jumat' ? 'Sedekah Jumat' : jenisSdk === 'sedekah_umum' ? 'Sedekah Umum' : 'Sedekah Subuh');
+      const jenisSdk = existingSdk?.jenis || (ketLower.includes('jumat') ? 'sedekah_jumat' : ketLower.includes('subuh') ? 'sedekah_subuh' : 'sedekah_umum');
+      const namaKustom = resolveSedekahCategoryLabel(jenisSdk, existingSdk?.namaBerbagiKustom, s.catatanAnggota || existingSdk?.keterangan);
       const isApproved = s.status === 'disetujui' || s.status === 'approved' || existingSdk?.status === 'approved';
       const isRejected = !isApproved && (s.status === 'ditolak' || s.status === 'rejected' || existingSdk?.status === 'rejected');
       const finalSdkStatus = isApproved ? 'approved' : isRejected ? 'rejected' : 'pending';
@@ -1707,9 +1722,9 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         donaturRekening: m?.nomorRekening || s.memberRekening || existingSdk?.donaturRekening || '-',
         donaturNomorAnggota: m?.nomorAnggota || s.memberNomorAnggota || existingSdk?.donaturNomorAnggota || '',
         donaturWilayah: m?.wilayah || s.memberWilayah || existingSdk?.donaturWilayah || 'Cengkareng',
-        sumberDana: s.metode === 'tabungan_umum' ? 'tabungan_umum' : 'qris_transfer',
+        sumberDana: s.metode === 'tabungan_umum' ? 'tabungan_umum' : 'qris',
         buktiTransferUrl: s.buktiTransferUrl || existingSdk?.buktiTransferUrl,
-        keterangan: s.catatanAnggota || existingSdk?.keterangan || `Donasi ${namaKustom}`,
+        keterangan: s.catatanAnggota || existingSdk?.keterangan || `Sedekah dari ${m?.nama || s.memberNama || 'Anggota'}`,
         status: finalSdkStatus,
         verifiedBy: s.verifiedBy || existingSdk?.verifiedBy || (isApproved ? 'Abzqar' : undefined),
         verifiedAt: s.verifiedAt || existingSdk?.verifiedAt || (isApproved ? new Date().toISOString() : undefined),
@@ -1754,16 +1769,19 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     if (t.referensiId) existingTxRefs.add(t.referensiId);
   });
 
-  // Ensure approved savings deposits (that haven't had their transaction deleted) have a transaction entry
+  // Ensure approved deposits (savings AND sedekah) have a transaction entry in memberTransactions
   let addedTxCount = 0;
-  const approvedSavingsDeposits = validSetoran.filter(
-    (s: any) => (s.status === 'disetujui' || s.status === 'approved') && (s.jenis === 'kewajiban' || s.jenis === 'umum')
+  const approvedAllDeposits = validSetoran.filter(
+    (s: any) =>
+      (s.status === 'disetujui' || s.status === 'approved') &&
+      (s.jenis === 'kewajiban' || s.jenis === 'umum' || s.jenis === 'sedekah')
   );
 
-  approvedSavingsDeposits.forEach((s: any) => {
+  approvedAllDeposits.forEach((s: any) => {
     const m = memberMap.get(s.memberId);
     if (!m) return;
-    const depTxId = `tx-dep-${s.id}`;
+    const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
+    const depTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
     if (existingTxRefs.has(s.id) || existingTxRefs.has(depTxId) || deletedTxSet.has(depTxId)) return;
 
     addedTxCount++;
@@ -1772,22 +1790,46 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     const tgl = s.tanggal || wibTime.toISOString().split('T')[0];
     const jam = s.jam || wibTime.toISOString().split('T')[1].slice(0, 5);
 
-    nextTxList.push({
-      id: depTxId,
-      memberId: m.id,
-      tanggal: tgl,
-      jam,
-      keterangan: s.jenis === 'kewajiban'
-        ? `SETORAN KEWAJIBAN ${s.jumlahHari || Math.round(s.nominal / 2000) || 1} HARI (POKOK, ZAKAT, QURBAN)`
-        : `Setoran Tunai ${m.nama}`,
-      cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
-      tipe: 'masuk',
-      nominal: Number(s.nominal) || 0,
-      saldoSetelah: 0,
-      kategori: s.jenis === 'kewajiban' ? 'pokok' : 'umum',
-      referensiId: s.id,
-    });
+    if (isSedekah) {
+      const sdkEntry = sedekahMap.get(s.id);
+      const jenisLabel = resolveSedekahCategoryLabel(sdkEntry?.jenis, sdkEntry?.namaBerbagiKustom, s.catatanAnggota);
+      const isTftu = s.metode === 'tabungan_umum' || sdkEntry?.sumberDana === 'tabungan_umum';
+      const ket = isTftu
+        ? `TFTU Sedekah ${jenisLabel} dari ${m.nama}`
+        : `Sedekah ${jenisLabel} dari ${m.nama} (QRIS)`;
+
+      nextTxList.push({
+        id: depTxId,
+        memberId: m.id,
+        tanggal: tgl,
+        jam,
+        keterangan: ket,
+        cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+        tipe: isTftu ? 'keluar' : 'masuk',
+        nominal: Number(s.nominal) || 0,
+        saldoSetelah: 0,
+        kategori: isTftu ? 'umum' : 'sedekah',
+        referensiId: s.id,
+      });
+    } else {
+      nextTxList.push({
+        id: depTxId,
+        memberId: m.id,
+        tanggal: tgl,
+        jam,
+        keterangan: s.jenis === 'kewajiban'
+          ? `SETORAN KEWAJIBAN ${s.jumlahHari || Math.round(s.nominal / 2000) || 1} HARI (POKOK, ZAKAT, QURBAN)`
+          : `Setoran Tunai ${m.nama}`,
+        cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+        tipe: 'masuk',
+        nominal: Number(s.nominal) || 0,
+        saldoSetelah: 0,
+        kategori: s.jenis === 'kewajiban' ? 'pokok' : 'umum',
+        referensiId: s.id,
+      });
+    }
     existingTxRefs.add(s.id);
+    existingTxRefs.add(depTxId);
   });
 
   // 5. Calculate member balances strictly from active memberTransactions
@@ -1800,6 +1842,12 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
 
     let p = 0, u = 0, z = 0, q = 0;
     mTxs.forEach((tx: any) => {
+      // Mutasi Sedekah QRIS (kategori: 'sedekah') tercatat di mutasi anggota tanpa menambah/mengurangi saldo tabungan anggota
+      if (tx.kategori === 'sedekah') {
+        tx.saldoSetelah = p + u;
+        return;
+      }
+
       const nom = Number(tx.nominal) || 0;
       const isKewajibanSplit =
         tx.kategori === 'pokok' ||
@@ -1881,10 +1929,77 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     if (tsMatch) existingKasTokens.add(tsMatch[1]);
   });
 
+  // Ensure approved Sedekah (QRIS & TFTU) are present in Buku Kas Koperasi (and Buku Kas Anggota keluar for TFTU)
+  approvedAllDeposits.forEach((s: any) => {
+    if (s.jenis !== 'sedekah' && !String(s.id).startsWith('sdk-')) return;
+    const sdk = sedekahMap.get(s.id);
+    const m = memberMap.get(s.memberId);
+    const memberNama = m?.nama || s.memberNama || sdk?.donaturNama || 'Anggota Koperasi';
+    const jenisLabel = resolveSedekahCategoryLabel(sdk?.jenis, sdk?.namaBerbagiKustom, s.catatanAnggota);
+    const isTftu = s.metode === 'tabungan_umum' || sdk?.sumberDana === 'tabungan_umum';
+    const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
+    const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
+    const tgl = s.tanggal || sdk?.tanggal || wibTime.toISOString().split('T')[0];
+    const nowIso = s.createdAt || sdk?.createdAt || new Date().toISOString();
+    const nom = Number(s.nominal) || 0;
+
+    const kopId = sdk?.kasKoperasiId || `kas-sedekah-${s.id}`;
+    const hasKop = nextKasList.some(
+      (k: any) => k.id === kopId || (k.referensiId === s.id && k.bukuKas === 'koperasi')
+    );
+    if (!hasKop && !deletedKasSet.has(kopId)) {
+      addedKasCount++;
+      nextKasList.push({
+        id: kopId,
+        bukuKas: 'koperasi',
+        tanggal: tgl,
+        kategori: jenisLabel,
+        keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
+        namaPenerima: memberNama,
+        memberId: m?.id || s.memberId,
+        referensiId: s.id,
+        tipe: 'masuk',
+        nominal: nom,
+        saldoKasSetelah: 0,
+        inputBy: s.verifiedBy || sdk?.verifiedBy || 'Admin Koperasi',
+        status: 'approved',
+        createdAt: nowIso,
+      });
+      if (sdk) sdk.kasKoperasiId = kopId;
+    }
+
+    if (isTftu) {
+      const angId = sdk?.kasAnggotaId || `kas-ang-tftu-${s.id}`;
+      const hasAng = nextKasList.some(
+        (k: any) => k.id === angId || (k.referensiId === s.id && k.bukuKas === 'anggota' && k.tipe === 'keluar')
+      );
+      if (!hasAng && !deletedKasSet.has(angId)) {
+        addedKasCount++;
+        nextKasList.push({
+          id: angId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          kategori: 'Tabungan Bebas',
+          keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+          namaPenerima: memberNama,
+          memberId: m?.id || s.memberId,
+          referensiId: s.id,
+          tipe: 'keluar',
+          nominal: nom,
+          saldoKasSetelah: 0,
+          inputBy: s.verifiedBy || sdk?.verifiedBy || memberNama,
+          status: 'approved',
+          createdAt: nowIso,
+        });
+        if (sdk) sdk.kasAnggotaId = angId;
+      }
+    }
+  });
+
   // Check active memberTransactions to see if any approved deposit transaction is missing its Buku Kas Anggota entry
   nextTxList.forEach((tx: any) => {
     const m = memberMap.get(tx.memberId);
-    if (!m || tx.tipe !== 'masuk') return;
+    if (!m || tx.tipe !== 'masuk' || tx.kategori === 'sedekah' || String(tx.id).startsWith('tx-sdk-')) return;
     const tsMatch = String(tx.id).match(/(\d{10,})/);
     const tsToken = tsMatch ? tsMatch[1] : tx.id;
     const refToken = tx.referensiId || '';
@@ -2453,7 +2568,7 @@ async function startServer() {
     });
   });
 
-  // Online Realtime Setoran Submission Endpoint (Khusus QRIS Resmi Koperasi)
+  // Online Realtime Setoran Submission Endpoint (QRIS & Sedekah Tabungan Umum / TFTU)
   app.post('/api/setoran/submit', (req: Request, res: Response) => {
     try {
       const { deposit, sedekahEntry } = req.body;
@@ -2461,31 +2576,42 @@ async function startServer() {
         return res.status(400).json({ error: 'Data setoran tidak lengkap' });
       }
 
-      // Hanya izinkan metode QRIS untuk semua setoran & sedekah
-      if (deposit.metode && deposit.metode !== 'qris') {
+      const isSedekah = deposit.jenis === 'sedekah';
+      const isTftu = isSedekah && deposit.metode === 'tabungan_umum';
+
+      // Setoran tabungan (kewajiban/umum) hanya QRIS; Sedekah bisa QRIS atau Tabungan Umum (TFTU)
+      if (!isSedekah && deposit.metode && deposit.metode !== 'qris') {
         return res.status(400).json({
-          error: 'Metode transfer bank & potong saldo dinonaktifkan. Penyetoran dan sedekah hanya dapat menggunakan QRIS Resmi Koperasi.',
+          error: 'Metode transfer bank dinonaktifkan. Penyetoran tabungan hanya dapat menggunakan QRIS Resmi Koperasi.',
+        });
+      }
+      if (isSedekah && deposit.metode && deposit.metode !== 'qris' && deposit.metode !== 'tabungan_umum') {
+        return res.status(400).json({
+          error: 'Setoran sedekah hanya menggunakan metode QRIS atau Dari Tabungan Umum Anggota (TFTU).',
         });
       }
 
-      // Bukti pembayaran / resi QRIS wajib di-upload
-      if (!deposit.buktiTransferUrl || !deposit.buktiTransferUrl.trim()) {
+      // Bukti pembayaran / resi QRIS wajib di-upload untuk metode QRIS
+      if (!isTftu && (!deposit.buktiTransferUrl || !deposit.buktiTransferUrl.trim())) {
         return res.status(400).json({ error: 'Foto bukti pembayaran / resi QRIS wajib di-upload.' });
       }
 
-      deposit.metode = 'qris';
-      deposit.rekeningTujuan =
-        deposit.jenis === 'sedekah' ? 'QRIS Resmi Kas Berbagi' : 'QRIS Resmi Koperasi HWS';
+      deposit.metode = isTftu ? 'tabungan_umum' : 'qris';
+      deposit.rekeningTujuan = isTftu
+        ? 'Tabungan Umum Anggota (TFTU)'
+        : deposit.jenis === 'sedekah'
+        ? 'QRIS Resmi Kas Berbagi'
+        : 'QRIS Resmi Koperasi HWS';
 
       currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
       if (sedekahEntry && sedekahEntry.id) {
-        sedekahEntry.sumberDana = 'qris';
+        sedekahEntry.sumberDana = deposit.metode;
         currentState.sedekahList = [
           sedekahEntry,
           ...(currentState.sedekahList || []).filter((s: any) => s.id !== sedekahEntry.id),
         ];
       }
-      
+
       // Auto-record audit log
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
@@ -2494,8 +2620,8 @@ async function startServer() {
         adminId: deposit.memberId,
         adminNama: deposit.memberNama,
         adminRole: 'member',
-        action: 'Pengajuan Setoran Online (QRIS)',
-        detail: `Mengajukan setoran ${deposit.jenis} sebesar Rp ${Number(deposit.nominal).toLocaleString('id-ID')} via QRIS Resmi`,
+        action: isTftu ? 'Pengajuan Sedekah TFTU Tabungan Umum' : 'Pengajuan Setoran Online (QRIS)',
+        detail: `Mengajukan setoran ${deposit.jenis} sebesar Rp ${Number(deposit.nominal).toLocaleString('id-ID')} via ${isTftu ? 'Tabungan Umum (TFTU)' : 'QRIS Resmi'}`,
         targetId: deposit.id,
       });
 
@@ -2648,20 +2774,33 @@ async function startServer() {
             createdAt: now.toISOString(),
           });
         } else if (dep.jenis === 'sedekah') {
-          // Setoran Sedekah / Berbagi Anggota
-          currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
-            sdk.id === dep.id ||
-            (sdk.donaturMemberId === dep.memberId && sdk.nominal === dep.nominal && sdk.status === 'pending')
-              ? {
-                  ...sdk,
-                  status: 'approved',
-                  verifiedAt: now.toISOString(),
-                  verifiedBy: adminName || 'Admin Koperasi',
-                }
-              : sdk
-          );
+          const linkedSdk = (currentState.sedekahList || []).find((sdk: any) => sdk.id === dep.id);
+          const pb = currentState.pengaturanBerbagi || {};
+          const rawUmum = pb.namaUmum || 'Sedekah Umum';
+          const namaUmum = rawUmum === 'Sedekah' ? 'Sedekah Umum' : rawUmum;
+          const ketLower = String(dep.catatanAnggota || linkedSdk?.keterangan || '').toLowerCase();
+          const jenisLabel =
+            (linkedSdk?.namaBerbagiKustom && linkedSdk.namaBerbagiKustom !== 'Sedekah'
+              ? linkedSdk.namaBerbagiKustom
+              : undefined) ||
+            (linkedSdk?.jenis === 'sedekah_jumat' || ketLower.includes('jumat')
+              ? pb.namaJumat || 'Sedekah Jumat'
+              : linkedSdk?.jenis === 'sedekah_subuh' || ketLower.includes('subuh')
+              ? pb.namaSubuh || 'Sedekah Subuh'
+              : namaUmum);
 
-          if (dep.metode === 'tabungan_umum' && targetMember) {
+          const memberNama = targetMember?.nama || dep.memberNama || 'Anggota Koperasi';
+          const isTftu = dep.metode === 'tabungan_umum' || linkedSdk?.sumberDana === 'tabungan_umum';
+          const kasKopId = linkedSdk?.kasKoperasiId || `kas-sedekah-${dep.id}`;
+          const kasAngId = `kas-ang-tftu-${dep.id}`;
+          const txId = `tx-sdk-${dep.id}`;
+
+          if (isTftu && targetMember) {
+            if ((Number(targetMember.saldoUmum) || 0) < dep.nominal) {
+              return res.status(400).json({
+                error: `Saldo Tabungan Umum ${targetMember.nama} tidak mencukupi untuk TFTU Sedekah.`,
+              });
+            }
             targetMember.saldoUmum = Math.max(0, (Number(targetMember.saldoUmum) || 0) - dep.nominal);
             targetMember.totalSimpanan =
               (Number(targetMember.saldoPokok) || 0) +
@@ -2669,13 +2808,32 @@ async function startServer() {
               (Number(targetMember.saldoZakatFitrah) || 0) +
               (Number(targetMember.saldoQurban) || 0);
 
+            currentState.kasList = currentState.kasList || [];
+            currentState.kasList.unshift({
+              id: kasAngId,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              jam,
+              kategori: 'Tabungan Bebas',
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+              namaPenerima: memberNama,
+              memberId: targetMember.id,
+              referensiId: dep.id,
+              tipe: 'keluar',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: adminName || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+
             currentState.memberTransactions = currentState.memberTransactions || [];
             currentState.memberTransactions.unshift({
-              id: `tx-sdk-${Date.now()}`,
+              id: txId,
               memberId: targetMember.id,
               tanggal: tgl,
               jam,
-              keterangan: `DONASI BERBAGI: ${dep.catatanAnggota || 'Sedekah Anggota'}`,
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
               cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
               tipe: 'keluar',
               nominal: dep.nominal,
@@ -2683,16 +2841,34 @@ async function startServer() {
               kategori: 'umum',
               referensiId: dep.id,
             });
+          } else if (targetMember) {
+            currentState.memberTransactions = currentState.memberTransactions || [];
+            currentState.memberTransactions.unshift({
+              id: txId,
+              memberId: targetMember.id,
+              tanggal: tgl,
+              jam,
+              keterangan: `Sedekah ${jenisLabel} dari ${memberNama} (QRIS)`,
+              cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoSetelah: (targetMember.saldoPokok || 0) + (targetMember.saldoUmum || 0),
+              kategori: 'sedekah',
+              referensiId: dep.id,
+            });
           }
 
           currentState.kasList = currentState.kasList || [];
           currentState.kasList.unshift({
-            id: `kas-sedekah-${Date.now()}`,
+            id: kasKopId,
             bukuKas: 'koperasi',
             tanggal: tgl,
-            kategori: 'Penerimaan Sedekah',
-            keterangan: `Penerimaan ${dep.catatanAnggota || 'Sedekah Berbagi'} a/n ${dep.memberNama}`,
-            namaPenerima: dep.memberNama,
+            jam,
+            kategori: jenisLabel,
+            keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
+            namaPenerima: memberNama,
+            memberId: targetMember?.id || dep.memberId,
+            referensiId: dep.id,
             tipe: 'masuk',
             nominal: dep.nominal,
             saldoKasSetelah: 0,
@@ -2700,6 +2876,20 @@ async function startServer() {
             status: 'approved',
             createdAt: now.toISOString(),
           });
+
+          currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
+            sdk.id === dep.id ||
+            (sdk.donaturMemberId === dep.memberId && sdk.nominal === dep.nominal && sdk.status === 'pending')
+              ? {
+                  ...sdk,
+                  status: 'approved',
+                  kasKoperasiId: kasKopId,
+                  ...(isTftu ? { kasAnggotaId: kasAngId } : {}),
+                  verifiedAt: now.toISOString(),
+                  verifiedBy: adminName || 'Admin Koperasi',
+                }
+              : sdk
+          );
         } else if (targetMember) {
           // Tabungan Umum Bebas
           targetMember.saldoUmum = (Number(targetMember.saldoUmum) || 0) + dep.nominal;
@@ -2773,19 +2963,21 @@ async function startServer() {
         targetId: dep.id,
       });
 
-      if (isApproved && targetMember) {
-        currentState.members = (currentState.members || []).map((m: any) =>
-          m.id === targetMember.id
-            ? {
-                ...m,
-                saldoPokok: targetMember.saldoPokok,
-                saldoZakatFitrah: targetMember.saldoZakatFitrah,
-                saldoQurban: targetMember.saldoQurban,
-                saldoUmum: targetMember.saldoUmum,
-                totalSimpanan: targetMember.totalSimpanan,
-              }
-            : m
-        );
+      if (isApproved) {
+        if (targetMember) {
+          currentState.members = (currentState.members || []).map((m: any) =>
+            m.id === targetMember.id
+              ? {
+                  ...m,
+                  saldoPokok: targetMember.saldoPokok,
+                  saldoZakatFitrah: targetMember.saldoZakatFitrah,
+                  saldoQurban: targetMember.saldoQurban,
+                  saldoUmum: targetMember.saldoUmum,
+                  totalSimpanan: targetMember.totalSimpanan,
+                }
+              : m
+          );
+        }
         // Authoritative reconciliation to align all balances, kasList, and member transactions
         const reconResult = reconcileBalancesWithDeposits(currentState);
         currentState = reconResult.state;
@@ -2800,7 +2992,9 @@ async function startServer() {
         ? '✅ Verifikasi Setoran Berhasil'
         : '⚠️ Setoran Belum Disetujui';
       const notifBody = isApproved
-        ? `Setoran Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.jenis === 'kewajiban' ? 'Kewajiban Pokok' : 'Tabungan Umum'}) telah diverifikasi & masuk ke saldo rekening Anda.`
+        ? dep.jenis === 'sedekah'
+          ? `Setoran Sedekah Rp ${dep.nominal.toLocaleString('id-ID')} telah disetujui, tercatat di Buku Kas Koperasi & Mutasi Anggota.`
+          : `Setoran Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.jenis === 'kewajiban' ? 'Kewajiban Pokok' : 'Tabungan Umum'}) telah diverifikasi & masuk ke saldo rekening Anda.`
         : `Pengajuan setoran Rp ${dep.nominal.toLocaleString('id-ID')} ditolak: ${dep.catatanAdmin || 'Mohon periksa bukti setoran'}`;
 
       broadcastEvent('MEMBER_NOTIFICATION', {
@@ -2821,6 +3015,196 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error in /api/setoran/verify:', err);
       res.status(500).json({ error: 'Gagal memverifikasi setoran online: ' + (err.message || 'Server error') });
+    }
+  });
+
+  // Atomic Sedekah via Tabungan Umum Anggota (TFTU: Buku Kas Anggota keluar -> Buku Kas Koperasi masuk + Mutasi Anggota keluar)
+  app.post('/api/sedekah/tftu', (req: Request, res: Response) => {
+    try {
+      const { memberId, jenis, namaBerbagiKustom, nominal, pinTransaksi, doaPesan, entryId } = req.body;
+      const numNominal = Number(nominal) || 0;
+      if (!memberId || numNominal < 1000) {
+        return res.status(400).json({ error: 'Data nominal sedekah TFTU tidak valid (minimal Rp 1.000).' });
+      }
+
+      const memberIdx = (currentState.members || []).findIndex((m: any) => m.id === memberId);
+      if (memberIdx === -1) {
+        return res.status(404).json({ error: 'Data anggota tidak ditemukan.' });
+      }
+
+      const member = { ...currentState.members[memberIdx] };
+      const validPin = String(member.pinTransaksi || '123456').trim();
+      if (String(pinTransaksi || '').trim() !== validPin) {
+        return res.status(403).json({ error: 'PIN Transaksi 6-digit tidak sesuai.' });
+      }
+
+      const currentUmum = Number(member.saldoUmum) || 0;
+      if (currentUmum < numNominal) {
+        return res.status(400).json({
+          error: `Saldo Tabungan Umum tidak mencukupi (Tersedia: Rp ${currentUmum.toLocaleString('id-ID')}).`,
+        });
+      }
+
+      const pb = currentState.pengaturanBerbagi || {};
+      const rawUmum = pb.namaUmum || 'Sedekah Umum';
+      const namaUmum = rawUmum === 'Sedekah' ? 'Sedekah Umum' : rawUmum;
+      const jenisLabel =
+        (namaBerbagiKustom && String(namaBerbagiKustom).trim() !== 'Sedekah'
+          ? String(namaBerbagiKustom).trim()
+          : '') ||
+        (jenis === 'sedekah_jumat'
+          ? pb.namaJumat || 'Sedekah Jumat'
+          : jenis === 'sedekah_subuh'
+          ? pb.namaSubuh || 'Sedekah Subuh'
+          : namaUmum);
+
+      const now = new Date();
+      const wibTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+      const tgl = wibTime.toISOString().slice(0, 10);
+      const jam = wibTime.toISOString().slice(11, 16);
+      const id = entryId || `sdk-${Date.now()}`;
+      const kasKopId = `kas-sedekah-${id}`;
+      const kasAngId = `kas-ang-tftu-${id}`;
+      const txId = `tx-sdk-${id}`;
+      const cleanNote = String(doaPesan || '').trim();
+
+      member.saldoUmum = Math.max(0, currentUmum - numNominal);
+      member.totalSimpanan =
+        (Number(member.saldoPokok) || 0) +
+        member.saldoUmum +
+        (Number(member.saldoZakatFitrah) || 0) +
+        (Number(member.saldoQurban) || 0);
+
+      currentState.members[memberIdx] = member;
+
+      const newSedekahEntry = {
+        id,
+        tanggal: tgl,
+        jam,
+        jenis: jenis || 'sedekah_subuh',
+        namaBerbagiKustom: jenisLabel,
+        tipe: 'penerimaan',
+        nominal: numNominal,
+        status: 'approved',
+        donaturNama: member.nama,
+        donaturWilayah: member.wilayah || 'Cengkareng',
+        donaturMemberId: member.id,
+        donaturRekening: member.nomorRekening,
+        donaturNomorAnggota: member.nomorAnggota,
+        keterangan: `TFTU Sedekah dari ${member.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+        sumberDana: 'tabungan_umum',
+        kasKoperasiId: kasKopId,
+        kasAnggotaId: kasAngId,
+        inputBy: `Anggota (${member.nama})`,
+        verifiedBy: 'Sistem TFTU Otomatis',
+        verifiedAt: now.toISOString(),
+        createdAt: now.toISOString(),
+      };
+
+      const newSetoranEntry = {
+        id,
+        nomorReferensi: `SDK-${String(id).slice(-6).toUpperCase()}`,
+        memberId: member.id,
+        memberNama: member.nama,
+        memberRekening: member.nomorRekening,
+        memberNomorAnggota: member.nomorAnggota,
+        memberWilayah: member.wilayah,
+        jenis: 'sedekah',
+        nominal: numNominal,
+        rekeningTujuan: 'Tabungan Umum Anggota (TFTU)',
+        metode: 'tabungan_umum',
+        catatanAnggota: `TFTU Sedekah ${jenisLabel} dari ${member.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+        status: 'disetujui',
+        verifiedBy: 'Sistem TFTU Otomatis',
+        verifiedAt: now.toISOString(),
+        createdAt: now.toISOString(),
+      };
+
+      // 1. Keluar dari Buku Kas Anggota
+      currentState.kasList = currentState.kasList || [];
+      currentState.kasList.unshift({
+        id: kasAngId,
+        bukuKas: 'anggota',
+        tanggal: tgl,
+        jam,
+        kategori: 'Tabungan Bebas',
+        keterangan: `TFTU Sedekah ${jenisLabel} dari ${member.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+        namaPenerima: member.nama,
+        memberId: member.id,
+        referensiId: id,
+        tipe: 'keluar',
+        nominal: numNominal,
+        saldoKasSetelah: 0,
+        inputBy: member.nama,
+        status: 'approved',
+        createdAt: now.toISOString(),
+      });
+
+      // 2. Masuk ke Buku Kas Koperasi sesuai kategori
+      currentState.kasList.unshift({
+        id: kasKopId,
+        bukuKas: 'koperasi',
+        tanggal: tgl,
+        jam,
+        kategori: jenisLabel,
+        keterangan: `TFTU Sedekah dari ${member.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+        namaPenerima: member.nama,
+        memberId: member.id,
+        referensiId: id,
+        tipe: 'masuk',
+        nominal: numNominal,
+        saldoKasSetelah: 0,
+        inputBy: member.nama,
+        status: 'approved',
+        createdAt: now.toISOString(),
+      });
+
+      // 3. Tercatat dalam Mutasi Anggota
+      currentState.memberTransactions = currentState.memberTransactions || [];
+      currentState.memberTransactions.unshift({
+        id: txId,
+        memberId: member.id,
+        tanggal: tgl,
+        jam,
+        keterangan: `TFTU Sedekah ${jenisLabel} dari ${member.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
+        cbg: `KCP ${(member.wilayah || 'CENGKARENG').toUpperCase()}`,
+        tipe: 'keluar',
+        nominal: numNominal,
+        saldoSetelah: (Number(member.saldoPokok) || 0) + member.saldoUmum,
+        kategori: 'umum',
+        referensiId: id,
+      });
+
+      currentState.sedekahList = [newSedekahEntry, ...(currentState.sedekahList || []).filter((s: any) => s.id !== id)];
+      currentState.setoranList = [newSetoranEntry, ...(currentState.setoranList || []).filter((s: any) => s.id !== id)];
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-tftu-${Date.now()}`,
+        timestamp: now.toISOString(),
+        adminId: member.id,
+        adminNama: member.nama,
+        adminRole: 'member',
+        action: 'Setoran Sedekah Dari Tabungan Umum (TFTU)',
+        detail: `${member.nama} memindahkan saldo Tabungan Umum Rp ${numNominal.toLocaleString('id-ID')} ke Buku Kas Koperasi kategori ${jenisLabel} (TFTU Sedekah).`,
+        targetId: id,
+      });
+
+      const reconResult = reconcileBalancesWithDeposits(currentState);
+      currentState = reconResult.state;
+      saveDatabase(currentState);
+      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastEvent('SETORAN_UPDATED', { action: 'tftu', deposit: newSetoranEntry });
+
+      res.json({
+        success: true,
+        entry: newSedekahEntry,
+        deposit: newSetoranEntry,
+        state: currentState,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/sedekah/tftu:', err);
+      res.status(500).json({ error: 'Gagal memproses sedekah dari tabungan umum: ' + (err.message || 'Server error') });
     }
   });
 

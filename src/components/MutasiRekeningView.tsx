@@ -108,9 +108,19 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
     (tx) => tx.memberId === member.id && !deletedTxSet.has(tx.id) && (tx as any).status !== 'deleted'
   );
 
+  const isSedekahTx = (tx: MemberTransaction) =>
+    tx.kategori === 'sedekah' ||
+    String(tx.id || '').startsWith('tx-sdk-') ||
+    String(tx.keterangan || '').toLowerCase().includes('tftu sedekah') ||
+    String(tx.keterangan || '').toLowerCase().includes('sedekah');
+
   // Filter based on options
   let filtered = allMemberTxs.filter((tx) => {
-    if (kategoriTabungan !== 'semua' && tx.kategori !== kategoriTabungan) return false;
+    if (kategoriTabungan === 'sedekah') {
+      if (!isSedekahTx(tx)) return false;
+    } else if (kategoriTabungan !== 'semua' && tx.kategori !== kategoriTabungan) {
+      return false;
+    }
 
     if (periodStartDate && tx.tanggal < periodStartDate) return false;
     if (periodEndDate && tx.tanggal > periodEndDate) return false;
@@ -127,6 +137,7 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   // Saldo Awal calculation per User Request:
   // Saldo awal = akumulasi saldo pada 1 hari sebelumnya (sebelum periodStartDate)
   const allCategoryTx = allMemberTxs.filter((tx) => {
+    if (kategoriTabungan === 'sedekah') return isSedekahTx(tx);
     if (kategoriTabungan !== 'semua' && tx.kategori !== kategoriTabungan) return false;
     return true;
   });
@@ -135,8 +146,12 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   if (periodStartDate) {
     const priorTx = allCategoryTx.filter((tx) => tx.tanggal < periodStartDate);
     priorTx.forEach((tx) => {
-      if (tx.tipe === 'masuk') saldoAwal += tx.nominal;
-      else saldoAwal -= tx.nominal;
+      if (kategoriTabungan === 'sedekah') {
+        saldoAwal += tx.nominal;
+      } else if (tx.kategori !== 'sedekah') {
+        if (tx.tipe === 'masuk') saldoAwal += tx.nominal;
+        else saldoAwal -= tx.nominal;
+      }
     });
   } else {
     saldoAwal = 0;
@@ -149,6 +164,27 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   let runningSaldo = saldoAwal;
 
   const enrichedFiltered = filtered.map((tx) => {
+    if (kategoriTabungan === 'sedekah') {
+      totalMasuk += tx.nominal;
+      runningSaldo += tx.nominal;
+      return {
+        ...tx,
+        debit: 0,
+        kredit: tx.nominal,
+        computedSaldo: runningSaldo,
+      };
+    }
+
+    if (tx.kategori === 'sedekah') {
+      // Setoran Sedekah QRIS tercatat di mutasi anggota tanpa mengubah saldo tabungan
+      return {
+        ...tx,
+        debit: 0,
+        kredit: tx.nominal,
+        computedSaldo: runningSaldo,
+      };
+    }
+
     if (tx.tipe === 'masuk') {
       totalMasuk += tx.nominal;
       runningSaldo += tx.nominal;
@@ -276,11 +312,12 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
               onChange={(e) => setKategoriTabungan(e.target.value as any)}
               className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
             >
-              <option value="semua">Semua Tabungan (Konsolidasi)</option>
+              <option value="semua">Semua Tabungan & Sedekah (Konsolidasi)</option>
               <option value="pokok">Tabungan Pokok / Kewajiban (Rp1.000/hr)</option>
               <option value="umum">Tabungan Umum Bebas</option>
               <option value="zakat">Tabungan Zakat Fitrah (Rp500/hr)</option>
               <option value="qurban">Tabungan Qurban (Rp500/hr)</option>
+              <option value="sedekah">Setoran Sedekah / Berbagi (QRIS & TFTU)</option>
             </select>
           </div>
 
@@ -491,7 +528,14 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
                     {tx.tanggal.split('-').reverse().slice(0, 2).join('/')}
                   </td>
                   <td className="py-2 px-3">
-                    <div className="font-bold text-slate-900 uppercase">{tx.keterangan}</div>
+                    <div className="font-bold text-slate-900 uppercase flex items-center gap-1.5 flex-wrap">
+                      <span>{tx.keterangan}</span>
+                      {tx.kategori === 'sedekah' && (
+                        <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[9px] font-extrabold border border-rose-300">
+                          SEDEKAH → KAS KOPERASI
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[10px] text-slate-500 font-mono">{tx.jam}</div>
                   </td>
                   <td className="py-2 px-3 text-center font-mono text-slate-600">{tx.cbg || '0001'}</td>

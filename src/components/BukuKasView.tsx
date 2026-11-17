@@ -389,8 +389,10 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             bukuKas: 'koperasi',
             tanggal: formTanggal,
             jam,
-            kategori: formTipe === 'masuk' ? 'Penerimaan Sedekah' : 'Penyaluran Sedekah',
-            keterangan: `${formTipe === 'masuk' ? 'Penerimaan' : 'Penyaluran'} Sedekah Berbagi a/n ${mName}: ${formKeterangan || ''}`,
+            kategori: formTipe === 'masuk' ? 'Sedekah Umum' : 'Penyaluran Sedekah Umum',
+            keterangan: formTipe === 'masuk'
+              ? `Sedekah dari ${mName}${formKeterangan ? ` - ${formKeterangan}` : ''}`
+              : `Penyaluran Sedekah a/n ${mName}${formKeterangan ? ` - ${formKeterangan}` : ''}`,
             namaPenerima: mName,
             memberId: mId,
             referensiId: refId,
@@ -407,12 +409,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             memberId: mId,
             tanggal: formTanggal,
             jam,
-            keterangan: `DONASI BERBAGI: Sedekah Anggota ${mName} (${formKeterangan || 'Sedekah'})`,
+            keterangan: `Sedekah Umum dari ${mName}${formKeterangan ? ` - ${formKeterangan}` : ''}`,
             cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
             tipe: formTipe,
             nominal,
             saldoSetelah: updatedPokok + updatedUmum,
-            kategori: 'umum',
+            kategori: 'sedekah',
             referensiId: refId,
           });
 

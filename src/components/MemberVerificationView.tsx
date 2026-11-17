@@ -472,7 +472,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       ? 'SETORAN DITOLAK'
       : 'PENDING VERIFIKASI SETORAN';
 
-    drawRow('Metode Pembayaran:', `${deposit.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} (${(deposit.metode || 'QRIS').toUpperCase()})`, 530);
+    const metodeSlipLabel =
+      deposit.metode === 'tabungan_umum'
+        ? 'Tabungan Umum (TFTU)'
+        : `${deposit.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} (${(deposit.metode || 'QRIS').toUpperCase()})`;
+    drawRow('Metode Pembayaran:', metodeSlipLabel, 530);
     drawRow('Status Verifikasi:', statusLabel, 570, true);
 
     ctx.fillStyle = isApproved ? '#ecfdf5' : isRejected ? '#fef2f2' : '#fffbeb';
@@ -789,14 +793,51 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             createdAt: now.toISOString(),
           });
         } else if (dep.jenis === 'sedekah') {
-          if (dep.metode === 'tabungan_umum' && targetMember) {
+          const linkedSdk = (prev.sedekahList || []).find((sdk) => sdk.id === dep.id);
+          const pb = prev.pengaturanBerbagi;
+          const rawUmum = pb?.namaUmum || 'Sedekah Umum';
+          const safeUmum = rawUmum === 'Sedekah' ? 'Sedekah Umum' : rawUmum;
+          const ketLower = String(dep.catatanAnggota || linkedSdk?.keterangan || '').toLowerCase();
+          const jenisLabel =
+            (linkedSdk?.namaBerbagiKustom && linkedSdk.namaBerbagiKustom !== 'Sedekah'
+              ? linkedSdk.namaBerbagiKustom
+              : undefined) ||
+            (linkedSdk?.jenis === 'sedekah_jumat' || ketLower.includes('jumat')
+              ? pb?.namaJumat || 'Sedekah Jumat'
+              : linkedSdk?.jenis === 'sedekah_subuh' || ketLower.includes('subuh')
+              ? pb?.namaSubuh || 'Sedekah Subuh'
+              : safeUmum);
+          const memberNama = targetMember?.nama || dep.memberNama || 'Anggota Koperasi';
+          const isTftu = dep.metode === 'tabungan_umum' || linkedSdk?.sumberDana === 'tabungan_umum';
+          const kasKopId = linkedSdk?.kasKoperasiId || `kas-sedekah-${dep.id}`;
+          const kasAngId = `kas-ang-tftu-${dep.id}`;
+          const txId = `tx-sdk-${dep.id}`;
+
+          if (isTftu && targetMember) {
             updatedSaldoUmum = Math.max(0, updatedSaldoUmum - dep.nominal);
+            newKasList.push({
+              id: kasAngId,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              jam,
+              kategori: 'Tabungan Bebas',
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+              namaPenerima: memberNama,
+              memberId: targetMember.id,
+              referensiId: dep.id,
+              tipe: 'keluar',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
             newTxs.push({
-              id: `tx-sdk-${Date.now()}`,
+              id: txId,
               memberId: targetMember.id,
               tanggal: tgl,
               jam,
-              keterangan: `DONASI BERBAGI: ${dep.catatanAnggota || 'Sedekah Anggota'}`,
+              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
               cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
               tipe: 'keluar',
               nominal: dep.nominal,
@@ -804,15 +845,32 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               kategori: 'umum',
               referensiId: dep.id,
             });
+          } else if (targetMember) {
+            newTxs.push({
+              id: txId,
+              memberId: targetMember.id,
+              tanggal: tgl,
+              jam,
+              keterangan: `Sedekah ${jenisLabel} dari ${memberNama} (QRIS)`,
+              cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoSetelah: updatedSaldoPokok + updatedSaldoUmum,
+              kategori: 'sedekah',
+              referensiId: dep.id,
+            });
           }
 
           newKasList.push({
-            id: `kas-sedekah-${Date.now()}`,
+            id: kasKopId,
             bukuKas: 'koperasi',
             tanggal: tgl,
-            kategori: 'Penerimaan Sedekah',
-            keterangan: `Penerimaan ${dep.catatanAnggota || 'Sedekah Berbagi'} a/n ${dep.memberNama}`,
-            namaPenerima: dep.memberNama,
+            jam,
+            kategori: jenisLabel,
+            keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
+            namaPenerima: memberNama,
+            memberId: targetMember?.id || dep.memberId,
+            referensiId: dep.id,
             tipe: 'masuk',
             nominal: dep.nominal,
             saldoKasSetelah: 0,
@@ -888,6 +946,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   ? {
                       ...sdk,
                       status: 'approved' as const,
+                      kasKoperasiId: sdk.kasKoperasiId || `kas-sedekah-${dep.id}`,
+                      ...(dep.metode === 'tabungan_umum' ? { kasAnggotaId: `kas-ang-tftu-${dep.id}` } : {}),
                       verifiedBy: currentAdmin.nama,
                       verifiedAt: now.toISOString(),
                     }
@@ -2076,13 +2136,19 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   <div className="flex justify-between py-0.5 border-b border-slate-100">
                     <span className="text-slate-500">Jenis Setoran:</span>
                     <span className="font-semibold text-slate-800">
-                      {buktiSetorSuccess.jenis === 'kewajiban' ? `Kewajiban Pokok (${buktiSetorSuccess.jumlahHari || 1} Hari)` : 'Tabungan Umum Bebas'}
+                      {buktiSetorSuccess.jenis === 'kewajiban'
+                        ? `Kewajiban Pokok (${buktiSetorSuccess.jumlahHari || 1} Hari)`
+                        : buktiSetorSuccess.jenis === 'sedekah'
+                        ? 'Setoran Sedekah / Berbagi'
+                        : 'Tabungan Umum Bebas'}
                     </span>
                   </div>
                   <div className="flex justify-between py-0.5 border-b border-slate-100">
                     <span className="text-slate-500">Metode Pembayaran:</span>
                     <span className="font-semibold text-slate-800 truncate max-w-[200px]">
-                      {buktiSetorSuccess.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} ({(buktiSetorSuccess.metode || 'QRIS').toUpperCase()})
+                      {buktiSetorSuccess.metode === 'tabungan_umum'
+                        ? 'Tabungan Umum (TFTU)'
+                        : `${buktiSetorSuccess.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} (${(buktiSetorSuccess.metode || 'QRIS').toUpperCase()})`}
                     </span>
                   </div>
                 </div>

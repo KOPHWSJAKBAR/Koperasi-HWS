@@ -575,7 +575,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       const dateStr = d.toISOString().split('T')[0];
       const dayLabel = `${d.getDate()} ${d.toLocaleDateString('id-ID', { month: 'short' })}`;
 
-      const dayTxs = memberTxs.filter((tx) => tx.tanggal === dateStr);
+      const dayTxs = memberTxs.filter((tx) => tx.tanggal === dateStr && tx.kategori !== 'sedekah');
       const mutasiHariIni = dayTxs.reduce((acc, tx) => acc + (tx.tipe === 'masuk' ? tx.nominal : -tx.nominal), 0);
 
       points.push({
@@ -857,7 +857,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                 <div
                   onClick={() => setShowBerbagiModal(true)}
                   className="bg-gradient-to-br from-[#141d33] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-2xl p-3 sm:p-4 cursor-pointer transition-all hover:scale-[1.02] shadow-md group col-span-2 sm:col-span-1 min-w-0 overflow-hidden flex flex-col justify-between"
-                  title="Klik untuk membuka Menu Sedekah (Setor via QRIS)"
+                  title="Klik untuk membuka Menu Sedekah (QRIS atau Tabungan Umum / TFTU)"
                 >
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-[10px] sm:text-xs text-rose-300 font-semibold block break-words leading-tight">
@@ -927,7 +927,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                       </span>
                     </div>
                     <div className="text-[10px] text-rose-300/80 font-normal mt-0.5">
-                      Pilihan sedekah berkah tercatat di kas koperasi • Tidak dapat ditarik kembali
+                      Via QRIS atau Tabungan Umum (TFTU) • Tercatat di Buku Kas Koperasi & Mutasi Anggota
                     </div>
                   </div>
                 </div>
