@@ -813,16 +813,36 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       return;
     }
 
+    const prevTarget = state.members.find((m) => m.id === editingMember.id);
+    const lockedNo = (
+      prevTarget?.nomorRekening ||
+      prevTarget?.nomorAnggota ||
+      editingMember.nomorRekening ||
+      editingMember.nomorAnggota ||
+      ''
+    ).trim();
+    const isWilayahChanged = prevTarget && prevTarget.wilayah !== editingMember.wilayah;
+    const nowIso = new Date().toISOString();
+
     await updateState((prev) => ({
       ...prev,
-      members: prev.members.map((m) =>
-        m.id === editingMember.id ? editingMember : m
-      ),
+      members: prev.members.map((m) => {
+        if (m.id !== editingMember.id) return m;
+        const authoritativeNo = (m.nomorRekening || m.nomorAnggota || lockedNo).trim();
+        return {
+          ...editingMember,
+          nomorRekening: authoritativeNo,
+          nomorAnggota: authoritativeNo,
+          updatedAt: nowIso,
+        };
+      }),
       auditLogs: [
         createAuditLog(
           currentAdmin,
           'Edit Profil Anggota',
-          `Memperbarui profil anggota ${editingMember.nama} (${editingMember.nomorAnggota})`,
+          `Memperbarui profil anggota ${editingMember.nama} (No. Rekening tetap: ${lockedNo}${
+            isWilayahChanged ? `, Wilayah diubah: ${prevTarget?.wilayah} → ${editingMember.wilayah}` : ''
+          })`,
           editingMember.id
         ),
         ...prev.auditLogs,
@@ -830,7 +850,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     }));
 
     setEditingMember(null);
-    alert('Data anggota berhasil diperbarui!');
+    alert('Data anggota berhasil diperbarui! Nomor rekening awal tetap dipertahankan.');
   };
 
   // Hapus 1 Mutasi Anggota (Khusus Super Admin per Req 2)
@@ -1476,6 +1496,21 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveEditMember} className="space-y-3 text-xs">
+              <div className="p-3 bg-slate-900/90 border border-amber-500/30 rounded-2xl">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-slate-300">No. Rekening Koperasi (= No. Anggota)</span>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-bold text-amber-300">
+                    Tetap / Terkunci
+                  </span>
+                </div>
+                <div className="mt-1 font-mono font-black text-sm text-amber-400 tracking-wide">
+                  {editingMember.nomorRekening || editingMember.nomorAnggota}
+                </div>
+                <p className="mt-1 text-[10px] text-slate-400 leading-relaxed">
+                  Nomor rekening pendaftaran awal bersifat permanen dan tidak berubah meskipun wilayah koperasi atau biodata anggota diubah.
+                </p>
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block font-bold text-slate-300 mb-1">Nama Lengkap *</label>

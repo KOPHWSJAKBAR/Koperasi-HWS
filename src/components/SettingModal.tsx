@@ -333,6 +333,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editMemberNik, setEditMemberNik] = useState(currentMember?.nik || '');
   const [editMemberWa, setEditMemberWa] = useState(currentMember?.whatsapp || '');
   const [editMemberEmail, setEditMemberEmail] = useState(currentMember?.email || '');
+  const [editMemberWilayah, setEditMemberWilayah] = useState<WilayahKoperasi>(currentMember?.wilayah || 'Cengkareng');
   const [editMemberAlamat, setEditMemberAlamat] = useState(currentMember?.alamatLengkap || '');
   const [editMemberRt, setEditMemberRt] = useState(currentMember?.rt || '');
   const [editMemberRw, setEditMemberRw] = useState(currentMember?.rw || '');
@@ -419,6 +420,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       setEditMemberNik(currentMember.nik || '');
       setEditMemberWa(currentMember.whatsapp || '');
       setEditMemberEmail(currentMember.email || '');
+      setEditMemberWilayah(currentMember.wilayah || 'Cengkareng');
       setEditMemberAlamat(currentMember.alamatLengkap || '');
       setEditMemberRt(currentMember.rt || '');
       setEditMemberRw(currentMember.rw || '');
@@ -1271,38 +1273,62 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       return;
     }
 
+    const isWilayahChanged = currentMember.wilayah !== editMemberWilayah;
+    const lockedMemberNo = (currentMember.nomorRekening || currentMember.nomorAnggota || '').trim();
+    const nowIso = new Date().toISOString();
+
     await updateState((prev) => ({
       ...prev,
-      members: prev.members.map((m) =>
-        m.id === currentMember.id
-          ? {
-              ...m,
-              nama: editMemberNama.trim(),
-              nik: editMemberNik.trim(),
-              whatsapp: editMemberWa.trim(),
-              email: editMemberEmail.trim(),
-              alamatLengkap: editMemberAlamat.trim() || m.alamatLengkap,
-              rt: editMemberRt.trim() || m.rt,
-              rw: editMemberRw.trim() || m.rw,
-              kelurahan: editMemberKelurahan.trim() || m.kelurahan,
-              kecamatan: editMemberKecamatan.trim() || m.kecamatan,
-              kota: editMemberKota.trim() || m.kota,
-              provinsi: editMemberProvinsi.trim() || m.provinsi,
-              kodePos: editMemberKodePos.trim() || m.kodePos,
-              bankPribadi: {
-                namaBank: editMemberBankName,
-                nomorRekening: editMemberBankRek.trim(),
-                atasNama: editMemberBankHolder.trim(),
-              },
-              password: editMemberPassword.trim() ? editMemberPassword.trim() : m.password,
-              pinTransaksi: editMemberPin.trim() ? editMemberPin.trim() : m.pinTransaksi,
-              isRestoredPlaceholder: false,
-            } as MemberUser
-          : m
-      ),
+      members: prev.members.map((m) => {
+        if (m.id !== currentMember.id) return m;
+        const authoritativeNo = (m.nomorRekening || m.nomorAnggota || lockedMemberNo).trim();
+        return {
+          ...m,
+          nomorRekening: authoritativeNo,
+          nomorAnggota: authoritativeNo,
+          nama: editMemberNama.trim(),
+          nik: editMemberNik.trim(),
+          whatsapp: editMemberWa.trim(),
+          email: editMemberEmail.trim(),
+          wilayah: editMemberWilayah,
+          alamatLengkap: editMemberAlamat.trim() || m.alamatLengkap,
+          rt: editMemberRt.trim() || m.rt,
+          rw: editMemberRw.trim() || m.rw,
+          kelurahan: editMemberKelurahan.trim() || m.kelurahan,
+          kecamatan: editMemberKecamatan.trim() || m.kecamatan,
+          kota: editMemberKota.trim() || m.kota,
+          provinsi: editMemberProvinsi.trim() || m.provinsi,
+          kodePos: editMemberKodePos.trim() || m.kodePos,
+          bankPribadi: {
+            namaBank: editMemberBankName,
+            nomorRekening: editMemberBankRek.trim(),
+            atasNama: editMemberBankHolder.trim(),
+          },
+          password: editMemberPassword.trim() ? editMemberPassword.trim() : m.password,
+          pinTransaksi: editMemberPin.trim() ? editMemberPin.trim() : m.pinTransaksi,
+          isRestoredPlaceholder: false,
+          updatedAt: nowIso,
+        } as MemberUser;
+      }),
+      auditLogs: [
+        createAuditLog(
+          {
+            id: currentMember.id,
+            nama: editMemberNama.trim() || currentMember.nama,
+            role: 'member' as any,
+            username: lockedMemberNo,
+          } as any,
+          'Ubah Biodata Anggota',
+          `Anggota ${editMemberNama.trim() || currentMember.nama} memperbarui biodata (No. Rekening tetap: ${lockedMemberNo}${
+            isWilayahChanged ? `, Wilayah diubah: ${currentMember.wilayah} → ${editMemberWilayah}` : ''
+          })`,
+          currentMember.id
+        ),
+        ...(prev.auditLogs || []),
+      ],
     }));
 
-    alert('Profil dan data diri anggota Anda berhasil diperbarui!');
+    alert('Profil dan data diri anggota Anda berhasil diperbarui! Nomor rekening awal tetap dipertahankan.');
     setSubModal(null);
   };
 
@@ -2991,6 +3017,21 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
             {isMember ? (
               <form onSubmit={handleSaveMemberProfile} className="space-y-3 text-xs">
+                <div className="p-3 bg-slate-900/90 border border-amber-500/30 rounded-2xl">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-slate-300">No. Rekening Koperasi (= No. Anggota)</span>
+                    <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-bold text-amber-300">
+                      Tetap / Terkunci
+                    </span>
+                  </div>
+                  <div className="mt-1 font-mono font-black text-sm text-amber-400 tracking-wide">
+                    {currentMember?.nomorRekening || currentMember?.nomorAnggota}
+                  </div>
+                  <p className="mt-1 text-[10px] text-slate-400 leading-relaxed">
+                    Nomor rekening pendaftaran awal bersifat permanen dan tidak berubah meskipun wilayah koperasi atau biodata Anda diubah.
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="block font-bold text-slate-300 mb-1">Nama Lengkap *</label>
@@ -3037,6 +3078,24 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-amber-400 mb-1">Wilayah Koperasi *</label>
+                  <select
+                    value={editMemberWilayah}
+                    onChange={(e) => setEditMemberWilayah(e.target.value as WilayahKoperasi)}
+                    className="w-full px-3 py-2 bg-slate-800 border border-amber-500/50 rounded-xl text-white font-bold"
+                  >
+                    <option value="Cengkareng">Cengkareng</option>
+                    <option value="Kalideres">Kalideres</option>
+                    <option value="Kembangan">Kembangan</option>
+                    <option value="Kebon Jeruk">Kebon Jeruk</option>
+                    <option value="Grogol Petamburan">Grogol Petamburan</option>
+                    <option value="Palmerah">Palmerah</option>
+                    <option value="Taman Sari">Taman Sari</option>
+                    <option value="Tambora">Tambora</option>
+                  </select>
                 </div>
 
                 <div>

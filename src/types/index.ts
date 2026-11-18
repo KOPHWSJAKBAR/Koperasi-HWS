@@ -185,6 +185,8 @@ export interface MemberUser {
   freezeRequest?: FreezeRequest;
   lockPokokRequest?: LockPokokRequest;
   terdaftarSejak: string;
+  updatedAt?: string;
+  legacyNomorAnggota?: string;
 }
 
 export type JenisSetoran = 'kewajiban' | 'umum' | 'sedekah' | 'zakat' | 'qurban';

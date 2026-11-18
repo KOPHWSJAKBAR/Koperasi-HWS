@@ -1023,52 +1023,72 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     const isIncomingDup = String(m.id).includes('-dup-');
 
     const bySameId = memberMap.get(m.id);
+    const byIdNik = normalizeNik(bySameId?.nik);
+    const mNik = normalizeNik(m.nik);
+    const byIdRek = String(bySameId?.nomorRekening || bySameId?.nomorAnggota || '').trim();
+    const mRek = String(m.nomorRekening || m.nomorAnggota || '').trim();
     const isSamePersonOnId =
       bySameId &&
       (normalizeMemberName(bySameId.nama) === normalizeMemberName(m.nama) ||
         (bySameId.whatsapp &&
           m.whatsapp &&
-          bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
+          bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')) ||
+        (byIdNik.length >= 6 && mNik.length >= 6 && byIdNik === mNik) ||
+        (byIdRek && mRek && byIdRek === mRek));
 
     if (bySameId && isSamePersonOnId) {
       const mHasV2 = isValidUnifiedAccountV2Client(m.nomorRekening);
       const bHasV2 = isValidUnifiedAccountV2Client(bySameId.nomorRekening);
-      const resolvedNo = mHasV2
-        ? String(m.nomorRekening).trim()
-        : bHasV2
+      // Selalu pertahankan No. Rekening V2 awal dari anggota yang sudah terdaftar meskipun wilayah/biodata diubah
+      const resolvedNo = bHasV2
         ? String(bySameId.nomorRekening).trim()
-        : String(m.nomorRekening || bySameId.nomorRekening || '').trim();
+        : mHasV2
+        ? String(m.nomorRekening).trim()
+        : String(bySameId.nomorRekening || m.nomorRekening || '').trim();
       const resolvedLegacy =
         (bySameId as any).legacyNomorAnggota ||
         (m as any).legacyNomorAnggota ||
         (!isValidUnifiedAccountV2Client(bySameId.nomorAnggota) ? bySameId.nomorAnggota : undefined);
 
+      const baseTs = bySameId.updatedAt ? new Date(bySameId.updatedAt).getTime() : 0;
+      const incomingTs = m.updatedAt ? new Date(m.updatedAt).getTime() : 0;
+      const keepBaseNewerBiodata =
+        Number.isFinite(baseTs) &&
+        Number.isFinite(incomingTs) &&
+        baseTs > 0 &&
+        incomingTs > 0 &&
+        baseTs > incomingTs;
+
+      const primary = keepBaseNewerBiodata ? bySameId : m;
+      const secondary = keepBaseNewerBiodata ? m : bySameId;
+
       memberMap.set(m.id, {
-        ...bySameId,
-        ...m,
+        ...secondary,
+        ...primary,
         id: bySameId.id,
         ...(resolvedLegacy ? { legacyNomorAnggota: resolvedLegacy } : {}),
         nomorRekening: resolvedNo,
-        nomorAnggota: resolvedNo || m.nomorAnggota || bySameId.nomorAnggota,
-        nama: m.nama && m.nama.trim() ? m.nama : bySameId.nama,
-        nik: m.nik || bySameId.nik || '',
-        whatsapp: m.whatsapp || bySameId.whatsapp || '',
-        email: m.email || bySameId.email || '',
-        password: m.password || bySameId.password || '',
-        pinTransaksi: m.pinTransaksi || bySameId.pinTransaksi || '',
-        alamatLengkap: m.alamatLengkap || bySameId.alamatLengkap || '',
-        ktpPhotoUrl: m.ktpPhotoUrl || bySameId.ktpPhotoUrl,
-        avatarUrl: m.avatarUrl || bySameId.avatarUrl,
+        nomorAnggota: resolvedNo || primary.nomorAnggota || secondary.nomorAnggota,
+        nama: primary.nama && primary.nama.trim() ? primary.nama : secondary.nama,
+        wilayah: primary.wilayah || secondary.wilayah,
+        nik: primary.nik || secondary.nik || '',
+        whatsapp: primary.whatsapp || secondary.whatsapp || '',
+        email: primary.email || secondary.email || '',
+        password: primary.password || secondary.password || '',
+        pinTransaksi: primary.pinTransaksi || secondary.pinTransaksi || '',
+        alamatLengkap: primary.alamatLengkap || secondary.alamatLengkap || '',
+        ktpPhotoUrl: primary.ktpPhotoUrl || secondary.ktpPhotoUrl,
+        avatarUrl: primary.avatarUrl || secondary.avatarUrl,
         bankPribadi: {
-          namaBank: m.bankPribadi?.namaBank || bySameId.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
+          namaBank: primary.bankPribadi?.namaBank || secondary.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
           nomorRekening:
-            !isBankRekPlaceholder(m.bankPribadi?.nomorRekening)
-              ? m.bankPribadi!.nomorRekening
-              : bySameId.bankPribadi?.nomorRekening || '-',
+            !isBankRekPlaceholder(primary.bankPribadi?.nomorRekening)
+              ? primary.bankPribadi!.nomorRekening
+              : secondary.bankPribadi?.nomorRekening || '-',
           atasNama:
-            m.bankPribadi?.atasNama && m.bankPribadi.atasNama.trim() && m.bankPribadi.atasNama.trim() !== '-'
-              ? m.bankPribadi.atasNama
-              : bySameId.bankPribadi?.atasNama || bySameId.nama,
+            primary.bankPribadi?.atasNama && primary.bankPribadi.atasNama.trim() && primary.bankPribadi.atasNama.trim() !== '-'
+              ? primary.bankPribadi.atasNama
+              : secondary.bankPribadi?.atasNama || secondary.nama,
         },
       });
       return;

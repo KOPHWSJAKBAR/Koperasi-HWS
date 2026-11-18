@@ -593,53 +593,72 @@ function mergeServerState(current: any, incoming: any): any {
     const isIncomingDup = String(m.id).includes('-dup-');
 
     const bySameId = memberMap.get(m.id);
+    const byIdNik = normalizeNikServer(bySameId?.nik);
+    const mNik = normalizeNikServer(m.nik);
+    const byIdRek = String(bySameId?.nomorRekening || bySameId?.nomorAnggota || '').trim();
+    const mRek = String(m.nomorRekening || m.nomorAnggota || '').trim();
     const isSamePersonOnId =
       bySameId &&
       ((bySameId.nama || '').toLowerCase().trim() === (m.nama || '').toLowerCase().trim() ||
         (bySameId.whatsapp &&
           m.whatsapp &&
-          bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
+          bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')) ||
+        (byIdNik.length >= 6 && mNik.length >= 6 && byIdNik === mNik) ||
+        (byIdRek && mRek && byIdRek === mRek));
 
     if (bySameId && isSamePersonOnId) {
-      // Exact ID + same person match (never let legacy cache overwrite unified v2 number)
+      // Exact ID + same person match (never let legacy cache or wilayah edit overwrite initial unified v2 number)
       const existingRekValid = isValidUnifiedAccountV2Server(bySameId.nomorRekening);
       const incomingRekValid = isValidUnifiedAccountV2Server(m.nomorRekening);
       const chosenRek = existingRekValid
         ? bySameId.nomorRekening
         : incomingRekValid
         ? m.nomorRekening
-        : m.nomorRekening || bySameId.nomorRekening || '';
+        : bySameId.nomorRekening || m.nomorRekening || '';
       const chosenNoAng =
         existingRekValid || incomingRekValid
           ? chosenRek
-          : m.nomorAnggota || bySameId.nomorAnggota || chosenRek;
+          : bySameId.nomorAnggota || m.nomorAnggota || chosenRek;
+
+      const existingTs = bySameId.updatedAt ? new Date(bySameId.updatedAt).getTime() : 0;
+      const incomingTs = m.updatedAt ? new Date(m.updatedAt).getTime() : 0;
+      const keepExistingNewerBiodata =
+        Number.isFinite(existingTs) &&
+        Number.isFinite(incomingTs) &&
+        existingTs > 0 &&
+        incomingTs > 0 &&
+        existingTs > incomingTs;
+
+      const primary = keepExistingNewerBiodata ? bySameId : m;
+      const secondary = keepExistingNewerBiodata ? m : bySameId;
 
       memberMap.set(m.id, {
-        ...bySameId,
-        ...m,
+        ...secondary,
+        ...primary,
         id: bySameId.id,
-        nama: m.nama && String(m.nama).trim() ? m.nama : bySameId.nama,
+        nama: primary.nama && String(primary.nama).trim() ? primary.nama : secondary.nama,
+        wilayah: primary.wilayah || secondary.wilayah,
         nomorAnggota: chosenNoAng,
         nomorRekening: chosenRek,
-        nik: m.nik || bySameId.nik || '',
-        whatsapp: m.whatsapp || bySameId.whatsapp || '',
-        email: m.email || bySameId.email || '',
-        password: m.password || bySameId.password || '',
-        pinTransaksi: m.pinTransaksi || bySameId.pinTransaksi || '',
-        alamatLengkap: m.alamatLengkap || bySameId.alamatLengkap || '',
-        ktpPhotoUrl: m.ktpPhotoUrl || bySameId.ktpPhotoUrl,
-        avatarUrl: m.avatarUrl || bySameId.avatarUrl,
-        isRestoredPlaceholder: m.nik && m.whatsapp ? false : bySameId.isRestoredPlaceholder,
+        nik: primary.nik || secondary.nik || '',
+        whatsapp: primary.whatsapp || secondary.whatsapp || '',
+        email: primary.email || secondary.email || '',
+        password: primary.password || secondary.password || '',
+        pinTransaksi: primary.pinTransaksi || secondary.pinTransaksi || '',
+        alamatLengkap: primary.alamatLengkap || secondary.alamatLengkap || '',
+        ktpPhotoUrl: primary.ktpPhotoUrl || secondary.ktpPhotoUrl,
+        avatarUrl: primary.avatarUrl || secondary.avatarUrl,
+        isRestoredPlaceholder: primary.nik && primary.whatsapp ? false : secondary.isRestoredPlaceholder,
         bankPribadi: {
-          namaBank: m.bankPribadi?.namaBank || bySameId.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
+          namaBank: primary.bankPribadi?.namaBank || secondary.bankPribadi?.namaBank || 'Bank Central Asia (BCA)',
           nomorRekening:
-            !isBankRekPlaceholderServer(m.bankPribadi?.nomorRekening)
-              ? m.bankPribadi.nomorRekening
-              : bySameId.bankPribadi?.nomorRekening || '-',
+            !isBankRekPlaceholderServer(primary.bankPribadi?.nomorRekening)
+              ? primary.bankPribadi.nomorRekening
+              : secondary.bankPribadi?.nomorRekening || '-',
           atasNama:
-            m.bankPribadi?.atasNama && String(m.bankPribadi.atasNama).trim() && String(m.bankPribadi.atasNama).trim() !== '-'
-              ? m.bankPribadi.atasNama
-              : bySameId.bankPribadi?.atasNama || bySameId.nama,
+            primary.bankPribadi?.atasNama && String(primary.bankPribadi.atasNama).trim() && String(primary.bankPribadi.atasNama).trim() !== '-'
+              ? primary.bankPribadi.atasNama
+              : secondary.bankPribadi?.atasNama || secondary.nama,
         },
       });
       return;
@@ -3930,14 +3949,16 @@ async function startServer() {
       let finalMember: any;
 
       if (existingIdx !== -1) {
-        // UPDATE EXISTING MEMBER ONLY (Admin management) - NEVER OVERWRITE OTHER MEMBERS ("TIDAK MENIBAN")
+        // UPDATE EXISTING MEMBER ONLY (Admin/Member biodata edit) - NEVER CHANGE INITIAL NOMOR REKENING & NEVER OVERWRITE OTHER MEMBERS
         const existing = currentState.members[existingIdx];
-        const keptRek = existing.nomorRekening || member.nomorRekening || existing.nomorAnggota;
+        const keptRek = isValidUnifiedAccountV2Server(existing.nomorRekening)
+          ? existing.nomorRekening
+          : existing.nomorRekening || existing.nomorAnggota || member.nomorRekening;
         finalMember = {
           ...existing,
           ...member,
           id: existing.id,
-          nik: existing.nik || cleanNik,
+          nik: cleanNik || existing.nik,
           nomorRekening: keptRek,
           nomorAnggota: keptRek,
           // Balance protection: preserve existing balances unless explicitly updated through financial operations
@@ -3948,6 +3969,7 @@ async function startServer() {
           isPokokLocked: existing.isPokokLocked !== undefined ? existing.isPokokLocked : true,
           status: existing.status || 'aktif',
           terdaftarSejak: existing.terdaftarSejak || member.terdaftarSejak || new Date().toISOString().split('T')[0],
+          updatedAt: new Date().toISOString(),
         };
         delete finalMember.biometricActive;
         finalMember.totalSimpanan =
