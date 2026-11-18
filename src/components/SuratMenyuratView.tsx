@@ -166,12 +166,13 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
     e.preventDefault();
     if (!currentAdmin && !currentMember) return;
 
+    const senderNo = currentMember?.nomorRekening || currentMember?.nomorAnggota || '';
     const senderNama = isMember
-      ? `${currentMember!.nama} (Anggota ${currentMember!.nomorAnggota || ''})`
+      ? `${currentMember!.nama} (No. Rek/Anggota ${senderNo})`
       : (currentAdmin?.nama || 'Pengurus');
 
     const nomorSurat = isMember
-      ? `HWS/MEMBER/${currentMember!.nomorAnggota || currentMember!.id.slice(-4)}/${new Date().getFullYear()}/${String(state.suratList.length + 1).padStart(3, '0')}`
+      ? `HWS/MEMBER/${senderNo || currentMember!.id.slice(-4)}/${new Date().getFullYear()}/${String(state.suratList.length + 1).padStart(3, '0')}`
       : `HWS/DIR/${new Date().getFullYear()}/${String(state.suratList.length + 1).padStart(3, '0')}`;
 
     const targetMember = state.members.find((m) => m.id === targetMemberId);
@@ -622,7 +623,7 @@ export const SuratMenyuratView: React.FC<SuratMenyuratViewProps> = ({
                       <option value="">Pilih Anggota</option>
                       {sortMembersDesc(state.members).map((m) => (
                         <option key={m.id} value={m.id}>
-                          {m.nama} ({m.nomorAnggota} - WA: {m.whatsapp})
+                          {m.nama} ({m.nomorRekening || m.nomorAnggota} - WA: {m.whatsapp})
                         </option>
                       ))}
                     </select>

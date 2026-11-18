@@ -7,7 +7,7 @@ import {
   LockPokokRequest,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
@@ -353,8 +353,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         const q = searchQuery.toLowerCase();
         const match =
           m.nama.toLowerCase().includes(q) ||
-          m.nomorAnggota.toLowerCase().includes(q) ||
-          m.nomorRekening.includes(q) ||
+          (m.nomorRekening || '').toLowerCase().includes(q) ||
+          (m.nomorAnggota || '').toLowerCase().includes(q) ||
           m.whatsapp.includes(q) ||
           m.nik.includes(q);
         if (!match) return false;
@@ -731,26 +731,20 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     setIsAddingMember(true);
 
     try {
+      const regDateStr = new Date().toISOString().split('T')[0];
       const { nomorRekening, nextRunningNumber } = generateNomorRekening(
         formWilayah,
         formWhatsapp,
         state.lastRunningNumber,
         state.usedAccountNumbers,
         state.members,
-        false
-      );
-      const nomorAnggota = generateNomorAnggota(
-        formWilayah,
-        state.members.length,
-        state.usedMemberNumbers,
-        state.members,
-        new Date().toISOString().split('T')[0],
-        false
+        false,
+        regDateStr
       );
 
       const candidateMember: MemberUser = {
         id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        nomorAnggota,
+        nomorAnggota: nomorRekening,
         nomorRekening,
         nama: formNama.trim(),
         nik: formNik.trim(),
@@ -782,7 +776,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         saldoUmum: 0,
         totalSimpanan: 0,
         status: 'aktif',
-        terdaftarSejak: new Date().toISOString().split('T')[0],
+        terdaftarSejak: regDateStr,
       };
 
       // Authoritative Realtime Online Registration (Anti-Meniban & Anti-Pendaftaran Berulang across all devices)
@@ -800,7 +794,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       const confirmedMember = regResult.member;
       resetAddMemberForm();
       setShowAddModal(false);
-      alert(`✓ Anggota ${confirmedMember.nama} berhasil ditambahkan secara realtime online!\nNo. Anggota: ${confirmedMember.nomorAnggota}\nNo. Rekening: ${confirmedMember.nomorRekening}`);
+      alert(`✓ Anggota ${confirmedMember.nama} berhasil ditambahkan secara realtime online!\nNo. Rekening / Anggota: ${confirmedMember.nomorRekening || confirmedMember.nomorAnggota}`);
       onBackToDashboard?.();
     } finally {
       isAddingMemberRef.current = false;
@@ -936,7 +930,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                         {m.nama}
                       </span>
                       <span className="font-mono text-slate-400 text-[11px]">
-                        ({m.nomorAnggota})
+                        ({m.nomorRekening || m.nomorAnggota})
                       </span>
                       <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border inline-flex items-center gap-1 ${
                         isToLock
@@ -1034,10 +1028,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 >
                   <div>
                     <div className="font-extrabold text-white">
-                      {m.nama} ({m.nomorAnggota})
+                      {m.nama}
                     </div>
                     <div className="text-[11px] text-slate-400">
-                      Rekening: <span className="font-mono text-amber-400">{m.nomorRekening}</span> • Wilayah: {m.wilayah}
+                      No. Rekening / Anggota: <span className="font-mono text-amber-400">{m.nomorRekening || m.nomorAnggota}</span> • Wilayah: {m.wilayah}
                     </div>
                     <div className="text-[11px] text-amber-300 mt-1">
                       Alasan: <span className="italic font-medium">"{req?.reason || 'Pelanggaran ketentuan'}"</span> • Diajukan oleh: <b>{req?.requestedByName || 'Admin Write'}</b>
@@ -1096,10 +1090,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 >
                   <div>
                     <div className="font-extrabold text-white">
-                      {m.nama} ({m.nomorAnggota})
+                      {m.nama}
                     </div>
                     <div className="text-[11px] text-slate-400">
-                      Rekening: <span className="font-mono text-amber-400">{m.nomorRekening}</span> • Wilayah: {m.wilayah}
+                      No. Rekening / Anggota: <span className="font-mono text-amber-400">{m.nomorRekening || m.nomorAnggota}</span> • Wilayah: {m.wilayah}
                     </div>
                     <div className="text-[11px] text-amber-300 font-bold mt-0.5">
                       Sisa Saldo Terakhir: {formatRupiah(total)}
@@ -1196,7 +1190,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari nama, NIK, No. Rekening (10 digit), No. Anggota, No. HP..."
+              placeholder="Cari nama, NIK, No. Rekening / Anggota, No. HP..."
               className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white"
             />
           </div>
@@ -1289,7 +1283,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-700 bg-slate-800/40 text-slate-400 font-bold uppercase text-[10px]">
-                <th className="py-2.5 px-3">No. Anggota & Rek</th>
+                <th className="py-2.5 px-3">No. Rekening / Anggota</th>
                 <th className="py-2.5 px-3">Nama & Kontak</th>
                 <th className="py-2.5 px-3">Wilayah</th>
                 <th className="py-2.5 px-3 text-right">Tab. Pokok</th>
@@ -1303,10 +1297,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               {filteredMembers.map((member) => (
                 <tr key={member.id} className="hover:bg-slate-800/30 transition-colors">
                   <td className="py-3 px-3">
-                    <div className="font-mono font-bold text-amber-400">{member.nomorAnggota}</div>
-                    <div className="text-[11px] font-mono text-slate-300 font-semibold">
-                      Rek: {member.nomorRekening}
-                    </div>
+                    <div className="font-mono font-bold text-amber-400">{member.nomorRekening || member.nomorAnggota}</div>
                   </td>
                   <td className="py-3 px-3">
                     <div className="flex items-center gap-1.5">
@@ -2030,7 +2021,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     Detail Profil Anggota: {viewingMemberProfile.nama}
                   </h3>
                   <p className="text-[11px] text-slate-400 font-mono">
-                    {viewingMemberProfile.nomorAnggota} • Rek: {viewingMemberProfile.nomorRekening}
+                    No. Rekening / Anggota: {viewingMemberProfile.nomorRekening || viewingMemberProfile.nomorAnggota}
                   </p>
                 </div>
               </div>
@@ -2274,7 +2265,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               <div className="p-3 bg-slate-800 rounded-2xl border border-slate-700">
                 <div className="font-bold text-white">{memberToFreeze.nama}</div>
                 <div className="text-[11px] text-slate-400 font-mono">
-                  {memberToFreeze.nomorAnggota} • Rek: {memberToFreeze.nomorRekening}
+                  No. Rekening / Anggota: {memberToFreeze.nomorRekening || memberToFreeze.nomorAnggota}
                 </div>
               </div>
 
@@ -2353,7 +2344,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 <div>
                   <div className="font-extrabold text-white text-sm">{lockPokokModalMember.nama}</div>
                   <div className="text-[11px] font-mono text-slate-400">
-                    {lockPokokModalMember.nomorAnggota} • Rek: <span className="text-amber-400">{lockPokokModalMember.nomorRekening}</span>
+                    No. Rekening / Anggota: <span className="text-amber-400">{lockPokokModalMember.nomorRekening || lockPokokModalMember.nomorAnggota}</span>
                   </div>
                 </div>
                 <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border flex items-center gap-1 ${

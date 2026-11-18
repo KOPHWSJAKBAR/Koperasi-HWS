@@ -371,14 +371,9 @@ export function generateMutasiRekeningPdf(
             <td style="width: 48%; border: 1.5px solid #0f172a; border-radius: 6px; padding: 10px 12px; vertical-align: top; font-size: 11px; line-height: 1.5;">
               <table style="width: 100%; border-collapse: collapse;">
                 <tr>
-                  <td style="width: 38%; font-weight: 700;">NO. REKENING</td>
+                  <td style="width: 38%; font-weight: 700;">NO. REK / ANGGOTA</td>
                   <td style="width: 5%;">:</td>
-                  <td style="font-weight: 800; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #0f172a;">${member.nomorRekening}</td>
-                </tr>
-                <tr>
-                  <td style="font-weight: 700;">NO. ANGGOTA</td>
-                  <td>:</td>
-                  <td style="font-weight: 700; font-family: 'JetBrains Mono', monospace;">${member.nomorAnggota}</td>
+                  <td style="font-weight: 800; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #0f172a;">${member.nomorRekening || member.nomorAnggota}</td>
                 </tr>
                 <tr>
                   <td style="font-weight: 700;">PERIODE</td>
@@ -494,8 +489,7 @@ export function exportAnggotaExcel(
       <tr>
         <td class="center">${idx + 1}</td>
         <td style="font-weight: bold;">${m.nama}</td>
-        <td class="center" style="mso-number-format:'\\@';">${m.nomorRekening}</td>
-        <td class="center" style="mso-number-format:'\\@';">${m.nomorAnggota || '-'}</td>
+        <td class="center" style="mso-number-format:'\\@';">${m.nomorRekening || m.nomorAnggota || '-'}</td>
         <td class="center">${m.wilayah}</td>
         <td class="num">${pokok}</td>
         <td class="num">${zakat}</td>
@@ -510,27 +504,26 @@ export function exportAnggotaExcel(
   const excelHtml = `
     <table>
       <tr>
-        <td colspan="9" class="header-title" style="font-size: 14pt; font-weight: bold; text-align: center; color: #0f172a;">
+        <td colspan="8" class="header-title" style="font-size: 14pt; font-weight: bold; text-align: center; color: #0f172a;">
           KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA (KOPERASI HWS)
         </td>
       </tr>
       <tr>
-        <td colspan="9" class="sub-title" style="font-size: 11pt; font-weight: bold; text-align: center; color: #d97706;">
+        <td colspan="8" class="sub-title" style="font-size: 11pt; font-weight: bold; text-align: center; color: #d97706;">
           ${judulLaporan.toUpperCase()}
         </td>
       </tr>
       <tr>
-        <td colspan="9" class="center" style="font-size: 9pt; color: #64748b; text-align: center;">
+        <td colspan="8" class="center" style="font-size: 9pt; color: #64748b; text-align: center;">
           Periode: ${periodeLabel.toUpperCase()} • Tanggal Unduh: ${new Date().toLocaleDateString('id-ID', { dateStyle: 'full' })}
         </td>
       </tr>
-      <tr><td colspan="9"></td></tr>
+      <tr><td colspan="8"></td></tr>
       <thead>
         <tr style="background-color: #0f172a; color: #ffffff; font-weight: bold; font-size: 10pt;">
           <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 40px;">NO</th>
           <th style="padding: 8px; border: 1px solid #000; text-align: left; width: 220px;">NAMA ANGGOTA</th>
-          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 140px;">NO. REKENING</th>
-          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 130px;">NO. ANGGOTA</th>
+          <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 150px;">NO. REK / ANGGOTA</th>
           <th style="padding: 8px; border: 1px solid #000; text-align: center; width: 120px;">WILAYAH</th>
           <th style="padding: 8px; border: 1px solid #000; text-align: right; width: 130px;">TAB. POKOK</th>
           <th style="padding: 8px; border: 1px solid #000; text-align: right; width: 120px;">TAB. ZAKAT</th>
@@ -541,7 +534,7 @@ export function exportAnggotaExcel(
       <tbody>
         ${rowsHtml}
         <tr style="background-color: #0f172a; color: #ffffff; font-weight: bold; font-size: 11pt; border-top: 2px solid #000;">
-          <td colspan="5" style="padding: 10px; text-align: left; font-weight: bold; color: #ffffff;">
+          <td colspan="4" style="padding: 10px; text-align: left; font-weight: bold; color: #ffffff;">
             TOTAL KESELURUHAN (${members.length} ANGGOTA)
           </td>
           <td class="num" style="padding: 10px; color: #fbbf24; font-weight: bold;">${totalPokok}</td>
@@ -655,7 +648,7 @@ export function exportAnggotaPdf(
             <tr style="background: #f1f5f9; font-size: 9px; text-transform: uppercase; font-weight: 800; border-bottom: 1.5px solid #0f172a;">
               <th style="padding: 6px 4px; width: 4%; text-align: center;">NO</th>
               <th style="padding: 6px; text-align: left;">NAMA ANGGOTA</th>
-              <th style="padding: 6px 4px; text-align: center; width: 14%;">NO. REKENING</th>
+              <th style="padding: 6px 4px; text-align: center; width: 14%;">NO. REK / ANGGOTA</th>
               <th style="padding: 6px 4px; text-align: center; width: 12%;">WILAYAH</th>
               <th style="padding: 6px; text-align: right; width: 15%;">TAB. POKOK</th>
               <th style="padding: 6px; text-align: right; width: 14%;">TAB. ZAKAT</th>

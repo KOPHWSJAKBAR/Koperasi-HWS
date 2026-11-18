@@ -2349,7 +2349,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <div>
                   <h4 className="text-sm font-extrabold text-white">{currentMember.nama}</h4>
                   <div className="text-[11px] font-mono font-bold text-amber-400">
-                    {currentMember.nomorAnggota}
+                    {currentMember.nomorRekening || currentMember.nomorAnggota}
                   </div>
                   <div className="text-[10px] text-slate-400">Wilayah: {currentMember.wilayah}</div>
                 </div>
@@ -2357,8 +2357,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
               <div className="pt-2 border-t border-slate-700/60 space-y-1 text-xs">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Rekening Koperasi:</span>
-                  <span className="font-mono font-black text-white">{currentMember.nomorRekening}</span>
+                  <span className="text-slate-400">No. Rekening / Anggota:</span>
+                  <span className="font-mono font-black text-white">{currentMember.nomorRekening || currentMember.nomorAnggota}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Bank Pribadi:</span>
@@ -4816,7 +4816,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 >
                   {sortMembersDesc(state.members).map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.nama} ({m.nomorAnggota}) • Pokok: {formatRupiah(m.saldoPokok)} • Umum: {formatRupiah(m.saldoUmum)}
+                      {m.nama} ({m.nomorRekening || m.nomorAnggota}) • Pokok: {formatRupiah(m.saldoPokok)} • Umum: {formatRupiah(m.saldoUmum)}
                     </option>
                   ))}
                 </select>

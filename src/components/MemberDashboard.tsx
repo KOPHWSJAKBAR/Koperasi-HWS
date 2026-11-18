@@ -274,7 +274,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     e.preventDefault();
     setTfError('');
     if (!targetMemberRecipient) {
-      setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
+      setTfError('Nomor Rekening / Anggota tujuan tidak ditemukan.');
       return;
     }
 
@@ -299,7 +299,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     setTfSuccess('');
 
     if (!targetMemberRecipient) {
-      setTfError('Nomor Rekening / No. Anggota tujuan tidak ditemukan.');
+      setTfError('Nomor Rekening / Anggota tujuan tidak ditemukan.');
       return;
     }
 
@@ -1365,14 +1365,14 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
                   {/* Target Member Input */}
                   <div>
                     <label className="block font-bold text-slate-300 mb-1">
-                      Nomor Rekening / No. Anggota / HP Penerima *
+                      No. Rekening / Anggota / HP Penerima *
                     </label>
                     <input
                       type="text"
                       required
                       value={tfTargetRek}
                       onChange={(e) => setTfTargetRek(e.target.value)}
-                      placeholder="Masukkan No. Rekening / No. Anggota"
+                      placeholder="Masukkan No. Rekening / Anggota"
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-xs focus:ring-2 focus:ring-amber-500"
                     />
 

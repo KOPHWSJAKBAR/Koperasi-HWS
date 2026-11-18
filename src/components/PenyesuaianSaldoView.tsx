@@ -780,7 +780,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                     <option value="">-- Pilih Anggota Target --</option>
                     {filteredSearchMembers.map((m) => (
                       <option key={m.id} value={m.id}>
-                        {m.nama} ({m.nomorAnggota} - Rek: {m.nomorRekening}) - Saldo: {formatRupiah(m.saldoPokok + m.saldoUmum + (m.saldoQurban || 0) + (m.saldoZakatFitrah || 0))}
+                        {m.nama} ({m.nomorRekening || m.nomorAnggota}) - Saldo: {formatRupiah(m.saldoPokok + m.saldoUmum + (m.saldoQurban || 0) + (m.saldoZakatFitrah || 0))}
                       </option>
                     ))}
                   </select>
@@ -1070,7 +1070,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                       <div>
                         <div className="font-extrabold text-white text-[11px]">{m.nama}</div>
                         <div className="text-[10px] text-slate-400 font-mono">
-                          {m.nomorAnggota} • KCP {m.wilayah}
+                          {m.nomorRekening || m.nomorAnggota} • KCP {m.wilayah}
                         </div>
                         <div className="text-[10px] text-amber-300/90 font-medium mt-0.5">
                           Ekuivalen: {Math.floor((m.saldoPokok || 0) / (state.profile?.pembagianPokokHarian || 1000))} Hari Pokok Terkumpul

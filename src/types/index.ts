@@ -139,8 +139,8 @@ export interface AdminUser {
 
 export interface MemberUser {
   id: string;
-  nomorAnggota: string; // e.g. HWS-CKR-2026-001
-  nomorRekening: string; // 10 digit, e.g. 7729666666
+  nomorAnggota: string; // Disamakan otoritatif dengan nomorRekening (KV + DD + HP2 + YY + 770..)
+  nomorRekening: string; // Rekening tunggal anggota: KW(2) + DD(2) + HP2(2) + YY(2) + Urutan(>=770)
   nama: string;
   nik: string;
   whatsapp: string;
@@ -381,7 +381,8 @@ export interface AppState {
     pemasukan: string[];
     pengeluaran: string[];
   };
-  lastRunningNumber: number; // untuk 5 digit rek (dimulai dari 66666)
+  lastRunningNumber: number; // Urutan rekening tertinggi (mulai dari 769 -> pertama 770)
+  accountNumberSchemaVersion?: number;
   serverSyncStatus: {
     online: boolean;
     lastSynced: string;
@@ -398,8 +399,8 @@ export interface AppState {
   deletedAdminIds?: string[];
   deletedKasIds?: string[];
   deletedSetoranIds?: string[];
-  usedAccountNumbers?: string[]; // Rekening yang pernah dipakai tidak dapat digunakan kembali
-  usedMemberNumbers?: string[];  // Nomor anggota yang pernah dipakai tidak dapat digunakan kembali meskipun anggota sudah dihapus
+  usedAccountNumbers?: string[]; // Rekening yang pernah dipakai tidak dapat digunakan kembali (termasuk anggota dihapus)
+  usedMemberNumbers?: string[];  // Disamakan dengan usedAccountNumbers untuk kompatibilitas sinkronisasi
 }
 
 

@@ -101,6 +101,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         tx.tanggal?.toLowerCase().includes(q) ||
         tx.nominal?.toString().includes(q) ||
         mem?.nama?.toLowerCase().includes(q) ||
+        mem?.nomorRekening?.toLowerCase().includes(q) ||
         mem?.nomorAnggota?.toLowerCase().includes(q)
       );
     });
@@ -208,7 +209,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
 
     const selectedMemberObj = state.members.find((m) => m.id === selectedMemberId);
     const targetLabel = selectedMemberId !== 'semua' && selectedMemberObj
-      ? `${selectedMemberObj.nama} (${selectedMemberObj.nomorAnggota})`
+      ? `${selectedMemberObj.nama} (${selectedMemberObj.nomorRekening || selectedMemberObj.nomorAnggota})`
       : selectedWilayah !== 'semua'
       ? `Semua Anggota di Wilayah ${selectedWilayah}`
       : 'Seluruh Anggota di Semua Wilayah';
@@ -508,7 +509,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                 </option>
                 {availableMembers.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.nama} - {m.nomorAnggota} ({m.wilayah})
+                    {m.nama} - {m.nomorRekening || m.nomorAnggota} ({m.wilayah})
                   </option>
                 ))}
               </select>

@@ -124,7 +124,8 @@ const getInitialState = () => ({
     pemasukan: ['Sedekah Subuh', 'Sedekah Jumat', 'Sedekah Umum', 'Pinjaman Kas', 'Pengembalian Kas', 'Penerimaan Sumbangan / Donasi', 'Pendapatan Jasa Koperasi', 'Pindah Kas Tutup Akun', 'Investor Koperasi'],
     pengeluaran: ['Penyaluran Sedekah Subuh', 'Penyaluran Sedekah Jumat', 'Penyaluran Sedekah Umum', 'Pinjaman Kas', 'Pengembalian Buku Kas', 'Biaya Operasional & ATK', 'Sewa Kantor & Listrik', 'Honor Pengurus', 'Alat HWS Teknik'],
   },
-  lastRunningNumber: 66666,
+  lastRunningNumber: 769,
+  accountNumberSchemaVersion: 2,
   serverSyncStatus: {
     online: true,
     lastSynced: new Date().toISOString(),
@@ -309,8 +310,28 @@ function isBankRekPlaceholderServer(rek?: string): boolean {
   return !clean || clean === '-' || /^0+$/.test(clean) || clean.length < 5;
 }
 
+function isValidUnifiedAccountV2Server(no?: string): boolean {
+  const clean = String(no || '').trim();
+  if (!/^(7[2-9])\d{6}(\d{3,})$/.test(clean)) return false;
+  const dd = parseInt(clean.slice(2, 4), 10);
+  if (dd < 1 || dd > 31) return false;
+  const seqStr = clean.slice(8);
+  const seq = parseInt(seqStr, 10);
+  return Number.isFinite(seq) && seq >= 770 && String(seq) === seqStr;
+}
+
+function extractUnifiedSeqServer(no?: string): number | null {
+  const clean = String(no || '').trim();
+  if (isValidUnifiedAccountV2Server(clean)) {
+    return parseInt(clean.slice(8), 10);
+  }
+  return null;
+}
+
 function extractMemberSuffixSeqServer(nomorAnggota?: string): number | null {
   const clean = String(nomorAnggota || '').trim();
+  const v2Seq = extractUnifiedSeqServer(clean);
+  if (v2Seq !== null) return v2Seq;
   if (/^115\d{9,}$/.test(clean)) {
     const seq = parseInt(clean.slice(9), 10);
     return Number.isFinite(seq) && seq > 0 ? seq : null;
@@ -318,37 +339,30 @@ function extractMemberSuffixSeqServer(nomorAnggota?: string): number | null {
   return null;
 }
 
-function sanitizeUsedMemberNumbersServer(usedList: any[], members: any[] = []): string[] {
-  const activeSet = new Set<string>();
+function getMemberSortSeqServer(m: any): number {
+  const rek = String(m?.nomorRekening || m?.nomorAnggota || '').trim();
+  const v2Seq = extractUnifiedSeqServer(rek);
+  if (v2Seq !== null) return v2Seq;
+  const no = String(m?.nomorAnggota || '').trim();
+  if (/^115\d{9,}$/.test(no)) return parseInt(no.slice(9), 10) || 0;
+  const match = rek.match(/(\d+)$/);
+  return match ? parseInt(match[1], 10) || 0 : 0;
+}
+
+function sanitizeUsedUnifiedNumbersServer(usedList: any[], members: any[] = []): string[] {
+  const result = new Set<string>();
   (members || []).forEach((m: any) => {
-    if (m?.nomorAnggota) activeSet.add(String(m.nomorAnggota).trim());
-    if (m?.legacyNomorAnggota) activeSet.add(String(m.legacyNomorAnggota).trim());
+    const r = String(m?.nomorRekening || '').trim();
+    const a = String(m?.nomorAnggota || '').trim();
+    if (isValidUnifiedAccountV2Server(r)) result.add(r);
+    if (isValidUnifiedAccountV2Server(a)) result.add(a);
   });
-
-  const raw = (Array.isArray(usedList) ? usedList : [])
-    .map((n) => String(n || '').trim())
-    .filter(Boolean);
-
-  const hasRunawayBloat =
-    raw.length > 300 || raw.some((n) => /^115\d{10,}$/.test(n));
-
-  const result = new Set<string>(activeSet);
-  for (const n of raw) {
-    if (activeSet.has(n)) {
-      result.add(n);
-      continue;
-    }
-    if (/^HWS-[A-Z]+-\d{4}-\d+$/.test(n)) {
-      result.add(n);
-      continue;
-    }
-    if (/^115\d{9}$/.test(n)) {
-      if (hasRunawayBloat && n.startsWith('115137726')) {
-        continue;
-      }
+  (Array.isArray(usedList) ? usedList : []).forEach((item: any) => {
+    const n = String(item || '').trim();
+    if (isValidUnifiedAccountV2Server(n)) {
       result.add(n);
     }
-  }
+  });
   return Array.from(result);
 }
 
@@ -417,7 +431,7 @@ function validateMemberBiodataServer(
 
   const dupName = others.find((m: any) => normalizeMemberNameServer(m.nama) === cleanName);
   if (dupName) {
-    return `Nama anggota "${candidate.nama}" sudah terdaftar (${dupName.nomorAnggota}). Nama anggota tidak boleh sama dengan anggota lain.`;
+    return `Nama anggota "${candidate.nama}" sudah terdaftar (${dupName.nomorRekening || dupName.nomorAnggota}). Nama anggota tidak boleh sama dengan anggota lain.`;
   }
 
   const dupNik = others.find((m: any) => m.nik && normalizeNikServer(m.nik) === cleanNik);
@@ -466,7 +480,8 @@ function deduplicateMembersServer(members: any[], deletedIds: string[] = []): an
     if (m.whatsapp && String(m.whatsapp).replace(/\D/g, '').length >= 8) s += 2;
     if (m.email && String(m.email).trim()) s += 2;
     if (m.bankPribadi?.nomorRekening && !isBankRekPlaceholderServer(m.bankPribadi.nomorRekening)) s += 2;
-    if (/^115\d{9}$/.test(String(m.nomorAnggota || ''))) s += 1;
+    if (isValidUnifiedAccountV2Server(m.nomorRekening)) s += 2;
+    else if (/^115\d{9}$/.test(String(m.nomorAnggota || ''))) s += 1;
     return s;
   };
 
@@ -535,16 +550,10 @@ function deduplicateMembersServer(members: any[], deletedIds: string[] = []): an
     result.push(m);
   }
 
-  const getMemberSeqNum = (nomorAnggota?: string) => {
-    const clean = String(nomorAnggota || '').trim();
-    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
-    const match = clean.match(/(\d+)$/);
-    return match ? parseInt(match[1], 10) || 0 : 0;
-  };
   result.sort((a, b) => {
-    const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
+    const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
     if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+    return String(b.nomorRekening || b.nomorAnggota || '').localeCompare(String(a.nomorRekening || a.nomorAnggota || ''));
   });
 
   return result;
@@ -592,20 +601,26 @@ function mergeServerState(current: any, incoming: any): any {
           bySameId.whatsapp.replace(/\D/g, '') === m.whatsapp.replace(/\D/g, '')));
 
     if (bySameId && isSamePersonOnId) {
-      // Exact ID + same person match (never let empty incoming strings wipe existing inputted fields)
+      // Exact ID + same person match (never let legacy cache overwrite unified v2 number)
+      const existingRekValid = isValidUnifiedAccountV2Server(bySameId.nomorRekening);
+      const incomingRekValid = isValidUnifiedAccountV2Server(m.nomorRekening);
+      const chosenRek = existingRekValid
+        ? bySameId.nomorRekening
+        : incomingRekValid
+        ? m.nomorRekening
+        : m.nomorRekening || bySameId.nomorRekening || '';
+      const chosenNoAng =
+        existingRekValid || incomingRekValid
+          ? chosenRek
+          : m.nomorAnggota || bySameId.nomorAnggota || chosenRek;
+
       memberMap.set(m.id, {
         ...bySameId,
         ...m,
         id: bySameId.id,
         nama: m.nama && String(m.nama).trim() ? m.nama : bySameId.nama,
-        nomorAnggota:
-          /^115\d{9}$/.test(String(bySameId.nomorAnggota || ''))
-            ? bySameId.nomorAnggota
-            : m.nomorAnggota || bySameId.nomorAnggota,
-        nomorRekening:
-          /^\d{10}$/.test(String(bySameId.nomorRekening || ''))
-            ? bySameId.nomorRekening
-            : m.nomorRekening || bySameId.nomorRekening,
+        nomorAnggota: chosenNoAng,
+        nomorRekening: chosenRek,
         nik: m.nik || bySameId.nik || '',
         whatsapp: m.whatsapp || bySameId.whatsapp || '',
         email: m.email || bySameId.email || '',
@@ -633,9 +648,15 @@ function mergeServerState(current: any, incoming: any): any {
     // Check if this person already exists under another ID (e.g., mem-1791894382052 Fauji vs mem-fauji-anwar-1791894382052, or -dup- artifact)
     const identityMatch = findMemberByIdentity(m);
     if (identityMatch) {
-      // Preserve canonical record fields; only enrich missing fields so stale caches never overwrite valid data
+      // Preserve canonical record fields; prefer unified v2 numbering if present
+      const idRekValid = isValidUnifiedAccountV2Server(identityMatch.nomorRekening);
+      const inRekValid = isValidUnifiedAccountV2Server(m.nomorRekening);
+      const chosenRek = idRekValid ? identityMatch.nomorRekening : inRekValid ? m.nomorRekening : identityMatch.nomorRekening;
+      const chosenNo = idRekValid || inRekValid ? chosenRek : identityMatch.nomorAnggota;
       memberMap.set(identityMatch.id, {
         ...identityMatch,
+        nomorRekening: chosenRek,
+        nomorAnggota: chosenNo,
         nik: identityMatch.nik || m.nik || '',
         whatsapp: identityMatch.whatsapp || m.whatsapp || '',
         email: identityMatch.email || m.email || '',
@@ -886,20 +907,31 @@ function mergeServerState(current: any, incoming: any): any {
       : current.pengaturanBerbagi?.qrisImageUrl,
   };
 
-  const allUsedAccountNumbers = new Set<string>([
-    ...(current.usedAccountNumbers || []),
-    ...(incoming.usedAccountNumbers || []),
-    ...mergedMembers.map((m: any) => m.nomorRekening).filter(Boolean),
-  ]);
+  const isSchemaV2 =
+    current.accountNumberSchemaVersion === 2 ||
+    incoming.accountNumberSchemaVersion === 2 ||
+    mergedMembers.some((m: any) => isValidUnifiedAccountV2Server(m?.nomorRekening));
 
-  const allUsedMemberNumbers = sanitizeUsedMemberNumbersServer(
+  const sanitizedUsedUnified = sanitizeUsedUnifiedNumbersServer(
     [
+      ...(current.usedAccountNumbers || []),
+      ...(incoming.usedAccountNumbers || []),
       ...(current.usedMemberNumbers || []),
       ...(incoming.usedMemberNumbers || []),
-      ...mergedMembers.map((m: any) => m.nomorAnggota).filter(Boolean),
+      ...mergedMembers.map((m: any) => m?.nomorRekening).filter(Boolean),
     ],
     mergedMembers
   );
+
+  let maxV2Seq = 769;
+  sanitizedUsedUnified.forEach((n) => {
+    const sq = extractUnifiedSeqServer(n);
+    if (sq !== null && sq > maxV2Seq) maxV2Seq = sq;
+  });
+  mergedMembers.forEach((m: any) => {
+    const sq = extractUnifiedSeqServer(m?.nomorRekening);
+    if (sq !== null && sq > maxV2Seq) maxV2Seq = sq;
+  });
 
   return {
     ...current,
@@ -912,8 +944,8 @@ function mergeServerState(current: any, incoming: any): any {
     deletedTransactionIds: mergedDeletedTxIds,
     deletedKasIds: mergedDeletedKasIds,
     deletedSetoranIds: mergedDeletedSetoranIds,
-    usedAccountNumbers: Array.from(allUsedAccountNumbers),
-    usedMemberNumbers: allUsedMemberNumbers,
+    usedAccountNumbers: sanitizedUsedUnified,
+    usedMemberNumbers: sanitizedUsedUnified,
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
@@ -923,7 +955,10 @@ function mergeServerState(current: any, incoming: any): any {
     sedekahList: Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
     pengaturanBerbagi,
     auditLogs: mergedAuditLogs.sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1)),
-    lastRunningNumber: Math.max(current.lastRunningNumber || 66666, incoming.lastRunningNumber || 66666),
+    accountNumberSchemaVersion: isSchemaV2 ? 2 : (current.accountNumberSchemaVersion || incoming.accountNumberSchemaVersion),
+    lastRunningNumber: isSchemaV2
+      ? maxV2Seq
+      : Math.max(current.lastRunningNumber || 769, incoming.lastRunningNumber || 769),
     serverSyncStatus: {
       online: true,
       lastSynced: new Date().toISOString(),
@@ -1033,7 +1068,8 @@ async function syncStateToFirestoreServer(state: any) {
       sedekahList: state.sedekahList || [],
       penyaluranList: state.penyaluranList || [],
       maintenanceLock: state.maintenanceLock || { isLocked: false },
-      lastRunningNumber: state.lastRunningNumber || 66666,
+      accountNumberSchemaVersion: state.accountNumberSchemaVersion || 2,
+      lastRunningNumber: state.lastRunningNumber || 769,
       deletedMemberIds: state.deletedMemberIds || [],
       deletedTransactionIds: state.deletedTransactionIds || [],
       deletedKasIds: state.deletedKasIds || [],
@@ -1208,7 +1244,8 @@ function buildStateSyncDigest(st: any): string {
       deletedTransactionIds: st.deletedTransactionIds || [],
       deletedKasIds: st.deletedKasIds || [],
       deletedSetoranIds: st.deletedSetoranIds || [],
-      lastRunningNumber: st.lastRunningNumber || 66666,
+      accountNumberSchemaVersion: st.accountNumberSchemaVersion || 2,
+      lastRunningNumber: st.lastRunningNumber || 769,
     });
   } catch {
     return String(Date.now());
@@ -1360,6 +1397,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       if (genSnap.exists()) {
         const genData = genSnap.data();
         if (genData) {
+          if (genData.accountNumberSchemaVersion) {
+            remoteSettingsPatch.accountNumberSchemaVersion = genData.accountNumberSchemaVersion;
+          }
           if (genData.lastRunningNumber) {
             remoteSettingsPatch.lastRunningNumber = genData.lastRunningNumber;
           }
@@ -1463,12 +1503,13 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
   }
 }
 
-// Authoritative Member Number & Account Number Reconciliation
+// Authoritative Unified Account & Member Numbering Reconciliation (V2)
 // Rules:
-// 1. Nomor anggota: 115 (depan) + 2 angka DD (tanggal mendaftar) + 2 angka KW (kode wilayah) + 2 angka YY (tahun) + 3 angka NNN (nomor anggota urut). E.g.: 115117726001
-// 2. Anti-Meniban: Nomor anggota & rekening tidak bisa saling meniban. Jika pernah dipakai, otomatis diganti nomor baru yang belum pernah dipakai.
-// 3. Rekening: 10 digit unik (KW + 3 digit HP + 5 digit running).
-// 4. Koreksi otomatis & sinkronisasikan anggota pending / legacy ke online database.
+// 1. Hanya ada satu nomor tunggal: No. Rekening = No. Anggota
+// 2. Format: KW(2) + DD(2) + HP2(2) + YY(2) + Urutan(dimulai dari 770 dan seterusnya)
+// 3. Urutkan dari 0 dan seterusnya (45 anggota -> 770..814), anti-reuse permanen termasuk anggota terhapus
+// 4. Anggota lama di bawah dan baru mendaftar di atas (sort descending)
+// 5. Auto-koreksi otomatis apabila terdapat nomor ganda / tidak sesuai format
 function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: number } {
   if (!state || typeof state !== 'object' || !Array.isArray(state.members)) {
     return { state, migratedCount: 0 };
@@ -1477,153 +1518,210 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
   const deletedMemSet = new Set<string>(state.deletedMemberIds || []);
   state.members = deduplicateMembersServer(state.members, state.deletedMemberIds || []);
 
-  // Sort members chronologically: earlier/senior members maintain their numbers first, newly registered members evaluated later
-  const getScore = (m: any) => {
-    const idTs = String(m.id || '').match(/(\d{10,})/);
-    if (idTs) return Number(idTs[1]);
-    if (m.createdAt) return new Date(m.createdAt).getTime();
-    if (m.terdaftarSejak) return new Date(m.terdaftarSejak).getTime();
-    return 0;
+  const syncRefsForMember = (m: any) => {
+    (state.setoranList || []).forEach((s: any) => {
+      if (s && s.memberId === m.id) {
+        s.memberNomorAnggota = m.nomorRekening;
+        s.memberRekening = m.nomorRekening;
+      }
+    });
+    (state.memberTransactions || []).forEach((tx: any) => {
+      if (tx && tx.memberId === m.id) {
+        tx.nomorAnggota = m.nomorRekening;
+        tx.nomorRekening = m.nomorRekening;
+      }
+    });
+    (state.sedekahList || []).forEach((sdk: any) => {
+      if (sdk && sdk.donaturMemberId === m.id) {
+        sdk.donaturNomorAnggota = m.nomorRekening;
+        sdk.donaturRekening = m.nomorRekening;
+      }
+    });
   };
-  state.members.sort((a: any, b: any) => getScore(a) - getScore(b));
 
-  const assignedMemberNos = new Set<string>();
-  const assignedSuffixes = new Set<number>();
-  const assignedAccountNos = new Set<string>();
-  const sanitizedUsedList = sanitizeUsedMemberNumbersServer(state.usedMemberNumbers || [], state.members || []);
-  const usedNoSet = new Set<string>(sanitizedUsedList);
-  const usedRekSet = new Set<string>(state.usedAccountNumbers || []);
-  const needsMemberNoIds = new Set<string>();
+  let migratedCount = 0;
 
-  // Pass 1: Preserve existing valid 115... numbers chronologically as long as neither full number nor 3-digit suffix collides
-  state.members.forEach((m: any) => {
-    if (!m || !m.id || deletedMemSet.has(m.id)) return;
-    const oldNo = m.nomorAnggota ? String(m.nomorAnggota).trim() : '';
-    const isValid115 = /^115\d{9}$/.test(oldNo);
-    const suffixSeq = extractMemberSuffixSeqServer(oldNo);
-    const isDuplicateNo = Boolean(oldNo && assignedMemberNos.has(oldNo));
-    const isDuplicateSuffix = Boolean(suffixSeq !== null && assignedSuffixes.has(suffixSeq));
+  // Case A: Initial clean migration from legacy numbering (reset legacy counters cleanly starting at 770)
+  const noMemberOnV2Yet =
+    state.accountNumberSchemaVersion !== 2 &&
+    state.members.every((m: any) => !isValidUnifiedAccountV2Server(m?.nomorRekening));
 
-    if (isValid115 && !isDuplicateNo && !isDuplicateSuffix && suffixSeq !== null) {
-      assignedMemberNos.add(oldNo);
-      assignedSuffixes.add(suffixSeq);
-      usedNoSet.add(oldNo);
-    } else {
-      needsMemberNoIds.add(m.id);
+  if (noMemberOnV2Yet) {
+    const getLegacyOrderScore = (m: any) => {
+      const no = String(m?.nomorAnggota || m?.legacyNomorAnggota || '').trim();
+      if (/^115\d{9,}$/.test(no)) {
+        const seq = parseInt(no.slice(9), 10);
+        if (Number.isFinite(seq) && seq > 0) return seq;
+      }
+      const idTs = String(m?.id || '').match(/(\d{10,})/);
+      if (idTs) return 1_000_000_000_000 + Number(idTs[1]);
+      if (m?.createdAt) return 1_000_000_000_000 + new Date(m.createdAt).getTime();
+      if (m?.terdaftarSejak) return 1_000_000_000_000 + new Date(m.terdaftarSejak).getTime();
+      return Number.MAX_SAFE_INTEGER;
+    };
+
+    const chronological = [...state.members].sort((a: any, b: any) => getLegacyOrderScore(a) - getLegacyOrderScore(b));
+    let seq = 769;
+    const assignedV2: string[] = [];
+
+    chronological.forEach((m: any) => {
+      if (!m || !m.id || deletedMemSet.has(m.id)) return;
+      seq++;
+      const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
+      const { dd, yy } = getDatePartsDdYyServer(m.terdaftarSejak);
+      const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+      const hp2 = cleanHp.slice(-2).padStart(2, '0');
+      const unifiedNo = `${kw}${dd}${hp2}${yy}${seq}`;
+
+      const prevNo = String(m.nomorAnggota || '').trim();
+      if (prevNo && !m.legacyNomorAnggota && !isValidUnifiedAccountV2Server(prevNo)) {
+        m.legacyNomorAnggota = prevNo;
+      }
+      m.nomorRekening = unifiedNo;
+      m.nomorAnggota = unifiedNo;
+      assignedV2.push(unifiedNo);
+      syncRefsForMember(m);
+      migratedCount++;
+    });
+
+    state.accountNumberSchemaVersion = 2;
+    state.lastRunningNumber = Math.max(769, seq);
+    state.usedAccountNumbers = assignedV2;
+    state.usedMemberNumbers = assignedV2;
+    state.members.sort((a: any, b: any) => getMemberSortSeqServer(b) - getMemberSortSeqServer(a));
+    return { state, migratedCount };
+  }
+
+  // Case B: Schema V2 Active -> Sanitize used lists & auto-correct any duplicates/retired reuse/non-v2 newcomers
+  const activeV2Set = new Set<string>(
+    state.members
+      .map((m: any) => String(m?.nomorRekening || '').trim())
+      .filter((r: string) => isValidUnifiedAccountV2Server(r))
+  );
+  const sanitizedUsedList = sanitizeUsedUnifiedNumbersServer(
+    [...(state.usedAccountNumbers || []), ...(state.usedMemberNumbers || [])],
+    state.members || []
+  );
+
+  // Numbers in sanitizedUsedList NOT belonging to any active member belong to deleted/former members -> strictly locked!
+  const retiredNos = new Set<string>();
+  const retiredSeqs = new Set<number>();
+  sanitizedUsedList.forEach((n) => {
+    if (!activeV2Set.has(n)) {
+      retiredNos.add(n);
+      const sq = extractUnifiedSeqServer(n);
+      if (sq !== null) retiredSeqs.add(sq);
     }
   });
 
-  // Also reserve trailing 3-digit suffixes from previously used (e.g., deleted) 115... member numbers
-  const reservedSuffixes = new Set<number>(assignedSuffixes);
-  sanitizedUsedList.forEach((n) => {
-    const seq = extractMemberSuffixSeqServer(n);
-    if (seq !== null) reservedSuffixes.add(seq);
+  if (
+    sanitizedUsedList.length !== (state.usedAccountNumbers || []).length ||
+    sanitizedUsedList.length !== (state.usedMemberNumbers || []).length ||
+    state.accountNumberSchemaVersion !== 2
+  ) {
+    migratedCount++;
+  }
+
+  const getChronologicalScore = (m: any) => {
+    const v2Seq = extractUnifiedSeqServer(m?.nomorRekening);
+    if (v2Seq !== null) return v2Seq;
+    const idTs = String(m?.id || '').match(/(\d{10,})/);
+    if (idTs) return 1_000_000_000_000 + Number(idTs[1]);
+    if (m?.createdAt) return 1_000_000_000_000 + new Date(m.createdAt).getTime();
+    if (m?.terdaftarSejak) return 1_000_000_000_000 + new Date(m.terdaftarSejak).getTime();
+    return Number.MAX_SAFE_INTEGER;
+  };
+  state.members.sort((a: any, b: any) => getChronologicalScore(a) - getChronologicalScore(b));
+
+  const assignedNos = new Set<string>();
+  const assignedSeqs = new Set<number>();
+  const needsFixIds = new Set<string>();
+
+  state.members.forEach((m: any) => {
+    if (!m || !m.id || deletedMemSet.has(m.id)) return;
+    const rek = String(m.nomorRekening || '').trim();
+    const noAng = String(m.nomorAnggota || '').trim();
+    const seq = extractUnifiedSeqServer(rek);
+
+    if (
+      isValidUnifiedAccountV2Server(rek) &&
+      seq !== null &&
+      !assignedNos.has(rek) &&
+      !assignedSeqs.has(seq) &&
+      !retiredNos.has(rek) &&
+      !retiredSeqs.has(seq)
+    ) {
+      assignedNos.add(rek);
+      assignedSeqs.add(seq);
+      if (noAng !== rek) {
+        if (noAng && !m.legacyNomorAnggota && !isValidUnifiedAccountV2Server(noAng)) {
+          m.legacyNomorAnggota = noAng;
+        }
+        m.nomorAnggota = rek;
+        syncRefsForMember(m);
+        migratedCount++;
+      }
+    } else {
+      needsFixIds.add(m.id);
+    }
   });
 
-  let maxSeq = 0;
-  reservedSuffixes.forEach((s) => {
+  const usedNoSet = new Set<string>([...sanitizedUsedList, ...assignedNos]);
+  const usedSeqSet = new Set<number>([...assignedSeqs, ...retiredSeqs]);
+  sanitizedUsedList.forEach((n) => {
+    const sq = extractUnifiedSeqServer(n);
+    if (sq !== null) usedSeqSet.add(sq);
+  });
+
+  let maxSeq = 769;
+  usedSeqSet.forEach((s) => {
     if (s > maxSeq) maxSeq = s;
   });
 
-  let migratedCount = sanitizedUsedList.length !== (state.usedMemberNumbers || []).length ? 1 : 0;
-  let running = Math.max(state.lastRunningNumber || 66666, 66755);
-
-  // Pass 2: Assign unique non-colliding numbers (including unique last 3 digits) & unique accounts
   state.members.forEach((m: any) => {
-    if (!m || !m.id || deletedMemSet.has(m.id)) return;
+    if (!m || !m.id || deletedMemSet.has(m.id) || !needsFixIds.has(m.id)) return;
 
-    let memberNoChanged = false;
-    let rekChanged = false;
-    const oldNo = m.nomorAnggota ? String(m.nomorAnggota).trim() : '';
-
-    if (needsMemberNoIds.has(m.id)) {
-      if (oldNo && !m.legacyNomorAnggota) {
-        m.legacyNomorAnggota = oldNo;
-      }
-
-      const { dd, yy } = getDatePartsDdYyServer(m.terdaftarSejak);
-      const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
-
-      let seq = Math.max(maxSeq + 1, 1);
-      let candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
-      while (assignedMemberNos.has(candidate) || usedNoSet.has(candidate) || reservedSuffixes.has(seq)) {
-        seq++;
-        candidate = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
-      }
-
-      m.nomorAnggota = candidate;
-      maxSeq = Math.max(maxSeq, seq);
-      assignedMemberNos.add(candidate);
-      reservedSuffixes.add(seq);
-      usedNoSet.add(candidate);
-      memberNoChanged = true;
-      migratedCount++;
+    const prevRek = String(m.nomorRekening || '').trim();
+    const prevNo = String(m.nomorAnggota || '').trim();
+    if (prevNo && !m.legacyNomorAnggota && !isValidUnifiedAccountV2Server(prevNo)) {
+      m.legacyNomorAnggota = prevNo;
+    } else if (prevRek && !m.legacyNomorAnggota && !isValidUnifiedAccountV2Server(prevRek)) {
+      m.legacyNomorAnggota = prevRek;
     }
 
-    // Ensure unique 10-digit account number (ganti nomer rekening yang baru mendaftar jika dobel)
-    const oldRek = m.nomorRekening ? String(m.nomorRekening).trim() : '';
-    const cleanHp = m.whatsapp ? String(m.whatsapp).replace(/\D/g, '') : '';
-    const hp3 = cleanHp.slice(-3).padStart(3, '0');
     const kw = WILAYAH_CODE_MAP[m.wilayah] || '77';
+    const { dd, yy } = getDatePartsDdYyServer(m.terdaftarSejak);
+    const cleanHp = String(m.whatsapp || '').replace(/\D/g, '');
+    const hp2 = cleanHp.slice(-2).padStart(2, '0');
 
-    const isDupRek = !oldRek || !/^\d{10}$/.test(oldRek) || assignedAccountNos.has(oldRek);
-    if (isDupRek) {
-      running++;
-      let candidateRek = `${kw}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
-      while (assignedAccountNos.has(candidateRek) || usedRekSet.has(candidateRek)) {
-        running++;
-        candidateRek = `${kw}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
-      }
-      m.nomorRekening = candidateRek;
-      rekChanged = true;
-      migratedCount++;
+    let seq = Math.max(maxSeq + 1, 770);
+    let candidate = `${kw}${dd}${hp2}${yy}${seq}`;
+    while (usedNoSet.has(candidate) || usedSeqSet.has(seq)) {
+      seq++;
+      candidate = `${kw}${dd}${hp2}${yy}${seq}`;
     }
-    assignedAccountNos.add(m.nomorRekening);
-    usedRekSet.add(m.nomorRekening);
 
-    if (memberNoChanged || rekChanged) {
-      // Update any setoran referencing this member
-      (state.setoranList || []).forEach((s: any) => {
-        if (s && s.memberId === m.id) {
-          s.memberNomorAnggota = m.nomorAnggota;
-          s.memberRekening = m.nomorRekening;
-        }
-      });
-      // Update any transactions referencing this member
-      (state.memberTransactions || []).forEach((tx: any) => {
-        if (tx && tx.memberId === m.id) {
-          tx.nomorAnggota = m.nomorAnggota;
-        }
-      });
-      // Update any sedekah entries referencing this member
-      (state.sedekahList || []).forEach((sdk: any) => {
-        if (sdk && sdk.donaturMemberId === m.id) {
-          sdk.donaturNomorAnggota = m.nomorAnggota;
-          sdk.donaturRekening = m.nomorRekening;
-        }
-      });
-    }
+    maxSeq = Math.max(maxSeq, seq);
+    usedNoSet.add(candidate);
+    usedSeqSet.add(seq);
+    m.nomorRekening = candidate;
+    m.nomorAnggota = candidate;
+    syncRefsForMember(m);
+    migratedCount++;
   });
 
-  // Sort final active members from largest member number on top to smallest at bottom
-  const getMemberSeqNum = (nomorAnggota?: string) => {
-    const clean = String(nomorAnggota || '').trim();
-    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
-    const match = clean.match(/(\d+)$/);
-    return match ? parseInt(match[1], 10) || 0 : 0;
-  };
+  // Sort final active members from largest (newest) on top to smallest (oldest) at bottom
   state.members.sort((a: any, b: any) => {
-    const seqDiff = getMemberSeqNum(b.nomorAnggota) - getMemberSeqNum(a.nomorAnggota);
+    const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
     if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+    return String(b.nomorRekening || b.nomorAnggota || '').localeCompare(String(a.nomorRekening || a.nomorAnggota || ''));
   });
 
-  state.lastRunningNumber = running;
-  state.usedMemberNumbers = sanitizeUsedMemberNumbersServer(
-    Array.from(new Set([...usedNoSet, ...assignedMemberNos])),
-    state.members
-  );
-  state.usedAccountNumbers = Array.from(new Set([...usedRekSet, ...assignedAccountNos]));
+  const finalUsed = sanitizeUsedUnifiedNumbersServer(Array.from(usedNoSet), state.members);
+  state.accountNumberSchemaVersion = 2;
+  state.lastRunningNumber = maxSeq;
+  state.usedMemberNumbers = finalUsed;
+  state.usedAccountNumbers = finalUsed;
 
   return { state, migratedCount };
 }
@@ -1900,16 +1998,10 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     };
   });
 
-  const getMemberSeqNumReconcile = (nomorAnggota?: string) => {
-    const clean = String(nomorAnggota || '').trim();
-    if (/^115\d{9,}$/.test(clean)) return parseInt(clean.slice(9), 10) || 0;
-    const match = clean.match(/(\d+)$/);
-    return match ? parseInt(match[1], 10) || 0 : 0;
-  };
   state.members.sort((a: any, b: any) => {
-    const seqDiff = getMemberSeqNumReconcile(b.nomorAnggota) - getMemberSeqNumReconcile(a.nomorAnggota);
+    const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
     if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorAnggota || '').localeCompare(String(a.nomorAnggota || ''));
+    return String(b.nomorRekening || b.nomorAnggota || '').localeCompare(String(a.nomorRekening || a.nomorAnggota || ''));
   });
 
   state.memberTransactions = nextTxList.sort((a: any, b: any) =>
@@ -2150,7 +2242,7 @@ currentState = startupRecon.state;
 const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
 if (startupMemRecon.migratedCount > 0) {
-  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members to official 115... format.`);
+  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members to unified v2 account numbering (KW+DD+HP2+YY+770..).`);
   saveDatabase(currentState);
 }
 // Enforce 10-day chat retention on startup
@@ -3756,17 +3848,16 @@ async function startServer() {
       });
       currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s && s.memberId !== id);
 
-      // Permanently retain deleted member account number and member number (nomer rekening dan nomer anggota tidak dapat dipergunakan kembali meskipun sudah dihapus)
-      if (targetMem?.nomorRekening) {
+      // Permanently retain deleted member account number (nomor rekening / anggota tidak dapat dipergunakan kembali meskipun sudah dihapus)
+      const lockedAccNo = targetMem?.nomorRekening || targetMem?.nomorAnggota;
+      if (lockedAccNo) {
         currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
-        if (!currentState.usedAccountNumbers.includes(targetMem.nomorRekening)) {
-          currentState.usedAccountNumbers.push(targetMem.nomorRekening);
+        if (!currentState.usedAccountNumbers.includes(lockedAccNo)) {
+          currentState.usedAccountNumbers.push(lockedAccNo);
         }
-      }
-      if (targetMem?.nomorAnggota) {
         currentState.usedMemberNumbers = currentState.usedMemberNumbers || [];
-        if (!currentState.usedMemberNumbers.includes(targetMem.nomorAnggota)) {
-          currentState.usedMemberNumbers.push(targetMem.nomorAnggota);
+        if (!currentState.usedMemberNumbers.includes(lockedAccNo)) {
+          currentState.usedMemberNumbers.push(lockedAccNo);
         }
       }
 
@@ -3784,7 +3875,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Hapus Anggota Koperasi',
-        detail: `Menghapus anggota ${targetMem?.nama || id} (${targetMem?.nomorAnggota || ''}). Rekening dikunci, mutasi dibersihkan, dan saldo ${totalSaldo} disinkronkan ke Kas Koperasi`,
+        detail: `Menghapus anggota ${targetMem?.nama || id} (${lockedAccNo || ''}). Rekening dikunci permanen, mutasi dibersihkan, dan saldo ${totalSaldo} disinkronkan ke Kas Koperasi`,
         targetId: id,
       });
 
@@ -3841,13 +3932,14 @@ async function startServer() {
       if (existingIdx !== -1) {
         // UPDATE EXISTING MEMBER ONLY (Admin management) - NEVER OVERWRITE OTHER MEMBERS ("TIDAK MENIBAN")
         const existing = currentState.members[existingIdx];
+        const keptRek = existing.nomorRekening || member.nomorRekening || existing.nomorAnggota;
         finalMember = {
           ...existing,
           ...member,
           id: existing.id,
           nik: existing.nik || cleanNik,
-          nomorAnggota: existing.nomorAnggota || member.nomorAnggota,
-          nomorRekening: existing.nomorRekening || member.nomorRekening,
+          nomorRekening: keptRek,
+          nomorAnggota: keptRek,
           // Balance protection: preserve existing balances unless explicitly updated through financial operations
           saldoPokok: existing.saldoPokok !== undefined ? existing.saldoPokok : (Number(member.saldoPokok) || 0),
           saldoUmum: existing.saldoUmum !== undefined ? existing.saldoUmum : (Number(member.saldoUmum) || 0),
@@ -3867,93 +3959,64 @@ async function startServer() {
         currentState.members[existingIdx] = finalMember;
       } else {
         // BRAND NEW MEMBER REGISTRATION
+        // Ketentuan Nomor Rekening (= Nomor Anggota): KW(2) + DD(2) + HP2(2) + YY(2) + Urutan(mulai 770 dst)
+        // Anti-Reuse & Anti-Double: Nomor dan urutan yang pernah dipakai (termasuk anggota terhapus) TIDAK dapat dipakai kembali
         const cleanHp = member.whatsapp ? String(member.whatsapp).replace(/\D/g, '') : '';
-
-        // 2. Authoritative & Collision-Proof Nomor Anggota Generation (Ketentuan: 115 depan, 2 angka DD tanggal mendaftar, 2 angka KW kode wilayah, 2 angka YY tahun, 3 angka NNN nomer anggota)
-        // Nomor anggota & 3 digit paling akhir TIDAK BOLEH SAMA antar anggota dan tidak dapat digunakan kembali meskipun anggota sudah dihapus
-        const { dd, yy } = getDatePartsDdYyServer(member.terdaftarSejak);
+        const hp2 = cleanHp.slice(-2).padStart(2, '0');
+        const regDate = member.terdaftarSejak || new Date().toISOString().split('T')[0];
+        const { dd, yy } = getDatePartsDdYyServer(regDate);
         const kw = WILAYAH_CODE_MAP[member.wilayah] || '77';
-        const cleanedUsedNos = sanitizeUsedMemberNumbersServer(
-          currentState.usedMemberNumbers || [],
+
+        const cleanedUsedV2 = sanitizeUsedUnifiedNumbersServer(
+          [...(currentState.usedAccountNumbers || []), ...(currentState.usedMemberNumbers || [])],
           currentState.members || []
         );
-        const usedNoSet = new Set<string>([
-          ...cleanedUsedNos,
-          ...currentState.members.map((m: any) => m.nomorAnggota).filter(Boolean),
-          ...currentState.members.map((m: any) => m.legacyNomorAnggota).filter(Boolean),
+        const usedRekSet = new Set<string>([
+          ...cleanedUsedV2,
+          ...currentState.members.map((m: any) => m.nomorRekening).filter(Boolean),
         ]);
-
-        const usedSuffixes = new Set<number>();
-        currentState.members.forEach((m: any) => {
-          const seq = extractMemberSuffixSeqServer(m?.nomorAnggota);
-          if (seq !== null) usedSuffixes.add(seq);
-        });
-        cleanedUsedNos.forEach((n: string) => {
-          const seq = extractMemberSuffixSeqServer(n);
-          if (seq !== null) usedSuffixes.add(seq);
+        const usedSeqs = new Set<number>();
+        usedRekSet.forEach((n) => {
+          const sq = extractUnifiedSeqServer(n);
+          if (sq !== null) usedSeqs.add(sq);
         });
 
-        let maxSeq = 0;
-        usedSuffixes.forEach((s) => {
+        let maxSeq = 769;
+        usedSeqs.forEach((s) => {
           if (s > maxSeq) maxSeq = s;
         });
 
-        let candidateNo = String(member.nomorAnggota || '').trim();
-        const candidateSuffix = extractMemberSuffixSeqServer(candidateNo);
-        const isCandidateInvalidOrDup =
-          !candidateNo ||
-          !/^115\d{9}$/.test(candidateNo) ||
-          usedNoSet.has(candidateNo) ||
-          candidateSuffix === null ||
-          usedSuffixes.has(candidateSuffix);
+        let candidateRek = String(member.nomorRekening || '').trim();
+        const candidateSeq = extractUnifiedSeqServer(candidateRek);
+        const isCandidateInvalidOrUsed =
+          !isValidUnifiedAccountV2Server(candidateRek) ||
+          candidateSeq === null ||
+          usedRekSet.has(candidateRek) ||
+          usedSeqs.has(candidateSeq);
 
-        if (isCandidateInvalidOrDup) {
-          let seq = Math.max(maxSeq + 1, currentState.members.length + 1, 1);
-          candidateNo = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
-          while (usedNoSet.has(candidateNo) || usedSuffixes.has(seq)) {
-            seq++;
-            candidateNo = `115${dd}${kw}${yy}${String(seq).padStart(3, '0')}`;
+        let assignedSeq = candidateSeq !== null ? candidateSeq : maxSeq;
+        if (isCandidateInvalidOrUsed) {
+          assignedSeq = Math.max(maxSeq + 1, 770);
+          candidateRek = `${kw}${dd}${hp2}${yy}${assignedSeq}`;
+          while (usedRekSet.has(candidateRek) || usedSeqs.has(assignedSeq)) {
+            assignedSeq++;
+            candidateRek = `${kw}${dd}${hp2}${yy}${assignedSeq}`;
           }
         }
 
-        currentState.usedMemberNumbers = sanitizeUsedMemberNumbersServer(
-          [...cleanedUsedNos, candidateNo],
+        const updatedUsed = sanitizeUsedUnifiedNumbersServer(
+          [...cleanedUsedV2, candidateRek],
           currentState.members
         );
-
-        // 3. Authoritative & Unique 10-digit Nomor Rekening Generation (Anti-Reuse & Anti-Meniban)
-        // Nomor rekening yang pernah dipakai TIDAK DAPAT digunakan kembali meskipun anggota sudah dihapus
-        const kodeWilayah = WILAYAH_CODE_MAP[member.wilayah] || '77';
-        const hp3 = cleanHp.slice(-3).padStart(3, '0');
-        const usedRekSet = new Set<string>([
-          ...(currentState.usedAccountNumbers || []),
-          ...currentState.members.map((m: any) => m.nomorRekening).filter(Boolean),
-        ]);
-
-        let running = Math.max(
-          currentState.lastRunningNumber || 66666,
-          Number(nextRunningNumber) || 66666
-        );
-        let candidateRek = member.nomorRekening;
-        if (!candidateRek || usedRekSet.has(candidateRek)) {
-          running++;
-          candidateRek = `${kodeWilayah}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
-          while (usedRekSet.has(candidateRek)) {
-            running++;
-            candidateRek = `${kodeWilayah}${hp3}${String(running).slice(-5).padStart(5, '6')}`;
-          }
-        }
-
-        currentState.lastRunningNumber = running;
-        currentState.usedAccountNumbers = currentState.usedAccountNumbers || [];
-        if (!currentState.usedAccountNumbers.includes(candidateRek)) {
-          currentState.usedAccountNumbers.push(candidateRek);
-        }
+        currentState.accountNumberSchemaVersion = 2;
+        currentState.lastRunningNumber = Math.max(maxSeq, assignedSeq);
+        currentState.usedAccountNumbers = updatedUsed;
+        currentState.usedMemberNumbers = updatedUsed;
 
         finalMember = {
           ...member,
           id: member.id || `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-          nomorAnggota: candidateNo,
+          nomorAnggota: candidateRek,
           nomorRekening: candidateRek,
           nik: cleanNik,
           whatsapp: member.whatsapp ? String(member.whatsapp).trim() : '',
@@ -3964,11 +4027,12 @@ async function startServer() {
           saldoQurban: 0,
           totalSimpanan: 0,
           status: 'aktif',
-          terdaftarSejak: member.terdaftarSejak || new Date().toISOString().split('T')[0],
+          terdaftarSejak: regDate,
         };
         delete finalMember.biometricActive;
 
         currentState.members.push(finalMember);
+        currentState.members.sort((a: any, b: any) => getMemberSortSeqServer(b) - getMemberSortSeqServer(a));
       }
 
       // Remove from deletedMemberIds if previously deleted
@@ -3983,7 +4047,7 @@ async function startServer() {
         adminNama: adminName || finalMember.nama,
         adminRole: adminName ? 'admin_write' : 'member',
         action: adminName ? 'Tambah Anggota (Admin)' : 'Pendaftaran Anggota (Mandiri)',
-        detail: `Anggota ${finalMember.nama} (${finalMember.nomorAnggota}) tersimpan permanen di server realtime. Rekening: ${finalMember.nomorRekening}`,
+        detail: `Anggota ${finalMember.nama} (No. Rekening / Anggota: ${finalMember.nomorRekening}) tersimpan permanen di server realtime.`,
         targetId: finalMember.id,
       };
       currentState.auditLogs = currentState.auditLogs || [];
@@ -4014,6 +4078,7 @@ async function startServer() {
             setDoc(
               doc(db, 'settings', 'general'),
               {
+                accountNumberSchemaVersion: 2,
                 lastRunningNumber: currentState.lastRunningNumber,
                 usedMemberNumbers: currentState.usedMemberNumbers,
                 usedAccountNumbers: currentState.usedAccountNumbers,
@@ -4120,6 +4185,7 @@ async function startServer() {
           await setDoc(
             doc(db, 'settings', 'general'),
             {
+              accountNumberSchemaVersion: 2,
               lastRunningNumber: currentState.lastRunningNumber,
               usedMemberNumbers: currentState.usedMemberNumbers,
               usedAccountNumbers: currentState.usedAccountNumbers,

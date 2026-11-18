@@ -1,5 +1,5 @@
 // Service Worker for Koperasi HWS PWA (Android, iOS, Web, PC, AI Studio)
-const CACHE_NAME = 'koperasi-hws-v2.7.6';
+const CACHE_NAME = 'koperasi-hws-v2.7.7';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',

@@ -75,10 +75,7 @@ export const KtaDigitalModal: React.FC<KtaDigitalModalProps> = ({ member, onClos
                   {member.nama}
                 </div>
                 <div className="text-[10px] text-slate-300 font-mono">
-                  ID: <span className="text-amber-400 font-bold">{member.nomorAnggota}</span>
-                </div>
-                <div className="text-[10px] text-slate-300 font-mono">
-                  Rek: <span className="text-amber-300 font-bold">{member.nomorRekening}</span>
+                  No. Rek / Anggota: <span className="text-amber-400 font-bold">{member.nomorRekening || member.nomorAnggota}</span>
                 </div>
                 <div className="text-[9px] text-slate-400">
                   Terdaftar: {member.terdaftarSejak || '2026-02-01'}

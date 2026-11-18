@@ -472,12 +472,8 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
 
           <div className="border border-slate-900 rounded-xl p-3 text-xs leading-relaxed space-y-1">
             <div className="flex justify-between">
-              <span className="font-bold text-slate-700">NO. REKENING:</span>
-              <span className="font-extrabold font-mono text-slate-950">{member.nomorRekening}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="font-bold text-slate-700">NO. ANGGOTA:</span>
-              <span className="font-mono text-slate-800">{member.nomorAnggota}</span>
+              <span className="font-bold text-slate-700">NO. REK / ANGGOTA:</span>
+              <span className="font-extrabold font-mono text-slate-950">{member.nomorRekening || member.nomorAnggota}</span>
             </div>
             <div className="flex justify-between">
               <span className="font-bold text-slate-700">MATA UANG:</span>

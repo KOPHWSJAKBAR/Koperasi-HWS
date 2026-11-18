@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
-import { generateNomorRekening, generateNomorAnggota, createAuditLog, registerMemberOnline, validateMemberBiodata } from '../lib/storage';
+import { generateNomorRekening, createAuditLog, registerMemberOnline, validateMemberBiodata } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
 import {
   authenticateBiometric,
@@ -308,7 +308,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     );
 
     if (!member) {
-      setErrorMessage('Nomor Anggota / No. HP / Rekening tidak ditemukan.');
+      setErrorMessage('No. Rekening / Anggota atau No. HP tidak ditemukan.');
       return;
     }
 
@@ -766,27 +766,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsRegistering(true);
 
     try {
-      // Generate Nomor Rekening & Nomor Anggota proposal tanpa mengotori globalState sebelum konfirmasi server
+      const regDateStr = new Date().toISOString().split('T')[0];
+      // Generate No. Rekening = No. Anggota tunggal tanpa mengotori globalState sebelum konfirmasi server
       const { nomorRekening, nextRunningNumber } = generateNomorRekening(
         regForm.wilayah,
         regForm.whatsapp,
         state.lastRunningNumber,
         state.usedAccountNumbers,
         state.members,
-        false
-      );
-      const nomorAnggota = generateNomorAnggota(
-        regForm.wilayah,
-        state.members.length,
-        state.usedMemberNumbers,
-        state.members,
-        new Date().toISOString().split('T')[0],
-        false
+        false,
+        regDateStr
       );
 
       const candidateMember: MemberUser = {
         id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        nomorAnggota,
+        nomorAnggota: nomorRekening,
         nomorRekening,
         nama: regForm.nama.trim(),
         nik: regForm.nik.trim(),
@@ -818,7 +812,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         saldoUmum: 0,
         totalSimpanan: 0,
         status: 'aktif',
-        terdaftarSejak: new Date().toISOString().split('T')[0],
+        terdaftarSejak: regDateStr,
       };
 
       // Authoritative Realtime Online Registration (Anti-Meniban & Anti-Pendaftaran Berulang across all devices)
@@ -829,9 +823,10 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
 
       const confirmedMember = regResult.member;
+      const unifiedId = confirmedMember.nomorRekening || confirmedMember.nomorAnggota;
 
       // Clear registration state & close modal, then immediately direct user to Dashboard Anggota
-      setMemberIdentifier(confirmedMember.nomorAnggota);
+      setMemberIdentifier(unifiedId);
       setMemberPassword(regForm.password);
       setRegForm(INITIAL_REG_FORM);
       setRegSuccessMember(null);
@@ -839,11 +834,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
       if (state.maintenanceLock?.isLocked) {
         setSuccessMessage(
-          `✓ Pendaftaran berhasil! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}. Sistem sedang dalam mode maintenance.`
+          `✓ Pendaftaran berhasil! No. Rekening / Anggota: ${unifiedId}. Sistem sedang dalam mode maintenance.`
         );
       } else {
         setSuccessMessage(
-          `✓ Pendaftaran berhasil! No. Anggota: ${confirmedMember.nomorAnggota}, No. Rekening: ${confirmedMember.nomorRekening}.`
+          `✓ Pendaftaran berhasil! No. Rekening / Anggota: ${unifiedId}.`
         );
         onLoginMember(confirmedMember);
       }
@@ -1017,7 +1012,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   Masuk Aplikasi Anggota (Android & Web)
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Gunakan Nomor Anggota / No. HP dan Password terdaftar Anda.
+                  Gunakan No. Rekening / Anggota atau No. HP dan Password terdaftar Anda.
                 </p>
               </div>
 
@@ -1055,7 +1050,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Nomor Anggota / No. HP / No. Rekening
+                  No. Rekening / Anggota atau No. HP
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -1104,7 +1099,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   onClick={() => setShowForgotModal('id')}
                   className="text-amber-600 hover:text-amber-700 font-semibold"
                 >
-                  Lupa No. Anggota?
+                  Lupa No. Rekening?
                 </button>
                 <button
                   type="button"
@@ -1421,12 +1416,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <span className="font-extrabold text-white">{regSuccessMember.nama}</span>
                   </div>
                   <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
-                    <span className="text-slate-400">No. Anggota:</span>
-                    <span className="font-mono font-black text-amber-400 text-sm">{regSuccessMember.nomorAnggota}</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
-                    <span className="text-slate-400">No. Rekening Koperasi:</span>
-                    <span className="font-mono font-black text-white">{regSuccessMember.nomorRekening}</span>
+                    <span className="text-slate-400">No. Rekening / Anggota:</span>
+                    <span className="font-mono font-black text-amber-400 text-sm">{regSuccessMember.nomorRekening || regSuccessMember.nomorAnggota}</span>
                   </div>
                   <div className="flex justify-between items-center pb-2 border-b border-slate-700/60">
                     <span className="text-slate-400">Wilayah Keanggotaan:</span>
@@ -1874,7 +1865,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <div className="bg-[#0f172a] text-slate-100 border border-slate-700 w-full max-w-md rounded-2xl p-5 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-700">
               <h3 className="text-sm font-extrabold text-white">
-                {showForgotModal === 'id' ? 'Cari Nomor Anggota / Username' : 'Pemulihan Password'}
+                {showForgotModal === 'id' ? 'Cari No. Rekening / Username' : 'Pemulihan Password'}
               </h3>
               <button
                 type="button"
@@ -1913,14 +1904,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 <div className="p-3 bg-slate-800/90 rounded-xl border border-slate-700 text-xs space-y-1">
                   <div className="text-emerald-400 font-bold">✓ Akun Ditemukan:</div>
                   <div>Nama: <b>{foundUser.nama}</b></div>
-                  {foundUser.nomorAnggota && <div>Nomor Anggota: <b className="text-amber-400 font-mono">{foundUser.nomorAnggota}</b></div>}
-                  {foundUser.nomorRekening && <div>No. Rekening Koperasi: <b className="text-amber-400 font-mono">{foundUser.nomorRekening}</b></div>}
+                  {(foundUser.nomorRekening || foundUser.nomorAnggota) && <div>No. Rekening / Anggota: <b className="text-amber-400 font-mono">{foundUser.nomorRekening || foundUser.nomorAnggota}</b></div>}
                   {foundUser.username && <div>Username: <b className="text-amber-400 font-mono">{foundUser.username}</b></div>}
                 </div>
                 <button
                   type="button"
                   onClick={() => {
-                    if (foundUser.nomorAnggota) setMemberIdentifier(foundUser.nomorAnggota);
+                    if (foundUser.nomorRekening || foundUser.nomorAnggota) setMemberIdentifier(foundUser.nomorRekening || foundUser.nomorAnggota);
                     if (foundUser.username) setAdminUsername(foundUser.username);
                     setShowForgotModal(null);
                     setFoundUser(null);
@@ -2150,7 +2140,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer border border-slate-700 hover:border-amber-500/50"
               >
                 <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                <span>Masuk dengan Nomor Anggota / Rekening + Password (Fallback)</span>
+                <span>Masuk dengan No. Rekening + Password (Fallback)</span>
               </button>
 
               <div className="flex items-center justify-between text-[11px] px-1">
