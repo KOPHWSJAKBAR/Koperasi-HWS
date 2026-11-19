@@ -130,6 +130,33 @@ let activeOnlineCheckPromise: Promise<boolean> | null = null;
 let lastOnlineCheckTime = 0;
 let lastOnlineCheckResult = true;
 
+let hasTestedStartupConnection = false;
+
+export async function testFirestoreConnection(): Promise<boolean> {
+  if (hasTestedStartupConnection) return lastOnlineCheckResult;
+  hasTestedStartupConnection = true;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    lastOnlineCheckResult = false;
+    return false;
+  }
+  try {
+    await Promise.race([
+      getDocFromServer(doc(db, 'koperasi_state', 'main_database')),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+    ]);
+    lastOnlineCheckTime = Date.now();
+    lastOnlineCheckResult = true;
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore client is offline; waiting for network reconnection.');
+    }
+    lastOnlineCheckTime = Date.now();
+    lastOnlineCheckResult = typeof navigator !== 'undefined' ? navigator.onLine : false;
+    return lastOnlineCheckResult;
+  }
+}
+
 // Passive server reachability check: NEVER invokes enableNetwork(db) or disableNetwork(db),
 // because mutating network state mid-stream triggers PersistentWriteStream.onNext assertion failures.
 export async function ensureFirestoreOnline(): Promise<boolean> {
@@ -210,6 +237,7 @@ export default {
   getFirebaseStorage,
   getFirebaseAnalyticsSafe,
   logAnalyticsEvent,
+  testFirestoreConnection,
   ensureFirestoreOnline,
   installFirestoreSystemErrorGuard,
 };

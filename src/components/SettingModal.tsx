@@ -167,10 +167,18 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         const res = await fetch('/api/presence');
         if (res.ok && isMounted) {
           const data = await res.json();
+          const rawDevices = Array.isArray(data.devices)
+            ? data.devices
+            : Array.isArray(data.onlineUsers)
+            ? data.onlineUsers
+            : undefined;
           setRealtimeAnalytics((prev) => ({
             ...prev,
-            onlineCount: Math.max(1, data.onlineCount || (data.devices?.length ?? 1)),
-            devices: Array.isArray(data.devices) ? data.devices : prev.devices,
+            onlineCount: Math.max(
+              1,
+              data.totalConnectedDevices || data.onlineCount || (rawDevices?.length ?? 1)
+            ),
+            devices: rawDevices || prev.devices,
           }));
         }
       } catch {}

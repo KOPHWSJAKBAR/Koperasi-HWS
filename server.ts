@@ -811,12 +811,24 @@ function mergeServerState(current: any, incoming: any): any {
   const kasMap = new Map<string, any>();
   (current.kasList || []).forEach((k: any) => {
     if (k && k.id && !allDeletedKasIds.has(k.id)) {
-      kasMap.set(k.id, k);
+      kasMap.set(k.id, { ...k });
     }
   });
   (incoming.kasList || []).forEach((k: any) => {
     if (k && k.id && !allDeletedKasIds.has(k.id)) {
-      kasMap.set(k.id, k);
+      const existing = kasMap.get(k.id);
+      if (!existing) {
+        kasMap.set(k.id, k);
+      } else {
+        const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
+        const finalStatus = isTerminal ? existing.status : (k.status || existing.status);
+        kasMap.set(k.id, {
+          ...existing,
+          ...k,
+          status: finalStatus,
+          approvedBy: existing.approvedBy || k.approvedBy,
+        });
+      }
     }
   });
   const mergedKasList = Array.from(kasMap.values());
@@ -921,10 +933,19 @@ function mergeServerState(current: any, incoming: any): any {
   const pengaturanBerbagi = {
     ...current.pengaturanBerbagi,
     ...(incoming.pengaturanBerbagi || {}),
-    qrisImageUrl: incoming.pengaturanBerbagi?.qrisImageUrl !== undefined
-      ? incoming.pengaturanBerbagi.qrisImageUrl
-      : current.pengaturanBerbagi?.qrisImageUrl,
+    qrisImageUrl: incoming.pengaturanBerbagi?.qrisImageUrl || current.pengaturanBerbagi?.qrisImageUrl,
   };
+
+  const mergedCategoriesKas =
+    incoming.categoriesKasKoperasi &&
+    (Array.isArray(incoming.categoriesKasKoperasi.pemasukan) || Array.isArray(incoming.categoriesKasKoperasi.pengeluaran))
+      ? incoming.categoriesKasKoperasi
+      : current.categoriesKasKoperasi;
+
+  const mergedMaintenanceLock =
+    incoming.maintenanceLock && typeof incoming.maintenanceLock === 'object'
+      ? incoming.maintenanceLock
+      : current.maintenanceLock || { isLocked: false };
 
   const isSchemaV2 =
     current.accountNumberSchemaVersion === 2 ||
@@ -973,6 +994,8 @@ function mergeServerState(current: any, incoming: any): any {
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
     pengaturanBerbagi,
+    categoriesKasKoperasi: mergedCategoriesKas,
+    maintenanceLock: mergedMaintenanceLock,
     auditLogs: mergedAuditLogs.sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1)),
     accountNumberSchemaVersion: isSchemaV2 ? 2 : (current.accountNumberSchemaVersion || incoming.accountNumberSchemaVersion),
     lastRunningNumber: isSchemaV2
@@ -1029,162 +1052,368 @@ function broadcastEvent(type: string, payload: any) {
 }
 
 // Server-Side Realtime Cloud Firestore Synchronizer (Triple Redundancy Realtime Database)
+const SERVER_INSTANCE_ID = `srv-${process.pid}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 let serverFirestoreInstance: any = null;
 let serverFirestoreMethods: any = null;
+const serverFirestoreHashMap = new Map<string, string>();
+let isServerFirestoreSyncRunning = false;
+let queuedServerFirestoreSyncState: any = null;
+let lastAppliedFirestoreGeneralUpdatedAt = '';
+let isPullFromFirestoreRunning = false;
+let pullFromFirestoreQueued = false;
+let serverFirestoreWatchersInitialized = false;
+let serverFirestorePullTimer: any = null;
 
-async function syncStateToFirestoreServer(state: any) {
-  try {
-    if (!serverFirestoreInstance || !serverFirestoreMethods) {
-      const { initializeApp, getApps } = await import('firebase/app');
-      const { getFirestore, doc, setDoc, deleteDoc } = await import('firebase/firestore');
-      const configPath = path.join(__dirname, 'firebase-applet-config.json');
-      if (fs.existsSync(configPath)) {
-        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-        const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
-        serverFirestoreInstance = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
-        serverFirestoreMethods = { doc, setDoc, deleteDoc };
-      }
+function sanitizeServerDocForFirestore(data: any): any {
+  if (data === null || data === undefined) return null;
+  if (typeof data !== 'object') return data;
+  if (Array.isArray(data)) {
+    return data.map((v) => sanitizeServerDocForFirestore(v)).filter((v) => v !== undefined);
+  }
+  const clean: Record<string, any> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v !== undefined) {
+      clean[k] = sanitizeServerDocForFirestore(v);
     }
-    if (!serverFirestoreInstance || !serverFirestoreMethods) return;
+  }
+  return clean;
+}
 
-    const { doc, setDoc, deleteDoc } = serverFirestoreMethods;
-    const now = new Date().toISOString();
+function buildGeneralCorePayloadServer(state: any) {
+  return sanitizeServerDocForFirestore({
+    id: 'general',
+    profile: state.profile || {},
+    categoriesKasKoperasi: state.categoriesKasKoperasi || {},
+    pengaturanBerbagi: state.pengaturanBerbagi || {},
+    sedekahList: state.sedekahList || [],
+    penyaluranList: state.penyaluranList || [],
+    maintenanceLock: state.maintenanceLock || { isLocked: false },
+    accountNumberSchemaVersion: state.accountNumberSchemaVersion || 2,
+    lastRunningNumber: state.lastRunningNumber || 769,
+    deletedMemberIds: state.deletedMemberIds || [],
+    deletedTransactionIds: state.deletedTransactionIds || [],
+    deletedKasIds: state.deletedKasIds || [],
+    deletedSetoranIds: state.deletedSetoranIds || [],
+    usedAccountNumbers: state.usedAccountNumbers || [],
+    usedMemberNumbers: state.usedMemberNumbers || [],
+  });
+}
 
-    // 1. Synchronize Members to Firestore (Strictly strip biometricActive - User Req: biometric tidak tersimpan di database)
-    if (Array.isArray(state.members)) {
-      const cleanMembers = deduplicateMembersServer(state.members, state.deletedMemberIds || []);
-      for (const m of cleanMembers) {
-        if (m && m.id && !String(m.id).includes('-dup-')) {
-          const cleanMem = JSON.parse(JSON.stringify(m));
-          delete cleanMem.biometricActive;
-          await setDoc(doc(serverFirestoreInstance, 'members', m.id), cleanMem, { merge: true }).catch(() => {});
+function seedServerFirestoreHashMap(data: Partial<any>, forceOverwrite = false) {
+  if (!data || typeof data !== 'object') return;
+  try {
+    const setHash = (key: string, val: string) => {
+      if (forceOverwrite || !serverFirestoreHashMap.has(key)) {
+        serverFirestoreHashMap.set(key, val);
+      }
+    };
+    if (data.profile) {
+      setHash('settings/general', JSON.stringify(buildGeneralCorePayloadServer(data)));
+    }
+    if (Array.isArray(data.admins)) {
+      const adminsCore = sanitizeServerDocForFirestore({
+        id: 'admins',
+        admins: data.admins.map((a: any) => {
+          const clean = { ...a };
+          delete clean.biometricActive;
+          return clean;
+        }),
+        deletedAdminIds: data.deletedAdminIds || [],
+      });
+      setHash('settings/admins', JSON.stringify(adminsCore));
+      for (const a of data.admins) {
+        if (a && a.id) {
+          const cleanAdm = sanitizeServerDocForFirestore({ ...a });
+          delete cleanAdm.biometricActive;
+          setHash(`admins/${a.id}`, JSON.stringify(cleanAdm));
         }
       }
     }
-    if (Array.isArray(state.deletedMemberIds)) {
-      for (const delId of state.deletedMemberIds) {
-        await deleteDoc(doc(serverFirestoreInstance, 'members', delId)).catch(() => {});
+    if (Array.isArray(data.members)) {
+      for (const m of data.members) {
+        if (m && m.id && !String(m.id).includes('-dup-')) {
+          const cleanMem = sanitizeServerDocForFirestore({ ...m });
+          delete cleanMem.biometricActive;
+          setHash(`members/${m.id}`, JSON.stringify(cleanMem));
+        }
+      }
+    }
+    if (Array.isArray(data.kasList)) {
+      for (const k of data.kasList) {
+        if (k && k.id) setHash(`kas/${k.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...k })));
+      }
+    }
+    if (Array.isArray(data.setoranList)) {
+      for (const s of data.setoranList) {
+        if (s && s.id) setHash(`setoran/${s.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...s })));
+      }
+    }
+    if (Array.isArray(data.memberTransactions)) {
+      for (const tx of data.memberTransactions) {
+        if (tx && tx.id) setHash(`transactions/${tx.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...tx })));
+      }
+    }
+    if (Array.isArray(data.sedekahList)) {
+      for (const sd of data.sedekahList) {
+        if (sd && sd.id) setHash(`sedekah/${sd.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...sd })));
+      }
+    }
+    if (Array.isArray(data.chatMessages)) {
+      for (const c of data.chatMessages.slice(-100)) {
+        if (c && c.id) setHash(`chats/${c.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...c })));
+      }
+    }
+    if (Array.isArray(data.suratList)) {
+      for (const sr of data.suratList) {
+        if (sr && sr.id) setHash(`surat/${sr.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...sr })));
+      }
+    }
+  } catch {}
+}
+
+async function ensureServerFirestore() {
+  if (!serverFirestoreInstance || !serverFirestoreMethods) {
+    const { initializeApp, getApps } = await import('firebase/app');
+    const { getFirestore, doc, setDoc, deleteDoc, getDoc, getDocs, collection, onSnapshot, query, orderBy, limit } = await import('firebase/firestore');
+    const configPath = path.join(__dirname, 'firebase-applet-config.json');
+    if (fs.existsSync(configPath)) {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
+      serverFirestoreInstance = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+      serverFirestoreMethods = { doc, setDoc, deleteDoc, getDoc, getDocs, collection, onSnapshot, query, orderBy, limit };
+    }
+  }
+  return serverFirestoreInstance && serverFirestoreMethods ? { db: serverFirestoreInstance, ...serverFirestoreMethods } : null;
+}
+
+async function syncStateToFirestoreServer(state: any) {
+  if (isServerFirestoreSyncRunning) {
+    queuedServerFirestoreSyncState = state;
+    return;
+  }
+  isServerFirestoreSyncRunning = true;
+  try {
+    const fsCtx = await ensureServerFirestore();
+    if (!fsCtx) return;
+
+    const { db, doc, setDoc, deleteDoc } = fsCtx;
+    const now = new Date().toISOString();
+    let hasAnyDocWritten = false;
+
+    // 1. Synchronize Members to Firestore (hash-diffed, strictly strip biometricActive)
+    const cleanMembers = Array.isArray(state.members)
+      ? deduplicateMembersServer(state.members, state.deletedMemberIds || [])
+      : [];
+    for (const m of cleanMembers) {
+      if (m && m.id && !String(m.id).includes('-dup-')) {
+        const cleanMem = sanitizeServerDocForFirestore({ ...m });
+        delete cleanMem.biometricActive;
+        const mKey = `members/${m.id}`;
+        const mStr = JSON.stringify(cleanMem);
+        if (serverFirestoreHashMap.get(mKey) !== mStr) {
+          await setDoc(doc(db, 'members', m.id), cleanMem, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(mKey, mStr);
+          hasAnyDocWritten = true;
+        }
+      }
+    }
+    for (const delId of state.deletedMemberIds || []) {
+      const delKey = `deleted_members/${delId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'members', delId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
       }
     }
 
     // 2. Synchronize Admins to Firestore (Strictly strip biometricActive)
-    if (Array.isArray(state.admins)) {
-      for (const a of state.admins) {
-        if (a && a.id) {
-          const cleanAdm = JSON.parse(JSON.stringify(a));
-          delete cleanAdm.biometricActive;
-          await setDoc(doc(serverFirestoreInstance, 'admins', a.id), cleanAdm, { merge: true }).catch(() => {});
+    const cleanAdmins = Array.isArray(state.admins)
+      ? state.admins.map((a: any) => {
+          const clean = sanitizeServerDocForFirestore({ ...a });
+          delete clean.biometricActive;
+          return clean;
+        })
+      : [];
+    const adminsCore = sanitizeServerDocForFirestore({
+      id: 'admins',
+      admins: cleanAdmins,
+      deletedAdminIds: state.deletedAdminIds || [],
+    });
+    const adminsCoreStr = JSON.stringify(adminsCore);
+    if (serverFirestoreHashMap.get('settings/admins') !== adminsCoreStr) {
+      await setDoc(doc(db, 'settings', 'admins'), { ...adminsCore, updatedAt: now, updatedBy: SERVER_INSTANCE_ID }, { merge: true }).catch(() => {});
+      serverFirestoreHashMap.set('settings/admins', adminsCoreStr);
+      hasAnyDocWritten = true;
+    }
+    for (const a of cleanAdmins) {
+      if (a && a.id) {
+        const aKey = `admins/${a.id}`;
+        const aStr = JSON.stringify(a);
+        if (serverFirestoreHashMap.get(aKey) !== aStr) {
+          await setDoc(doc(db, 'admins', a.id), a, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(aKey, aStr);
+          hasAnyDocWritten = true;
         }
       }
     }
+    for (const delAdmId of state.deletedAdminIds || []) {
+      const delKey = `deleted_admins/${delAdmId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
+    }
 
-    // 3. Synchronize Settings General to Firestore (Includes permanently used account numbers & member numbers)
-    const generalData = {
-      id: 'general',
-      profile: state.profile || {},
-      categoriesKasKoperasi: state.categoriesKasKoperasi || {},
-      pengaturanBerbagi: state.pengaturanBerbagi || {},
-      sedekahList: state.sedekahList || [],
-      penyaluranList: state.penyaluranList || [],
-      maintenanceLock: state.maintenanceLock || { isLocked: false },
-      accountNumberSchemaVersion: state.accountNumberSchemaVersion || 2,
-      lastRunningNumber: state.lastRunningNumber || 769,
-      deletedMemberIds: state.deletedMemberIds || [],
-      deletedTransactionIds: state.deletedTransactionIds || [],
-      deletedKasIds: state.deletedKasIds || [],
-      deletedSetoranIds: state.deletedSetoranIds || [],
-      usedAccountNumbers: state.usedAccountNumbers || [],
-      usedMemberNumbers: state.usedMemberNumbers || [],
-      updatedAt: now,
-      updatedBy: 'server_realtime',
-    };
-    await setDoc(doc(serverFirestoreInstance, 'settings', 'general'), generalData, { merge: true }).catch(() => {});
+    // 3. Synchronize Settings General ONLY if content hash changed (never clobber remote settings unnecessarily)
+    const generalCore = buildGeneralCorePayloadServer(state);
+    const generalCoreStr = JSON.stringify(generalCore);
+    if (serverFirestoreHashMap.get('settings/general') !== generalCoreStr) {
+      await setDoc(
+        doc(db, 'settings', 'general'),
+        { ...generalCore, updatedAt: now, updatedBy: SERVER_INSTANCE_ID },
+        { merge: true }
+      ).catch(() => {});
+      serverFirestoreHashMap.set('settings/general', generalCoreStr);
+      lastAppliedFirestoreGeneralUpdatedAt = now;
+      hasAnyDocWritten = true;
+    }
 
     // 4. Synchronize Kas to Firestore
-    if (Array.isArray(state.kasList)) {
-      for (const k of state.kasList) {
-        if (k && k.id) {
-          await setDoc(doc(serverFirestoreInstance, 'kas', k.id), JSON.parse(JSON.stringify(k)), { merge: true }).catch(() => {});
+    for (const k of state.kasList || []) {
+      if (k && k.id) {
+        const cleanKas = sanitizeServerDocForFirestore({ ...k });
+        const kKey = `kas/${k.id}`;
+        const kStr = JSON.stringify(cleanKas);
+        if (serverFirestoreHashMap.get(kKey) !== kStr) {
+          await setDoc(doc(db, 'kas', k.id), cleanKas, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(kKey, kStr);
+          hasAnyDocWritten = true;
         }
       }
     }
-    if (Array.isArray(state.deletedKasIds)) {
-      for (const delId of state.deletedKasIds) {
-        await deleteDoc(doc(serverFirestoreInstance, 'kas', delId)).catch(() => {});
+    for (const delId of state.deletedKasIds || []) {
+      const delKey = `deleted_kas/${delId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'kas', delId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
       }
     }
 
     // 5. Synchronize Setoran to Firestore
-    if (Array.isArray(state.setoranList)) {
-      for (const s of state.setoranList) {
-        if (s && s.id) {
-          await setDoc(doc(serverFirestoreInstance, 'setoran', s.id), JSON.parse(JSON.stringify(s)), { merge: true }).catch(() => {});
+    for (const s of state.setoranList || []) {
+      if (s && s.id) {
+        const cleanSetoran = sanitizeServerDocForFirestore({ ...s });
+        const sKey = `setoran/${s.id}`;
+        const sStr = JSON.stringify(cleanSetoran);
+        if (serverFirestoreHashMap.get(sKey) !== sStr) {
+          await setDoc(doc(db, 'setoran', s.id), cleanSetoran, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(sKey, sStr);
+          hasAnyDocWritten = true;
         }
       }
     }
-    if (Array.isArray(state.deletedSetoranIds)) {
-      for (const delId of state.deletedSetoranIds) {
-        await deleteDoc(doc(serverFirestoreInstance, 'setoran', delId)).catch(() => {});
+    for (const delId of state.deletedSetoranIds || []) {
+      const delKey = `deleted_setoran/${delId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'setoran', delId)).catch(() => {});
+        await deleteDoc(doc(db, 'sedekah', delId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
       }
     }
 
     // 6. Synchronize Member Transactions to Firestore
-    if (Array.isArray(state.memberTransactions)) {
-      for (const tx of state.memberTransactions) {
-        if (tx && tx.id) {
-          await setDoc(doc(serverFirestoreInstance, 'transactions', tx.id), JSON.parse(JSON.stringify(tx)), { merge: true }).catch(() => {});
+    for (const tx of state.memberTransactions || []) {
+      if (tx && tx.id) {
+        const cleanTx = sanitizeServerDocForFirestore({ ...tx });
+        const txKey = `transactions/${tx.id}`;
+        const txStr = JSON.stringify(cleanTx);
+        if (serverFirestoreHashMap.get(txKey) !== txStr) {
+          await setDoc(doc(db, 'transactions', tx.id), cleanTx, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(txKey, txStr);
+          hasAnyDocWritten = true;
         }
       }
     }
-    if (Array.isArray(state.deletedTransactionIds)) {
-      for (const delId of state.deletedTransactionIds) {
-        await deleteDoc(doc(serverFirestoreInstance, 'transactions', delId)).catch(() => {});
+    for (const delId of state.deletedTransactionIds || []) {
+      const delKey = `deleted_tx/${delId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'transactions', delId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
       }
     }
 
     // 7. Synchronize Sedekah to Firestore
-    if (Array.isArray(state.sedekahList)) {
-      for (const sd of state.sedekahList) {
-        if (sd && sd.id) {
-          await setDoc(doc(serverFirestoreInstance, 'sedekah', sd.id), JSON.parse(JSON.stringify(sd)), { merge: true }).catch(() => {});
+    for (const sd of state.sedekahList || []) {
+      if (sd && sd.id) {
+        const cleanSd = sanitizeServerDocForFirestore({ ...sd });
+        const sdKey = `sedekah/${sd.id}`;
+        const sdStr = JSON.stringify(cleanSd);
+        if (serverFirestoreHashMap.get(sdKey) !== sdStr) {
+          await setDoc(doc(db, 'sedekah', sd.id), cleanSd, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(sdKey, sdStr);
+          hasAnyDocWritten = true;
         }
       }
     }
 
     // 8. Synchronize recent Chats to Firestore
-    if (Array.isArray(state.chatMessages)) {
-      const recent = state.chatMessages.slice(-50);
-      for (const c of recent) {
-        if (c && c.id) {
-          await setDoc(doc(serverFirestoreInstance, 'chats', c.id), JSON.parse(JSON.stringify(c)), { merge: true }).catch(() => {});
+    for (const c of (state.chatMessages || []).slice(-100)) {
+      if (c && c.id) {
+        const cleanChat = sanitizeServerDocForFirestore({ ...c });
+        const cKey = `chats/${c.id}`;
+        const cStr = JSON.stringify(cleanChat);
+        if (serverFirestoreHashMap.get(cKey) !== cStr) {
+          await setDoc(doc(db, 'chats', c.id), cleanChat, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(cKey, cStr);
+          hasAnyDocWritten = true;
         }
       }
     }
 
     // 9. Synchronize Surat to Firestore
-    if (Array.isArray(state.suratList)) {
-      for (const sr of state.suratList) {
-        if (sr && sr.id) {
-          await setDoc(doc(serverFirestoreInstance, 'surat', sr.id), JSON.parse(JSON.stringify(sr)), { merge: true }).catch(() => {});
+    for (const sr of state.suratList || []) {
+      if (sr && sr.id) {
+        const cleanSurat = sanitizeServerDocForFirestore({ ...sr });
+        const srKey = `surat/${sr.id}`;
+        const srStr = JSON.stringify(cleanSurat);
+        if (serverFirestoreHashMap.get(srKey) !== srStr) {
+          await setDoc(doc(db, 'surat', sr.id), cleanSurat, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(srKey, srStr);
+          hasAnyDocWritten = true;
         }
       }
     }
 
-    // 10. Lightweight Metadata Pulse to koperasi_state/main_database
-    await setDoc(doc(serverFirestoreInstance, 'koperasi_state', 'main_database'), {
-      id: 'main_database',
-      lastSynced: now,
-      updatedBy: 'server_realtime',
-      isSharded: true,
-      totalMembers: (state.members || []).length,
-      totalKas: (state.kasList || []).length,
-      totalSetoran: (state.setoranList || []).length,
-      totalTransactions: (state.memberTransactions || []).length,
-      totalSedekah: (state.sedekahList || []).length,
-      online: true,
-    }, { merge: true }).catch(() => {});
+    // 10. Lightweight Metadata Pulse to koperasi_state/main_database ONLY when something actually changed
+    if (hasAnyDocWritten) {
+      await setDoc(doc(db, 'koperasi_state', 'main_database'), {
+        id: 'main_database',
+        lastSynced: now,
+        updatedBy: SERVER_INSTANCE_ID,
+        isSharded: true,
+        totalMembers: cleanMembers.length,
+        totalKas: (state.kasList || []).length,
+        totalSetoran: (state.setoranList || []).length,
+        totalTransactions: (state.memberTransactions || []).length,
+        totalSedekah: (state.sedekahList || []).length,
+        online: true,
+      }, { merge: true }).catch(() => {});
+    }
   } catch (err) {
     // Non-blocking firestore sync notice
+  } finally {
+    isServerFirestoreSyncRunning = false;
+    const nextQueued = queuedServerFirestoreSyncState;
+    queuedServerFirestoreSyncState = null;
+    if (nextQueued) {
+      setTimeout(() => {
+        syncStateToFirestoreServer(nextQueued);
+      }, 300);
+    }
   }
 }
 
@@ -1240,25 +1469,26 @@ function saveDatabase(state: any, options?: { skipFirestore?: boolean }) {
   }
 }
 
-let lastAppliedFirestoreGeneralUpdatedAt = '';
-
 function buildStateSyncDigest(st: any): string {
   try {
     return JSON.stringify({
-      members: (st.members || []).map((m: any) => `${m.id}:${m.nama}:${m.nomorAnggota}:${m.nomorRekening}:${m.saldoPokok}:${m.saldoUmum}:${m.saldoZakatFitrah}:${m.saldoQurban}:${m.status}:${m.isPokokLocked}`),
-      admins: (st.admins || []).map((a: any) => `${a.id}:${a.nama}:${a.role}:${a.username}`),
-      setoran: (st.setoranList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}`),
-      kasCount: (st.kasList || []).length,
-      txCount: (st.memberTransactions || []).length,
-      sedekah: (st.sedekahList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}`),
-      chatCount: (st.chatMessages || []).length,
-      suratCount: (st.suratList || []).length,
+      members: (st.members || []).map((m: any) => `${m.id}:${m.nama}:${m.wilayah}:${m.nik}:${m.whatsapp}:${m.email}:${m.updatedAt || ''}:${m.bankPribadi?.nomorRekening || ''}:${m.nomorAnggota}:${m.nomorRekening}:${m.saldoPokok}:${m.saldoUmum}:${m.saldoZakatFitrah}:${m.saldoQurban}:${m.status}:${m.isPokokLocked}`),
+      admins: (st.admins || []).map((a: any) => `${a.id}:${a.nama}:${a.role}:${a.username}:${a.email || ''}:${a.whatsapp || ''}:${a.wilayahKantor || ''}`),
+      setoran: (st.setoranList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedAt || ''}`),
+      kas: (st.kasList || []).map((k: any) => `${k.id}:${k.status || ''}:${k.nominal}:${k.kategori}:${k.tanggal}:${k.keterangan || ''}`),
+      tx: (st.memberTransactions || []).map((t: any) => `${t.id}:${t.nominal}:${t.kategori}:${t.saldoAkhir}:${t.tanggal}:${t.keterangan || ''}`),
+      sedekah: (st.sedekahList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedAt || ''}`),
+      chats: (st.chatMessages || []).map((c: any) => `${c.id}:${Boolean(c.isReadByAdmin)}:${Boolean(c.isReadByMember)}`),
+      surat: (st.suratList || []).map((sr: any) => `${sr.id}:${(sr.readByMemberIds || []).length}:${(sr.readByAdminIds || []).length}`),
       logCount: (st.auditLogs || []).length,
       profile: st.profile || {},
       pengaturanBerbagi: st.pengaturanBerbagi || {},
       categoriesKasKoperasi: st.categoriesKasKoperasi || {},
       maintenanceLock: st.maintenanceLock || {},
-      penyaluranCount: (st.penyaluranList || []).length,
+      penyaluranList: st.penyaluranList || [],
+      usedAccountNumbers: st.usedAccountNumbers || [],
+      usedMemberNumbers: st.usedMemberNumbers || [],
+      deletedAdminIds: st.deletedAdminIds || [],
       deletedMemberIds: st.deletedMemberIds || [],
       deletedTransactionIds: st.deletedTransactionIds || [],
       deletedKasIds: st.deletedKasIds || [],
@@ -1274,14 +1504,15 @@ function buildStateSyncDigest(st: any): string {
 // Inbound Synchronizer from Cloud Firestore to Server State
 // Ensures members, admins, transactions, chats, surat, logs, and settings edited on Android/iOS/Web/PC are immediately merged into server state
 async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembersCount?: number }> {
+  if (isPullFromFirestoreRunning) {
+    pullFromFirestoreQueued = true;
+    return { success: true, newMembersCount: 0 };
+  }
+  isPullFromFirestoreRunning = true;
   try {
-    const { initializeApp, getApps } = await import('firebase/app');
-    const { getFirestore, collection, getDocs, doc, getDoc, deleteDoc, query, orderBy, limit } = await import('firebase/firestore');
-    const configPath = path.join(__dirname, 'firebase-applet-config.json');
-    if (!fs.existsSync(configPath)) return { success: false };
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
-    const db = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+    const fsCtx = await ensureServerFirestore();
+    if (!fsCtx) return { success: false };
+    const { db, collection, getDocs, doc, getDoc, deleteDoc, query, orderBy, limit } = fsCtx;
 
     const beforeDigest = buildStateSyncDigest(currentState);
     const beforeCount = (currentState.members || []).length;
@@ -1290,7 +1521,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
     const memSnap = await getDocs(collection(db, 'members'));
     const rawRemoteMembers: Array<{ docId: string; data: any }> = [];
     const dupDocsToDelete: string[] = [];
-    memSnap.forEach((d) => {
+    memSnap.forEach((d: any) => {
       const data = d.data();
       if (String(d.id).includes('-dup-') || (data && data.id && String(data.id).includes('-dup-'))) {
         dupDocsToDelete.push(d.id);
@@ -1320,14 +1551,16 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
     const remoteAdmins: any[] = [];
     let remoteDeletedAdminIds: string[] = [];
     try {
-      const adminSnap = await getDocs(collection(db, 'admins'));
-      adminSnap.forEach((d) => {
+      const [adminSnap, settingsAdminDoc] = await Promise.all([
+        getDocs(collection(db, 'admins')),
+        getDoc(doc(db, 'settings', 'admins')),
+      ]);
+      adminSnap.forEach((d: any) => {
         const data = d.data();
         if (data && (data.id || data.username)) {
           remoteAdmins.push(data);
         }
       });
-      const settingsAdminDoc = await getDoc(doc(db, 'settings', 'admins'));
       if (settingsAdminDoc.exists()) {
         const sData = settingsAdminDoc.data();
         if (Array.isArray(sData?.admins)) {
@@ -1341,81 +1574,74 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     } catch {}
 
-    // 3. Fetch remote transactions
-    const txSnap = await getDocs(collection(db, 'transactions'));
+    // 3-7. Fetch remote transactions, setoran, kas, sedekah, chats, surat, logs in parallel
+    const [txSnap, setoranSnap, kasSnap, sedekahSnap, chatSnapRes, suratSnapRes, logsSnapRes, genSnapRes] = await Promise.all([
+      getDocs(collection(db, 'transactions')),
+      getDocs(collection(db, 'setoran')),
+      getDocs(collection(db, 'kas')),
+      getDocs(collection(db, 'sedekah')),
+      getDocs(collection(db, 'chats')).catch(() => null),
+      getDocs(collection(db, 'surat')).catch(() => null),
+      getDocs(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200))).catch(() => null),
+      getDoc(doc(db, 'settings', 'general')).catch(() => null),
+    ]);
+
     const remoteTx: any[] = [];
-    txSnap.forEach((d) => {
+    txSnap.forEach((d: any) => {
       const data = d.data();
-      if (data && data.id) {
-        remoteTx.push(data);
-      }
+      if (data && data.id) remoteTx.push(data);
     });
 
-    // 4. Fetch remote setoran
-    const setoranSnap = await getDocs(collection(db, 'setoran'));
     const remoteSetoran: any[] = [];
-    setoranSnap.forEach((d) => {
+    setoranSnap.forEach((d: any) => {
       const data = d.data();
-      if (data && data.id) {
-        remoteSetoran.push(data);
-      }
+      if (data && data.id) remoteSetoran.push(data);
     });
 
-    // 5. Fetch remote kas
-    const kasSnap = await getDocs(collection(db, 'kas'));
     const remoteKas: any[] = [];
-    kasSnap.forEach((d) => {
+    kasSnap.forEach((d: any) => {
       const data = d.data();
-      if (data && data.id) {
-        remoteKas.push(data);
-      }
+      if (data && data.id) remoteKas.push(data);
     });
 
-    // 6. Fetch remote sedekah
-    const sedekahSnap = await getDocs(collection(db, 'sedekah'));
     const remoteSedekah: any[] = [];
-    sedekahSnap.forEach((d) => {
+    sedekahSnap.forEach((d: any) => {
       const data = d.data();
-      if (data && data.id) {
-        remoteSedekah.push(data);
-      }
+      if (data && data.id) remoteSedekah.push(data);
     });
 
-    // 7. Fetch remote chats, surat, and logs
     const remoteChats: any[] = [];
-    try {
-      const chatSnap = await getDocs(collection(db, 'chats'));
-      chatSnap.forEach((d) => {
+    if (chatSnapRes) {
+      chatSnapRes.forEach((d: any) => {
         const data = d.data();
         if (data && data.id) remoteChats.push(data);
       });
-    } catch {}
+    }
 
     const remoteSurat: any[] = [];
-    try {
-      const suratSnap = await getDocs(collection(db, 'surat'));
-      suratSnap.forEach((d) => {
+    if (suratSnapRes) {
+      suratSnapRes.forEach((d: any) => {
         const data = d.data();
         if (data && data.id) remoteSurat.push(data);
       });
-    } catch {}
+    }
 
     const remoteLogs: any[] = [];
-    try {
-      const logsSnap = await getDocs(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)));
-      logsSnap.forEach((d) => {
+    if (logsSnapRes) {
+      logsSnapRes.forEach((d: any) => {
         const data = d.data();
         if (data) remoteLogs.push({ id: d.id, ...data });
       });
-    } catch {}
+    }
 
-    // 8. Fetch settings/general (profile, pengaturanBerbagi, categoriesKasKoperasi, maintenanceLock, penyaluranList, deletions & numbers)
+    // 8. Parse settings/general (profile, pengaturanBerbagi, categoriesKasKoperasi, maintenanceLock, penyaluranList, deletions & numbers)
     const remoteSettingsPatch: any = {};
+    let remoteGeneralDocForHash: any = null;
     try {
-      const genSnap = await getDoc(doc(db, 'settings', 'general'));
-      if (genSnap.exists()) {
-        const genData = genSnap.data();
+      if (genSnapRes && genSnapRes.exists()) {
+        const genData = genSnapRes.data();
         if (genData) {
+          remoteGeneralDocForHash = genData;
           if (genData.accountNumberSchemaVersion) {
             remoteSettingsPatch.accountNumberSchemaVersion = genData.accountNumberSchemaVersion;
           }
@@ -1451,14 +1677,18 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
             });
           }
 
-          // Adopt inputted settings from Android/iOS/Web/PC whenever changed by a client device
+          // Adopt inputted settings from Android/iOS/Web/PC or another server instance whenever changed externally
           const genUpdatedAt = String(genData.updatedAt || '');
+          const genUpdatedBy = String(genData.updatedBy || '');
+          const prevGeneralHash = serverFirestoreHashMap.get('settings/general');
+          const remoteGeneralHash = JSON.stringify(buildGeneralCorePayloadServer(genData));
           const isExternalSettingsChange =
-            genData.updatedBy !== 'server_realtime' &&
-            genUpdatedAt !== '' &&
-            genUpdatedAt !== lastAppliedFirestoreGeneralUpdatedAt;
+            genUpdatedBy !== SERVER_INSTANCE_ID &&
+            (genUpdatedAt !== lastAppliedFirestoreGeneralUpdatedAt ||
+              !lastAppliedFirestoreGeneralUpdatedAt ||
+              (prevGeneralHash !== undefined && remoteGeneralHash !== prevGeneralHash));
 
-          if (isExternalSettingsChange || !lastAppliedFirestoreGeneralUpdatedAt) {
+          if (isExternalSettingsChange) {
             if (genData.profile && typeof genData.profile === 'object' && Object.keys(genData.profile).length > 0) {
               remoteSettingsPatch.profile = genData.profile;
             }
@@ -1479,6 +1709,20 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     } catch {}
 
+    const remoteSlicePayload = {
+      ...remoteSettingsPatch,
+      members: remoteMembers,
+      admins: remoteAdmins,
+      deletedAdminIds: remoteDeletedAdminIds,
+      memberTransactions: remoteTx,
+      setoranList: remoteSetoran,
+      kasList: remoteKas,
+      sedekahList: remoteSedekah,
+      chatMessages: remoteChats,
+      suratList: remoteSurat,
+      auditLogs: remoteLogs,
+    };
+
     const hasRemotePayload =
       remoteMembers.length > 0 ||
       remoteAdmins.length > 0 ||
@@ -1492,19 +1736,16 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       Object.keys(remoteSettingsPatch).length > 0;
 
     if (hasRemotePayload) {
-      currentState = mergeServerState(currentState, {
-        ...remoteSettingsPatch,
-        members: remoteMembers,
-        admins: remoteAdmins,
-        deletedAdminIds: remoteDeletedAdminIds,
-        memberTransactions: remoteTx,
-        setoranList: remoteSetoran,
-        kasList: remoteKas,
-        sedekahList: remoteSedekah,
-        chatMessages: remoteChats,
-        suratList: remoteSurat,
-        auditLogs: remoteLogs,
-      });
+      // Seed exact remote hashes BEFORE merging so pulled docs are not immediately re-blasted back to Firestore
+      seedServerFirestoreHashMap(
+        {
+          ...remoteSlicePayload,
+          ...(remoteGeneralDocForHash ? buildGeneralCorePayloadServer(remoteGeneralDocForHash) : {}),
+        },
+        true
+      );
+
+      currentState = mergeServerState(currentState, remoteSlicePayload);
 
       const reconResult = reconcileLegacyMemberNumbers(currentState);
       const afterDigest = buildStateSyncDigest(currentState);
@@ -1519,7 +1760,63 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
     return { success: true, newMembersCount: 0 };
   } catch (err: any) {
     return { success: false };
+  } finally {
+    isPullFromFirestoreRunning = false;
+    if (pullFromFirestoreQueued) {
+      pullFromFirestoreQueued = false;
+      setTimeout(() => {
+        pullFromFirestoreServer().catch(() => {});
+      }, 250);
+    }
   }
+}
+
+async function initServerFirestoreRealtimeWatchers() {
+  if (serverFirestoreWatchersInitialized) return;
+  try {
+    const fsCtx = await ensureServerFirestore();
+    if (!fsCtx) return;
+    serverFirestoreWatchersInitialized = true;
+    const { db, doc, collection, onSnapshot } = fsCtx;
+
+    const triggerDebouncedPull = () => {
+      if (serverFirestorePullTimer) clearTimeout(serverFirestorePullTimer);
+      serverFirestorePullTimer = setTimeout(() => {
+        pullFromFirestoreServer().catch(() => {});
+      }, 250);
+    };
+
+    onSnapshot(
+      doc(db, 'koperasi_state', 'main_database'),
+      (snap: any) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        if (d && d.updatedBy !== SERVER_INSTANCE_ID) {
+          triggerDebouncedPull();
+        }
+      },
+      () => {}
+    );
+
+    onSnapshot(
+      doc(db, 'settings', 'general'),
+      (snap: any) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        if (d && d.updatedBy !== SERVER_INSTANCE_ID) {
+          triggerDebouncedPull();
+        }
+      },
+      () => {}
+    );
+
+    onSnapshot(collection(db, 'members'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'setoran'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'kas'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'sedekah'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'chats'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'surat'), () => triggerDebouncedPull(), () => {});
+  } catch {}
 }
 
 // Authoritative Unified Account & Member Numbering Reconciliation (V2)
@@ -2262,7 +2559,7 @@ const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
 if (startupMemRecon.migratedCount > 0) {
   console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members to unified v2 account numbering (KW+DD+HP2+YY+770..).`);
-  saveDatabase(currentState);
+  saveDatabase(currentState, { skipFirestore: true });
 }
 // Enforce 10-day chat retention on startup
 const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
@@ -2286,9 +2583,9 @@ if (currentState.categoriesKasKoperasi) {
     );
   }
 }
-// Archive any files in current database on startup
+// Archive any files in current database on startup (never overwrite Firestore on boot!)
 archiveAllUploadedFiles(currentState);
-saveDatabase(currentState);
+saveDatabase(currentState, { skipFirestore: true });
 
 async function startServer() {
   const app = express();
@@ -2610,7 +2907,8 @@ async function startServer() {
     }
   });
 
-  // Heartbeat / Online Presence Endpoint (Req 1 & 19)
+  // Heartbeat / Online Presence Endpoint with Cross-Server Firestore Sync (Android, iOS, Web, PC, AI Studio)
+  let lastPresenceFirestorePush = 0;
   app.post('/api/presence', (req: Request, res: Response) => {
     try {
       const { deviceId, userId, userName, role, platform } = req.body;
@@ -2628,15 +2926,68 @@ async function startServer() {
         userAgent: req.headers['user-agent'] || '',
       });
 
+      if (now - lastPresenceFirestorePush > 10000) {
+        lastPresenceFirestorePush = now;
+        ensureServerFirestore()
+          .then((fsCtx) => {
+            if (!fsCtx) return;
+            const devicesPayload: Record<string, any> = {};
+            cleanStalePresence();
+            activeDevicesMap.forEach((dev, k) => {
+              devicesPayload[k] = {
+                deviceId: dev.deviceId,
+                userId: dev.userId,
+                userName: dev.userName,
+                role: dev.role,
+                platform: dev.platform,
+                lastSeen: dev.lastSeen,
+              };
+            });
+            fsCtx.setDoc(
+              fsCtx.doc(fsCtx.db, 'settings', 'presence'),
+              { id: 'presence', devices: devicesPayload, updatedAt: new Date(now).toISOString() },
+              { merge: true }
+            ).catch(() => {});
+          })
+          .catch(() => {});
+      }
+
       res.json({ success: true, activeDevices: activeDevicesMap.size });
     } catch {
       res.status(500).json({ error: 'Presence tracking error' });
     }
   });
 
-  app.get('/api/presence', (req: Request, res: Response) => {
+  app.get('/api/presence', async (req: Request, res: Response) => {
     cleanStalePresence();
-    const activeList = Array.from(activeDevicesMap.values());
+    const mergedMap = new Map<string, ConnectedDevicePresence>();
+    activeDevicesMap.forEach((dev, k) => mergedMap.set(k, dev));
+
+    try {
+      const fsCtx = await ensureServerFirestore();
+      if (fsCtx) {
+        const snap = await Promise.race([
+          fsCtx.getDoc(fsCtx.doc(fsCtx.db, 'settings', 'presence')),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+        ]);
+        if (snap && snap.exists && snap.exists()) {
+          const data = snap.data();
+          const now = Date.now();
+          if (data && data.devices && typeof data.devices === 'object') {
+            Object.entries(data.devices).forEach(([k, v]: [string, any]) => {
+              if (v && typeof v.lastSeen === 'number' && now - v.lastSeen <= 2.5 * 60 * 1000) {
+                const existing = mergedMap.get(k);
+                if (!existing || v.lastSeen > existing.lastSeen) {
+                  mergedMap.set(k, v as ConnectedDevicePresence);
+                }
+              }
+            });
+          }
+        }
+      }
+    } catch {}
+
+    const activeList = Array.from(mergedMap.values());
     const platforms = {
       android: activeList.filter((d) => d.platform === 'mobile_android').length,
       ios: activeList.filter((d) => d.platform === 'mobile_ios').length,
@@ -2648,11 +2999,15 @@ async function startServer() {
       .filter((d) => d.role === 'member' && d.userId && d.userId !== 'guest')
       .map((d) => d.userId);
 
+    const totalConnected = Math.max(activeList.length, sseClients.size, 1);
+
     res.json({
       success: true,
-      totalConnectedDevices: Math.max(activeList.length, sseClients.size, 1),
+      totalConnectedDevices: totalConnected,
+      onlineCount: totalConnected,
       connectedPlatforms: platforms,
       onlineUsers: activeList,
+      devices: activeList,
       onlineMemberIds,
     });
   });
@@ -6041,11 +6396,16 @@ exit
     socket.on('error', () => {});
   });
 
+  // Tarik dan sinkronkan seluruh data & pengaturan terbaru dari Cloud Firestore SEBELUM menerima koneksi agar AI Studio tidak pernah menimpa input Android/iOS/Web/PC
+  await Promise.race([
+    pullFromFirestoreServer().catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, 5000)),
+  ]);
+  initServerFirestoreRealtimeWatchers().catch(() => {});
+
   server.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Koperasi HWS Realtime Server running on http://0.0.0.0:${PORT}`);
-    // Tarik langsung data anggota & transaksi dari Cloud Firestore saat server aktif
-    pullFromFirestoreServer().catch(() => {});
-    // Polling berkala setiap 4 detik agar anggota baru yang mendaftar dari device lain otomatis sinkron
+    // Polling berkala setiap 4 detik sebagai fallback tambahan di samping realtime Firestore onSnapshot listener
     setInterval(pullFromFirestoreServer, 4000);
   });
 }

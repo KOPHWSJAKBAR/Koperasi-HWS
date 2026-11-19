@@ -129,6 +129,52 @@
         "createdAt": { "type": "string" }
       },
       "required": ["recipientId", "title"]
+    },
+    "admins": {
+      "title": "Pengurus & Admin Koperasi",
+      "description": "Akun pengurus dan pengelola koperasi tersinkronisasi lintas perangkat",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "nama": { "type": "string" },
+        "role": { "type": "string" },
+        "email": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "wilayahKantor": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "username", "nama", "role"]
+    },
+    "sedekah": {
+      "title": "Setoran & Penyaluran Sedekah",
+      "description": "Catatan penerimaan dan penyaluran sedekah anggota maupun donatur umum",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tipe": { "type": "string" },
+        "kategori": { "type": "string" },
+        "nominal": { "type": "number" },
+        "status": { "type": "string" },
+        "tanggal": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "nominal", "tanggal"]
+    },
+    "logs": {
+      "title": "Log Aktivitas Admin",
+      "description": "Riwayat audit aktivitas pengurus lintas perangkat secara realtime",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "adminId": { "type": "string" },
+        "adminNama": { "type": "string" },
+        "adminRole": { "type": "string" },
+        "action": { "type": "string" },
+        "detail": { "type": "string" }
+      },
+      "required": ["timestamp", "adminNama", "action"]
     }
   },
   "firestore": {
@@ -167,6 +213,18 @@
     "/notifications/{notificationId}": {
       "schema": "notifications",
       "description": "Penyimpanan notifikasi realtime per dokumen"
+    },
+    "/admins/{adminId}": {
+      "schema": "admins",
+      "description": "Penyimpanan akun pengurus per dokumen"
+    },
+    "/sedekah/{sedekahId}": {
+      "schema": "sedekah",
+      "description": "Penyimpanan catatan sedekah per dokumen"
+    },
+    "/logs/{logId}": {
+      "schema": "logs",
+      "description": "Penyimpanan riwayat log aktivitas admin per dokumen"
     }
   }
 }

@@ -1,7 +1,7 @@
 import { getMessaging, isSupported } from 'firebase/messaging';
-import { app, db, auth, storage, firebaseConfig, getFirebaseApp, getFirebaseFirestore, getFirebaseAuth, getFirebaseStorage, logAnalyticsEvent } from './firebase-init';
+import { app, db, auth, storage, firebaseConfig, getFirebaseApp, getFirebaseFirestore, getFirebaseAuth, getFirebaseStorage, logAnalyticsEvent, testFirestoreConnection, ensureFirestoreOnline } from './firebase-init';
 
-export { app, db, auth, storage, firebaseConfig, getFirebaseApp, getFirebaseFirestore, getFirebaseAuth, getFirebaseStorage, logAnalyticsEvent };
+export { app, db, auth, storage, firebaseConfig, getFirebaseApp, getFirebaseFirestore, getFirebaseAuth, getFirebaseStorage, logAnalyticsEvent, testFirestoreConnection, ensureFirestoreOnline };
 
 // Safe helper to obtain Cloud Messaging in supported environments (Service Worker / Push)
 export async function getFirebaseMessagingSafe() {

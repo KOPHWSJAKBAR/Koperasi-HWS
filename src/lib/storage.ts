@@ -1260,12 +1260,24 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   const kasMap = new Map<string, KasEntry>();
   (base.kasList || []).forEach((k) => {
     if (k && k.id && !allDeletedKasIds.has(k.id)) {
-      kasMap.set(k.id, k);
+      kasMap.set(k.id, { ...k });
     }
   });
   (incoming.kasList || []).forEach((k) => {
     if (k && k.id && !allDeletedKasIds.has(k.id)) {
-      kasMap.set(k.id, k);
+      const existing = kasMap.get(k.id);
+      if (!existing) {
+        kasMap.set(k.id, k);
+      } else {
+        const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
+        const finalStatus = isTerminal ? existing.status : (k.status || existing.status);
+        kasMap.set(k.id, {
+          ...existing,
+          ...k,
+          status: finalStatus,
+          approvedBy: existing.approvedBy || k.approvedBy,
+        });
+      }
     }
   });
   const mergedKasList = Array.from(kasMap.values());
@@ -1401,9 +1413,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     ...defaultBerbagi,
     ...(base.pengaturanBerbagi || {}),
     ...(incoming.pengaturanBerbagi || {}),
-    qrisImageUrl: incoming.pengaturanBerbagi?.qrisImageUrl !== undefined
-      ? incoming.pengaturanBerbagi.qrisImageUrl
-      : base.pengaturanBerbagi?.qrisImageUrl,
+    qrisImageUrl: incoming.pengaturanBerbagi?.qrisImageUrl || base.pengaturanBerbagi?.qrisImageUrl,
   };
 
   // Pastikan setiap setoran sedekah anggota (tipe === 'penerimaan') muncul di antrian verifikasi admin (setoranList)
@@ -1466,9 +1476,12 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
     pengaturanBerbagi,
-    categoriesKasKoperasi: incoming.categoriesKasKoperasi && Object.keys(incoming.categoriesKasKoperasi).length > 0
-      ? incoming.categoriesKasKoperasi
-      : (base.categoriesKasKoperasi || {}),
+    categoriesKasKoperasi:
+      incoming.categoriesKasKoperasi &&
+      (Array.isArray(incoming.categoriesKasKoperasi.pemasukan) ||
+        Array.isArray(incoming.categoriesKasKoperasi.pengeluaran))
+        ? incoming.categoriesKasKoperasi
+        : base.categoriesKasKoperasi || { pemasukan: [], pengeluaran: [] },
     maintenanceLock: incoming.maintenanceLock || base.maintenanceLock || { isLocked: false },
     auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     accountNumberSchemaVersion: 2,
@@ -2224,9 +2237,14 @@ let queuedFirestoreSyncState: AppState | null = null;
 let hasHydratedRemoteState = false;
 
 // Seed known server-authoritative hashes so unchanged documents are NOT re-blasted to Firestore on every mutation
-function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>) {
+function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>, forceOverwrite = false) {
   if (!serverData || typeof serverData !== 'object') return;
   try {
+    const setHash = (key: string, val: string) => {
+      if (forceOverwrite || !lastWrittenMap.has(key)) {
+        lastWrittenMap.set(key, val);
+      }
+    };
     if (serverData.profile) {
       const generalCore = sanitizeForFirestore({
         id: 'general',
@@ -2245,7 +2263,7 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>) {
         usedAccountNumbers: serverData.usedAccountNumbers || [],
         usedMemberNumbers: serverData.usedMemberNumbers || [],
       });
-      lastWrittenMap.set('settings/general', JSON.stringify(generalCore));
+      setHash('settings/general', JSON.stringify(generalCore));
     }
     if (Array.isArray(serverData.admins)) {
       const adminsCore = sanitizeForFirestore({
@@ -2253,61 +2271,59 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>) {
         admins: serverData.admins,
         deletedAdminIds: (serverData as any).deletedAdminIds || [],
       });
-      if (!lastWrittenMap.has('settings/admins')) {
-        lastWrittenMap.set('settings/admins', JSON.stringify(adminsCore));
-      }
+      setHash('settings/admins', JSON.stringify(adminsCore));
       for (const adm of serverData.admins) {
-        if (adm && adm.id && !lastWrittenMap.has(`admins/${adm.id}`)) {
-          lastWrittenMap.set(`admins/${adm.id}`, JSON.stringify(sanitizeForFirestore({ ...adm })));
+        if (adm && adm.id) {
+          setHash(`admins/${adm.id}`, JSON.stringify(sanitizeForFirestore({ ...adm })));
         }
       }
     }
     if (Array.isArray(serverData.members)) {
       for (const m of serverData.members) {
-        if (m && m.id && !String(m.id).includes('-dup-') && !lastWrittenMap.has(`members/${m.id}`)) {
-          lastWrittenMap.set(`members/${m.id}`, JSON.stringify(sanitizeForFirestore({ ...m })));
+        if (m && m.id && !String(m.id).includes('-dup-')) {
+          setHash(`members/${m.id}`, JSON.stringify(sanitizeForFirestore({ ...m })));
         }
       }
     }
     if (Array.isArray(serverData.setoranList)) {
       for (const s of serverData.setoranList) {
-        if (s && s.id && !lastWrittenMap.has(`setoran/${s.id}`)) {
-          lastWrittenMap.set(`setoran/${s.id}`, JSON.stringify(sanitizeForFirestore({ ...s })));
+        if (s && s.id) {
+          setHash(`setoran/${s.id}`, JSON.stringify(sanitizeForFirestore({ ...s })));
         }
       }
     }
     if (Array.isArray(serverData.sedekahList)) {
       for (const sdk of serverData.sedekahList) {
-        if (sdk && sdk.id && !lastWrittenMap.has(`sedekah/${sdk.id}`)) {
-          lastWrittenMap.set(`sedekah/${sdk.id}`, JSON.stringify(sanitizeForFirestore({ ...sdk })));
+        if (sdk && sdk.id) {
+          setHash(`sedekah/${sdk.id}`, JSON.stringify(sanitizeForFirestore({ ...sdk })));
         }
       }
     }
     if (Array.isArray(serverData.kasList)) {
       for (const k of serverData.kasList) {
-        if (k && k.id && !lastWrittenMap.has(`kas/${k.id}`)) {
-          lastWrittenMap.set(`kas/${k.id}`, JSON.stringify(sanitizeForFirestore({ ...k })));
+        if (k && k.id) {
+          setHash(`kas/${k.id}`, JSON.stringify(sanitizeForFirestore({ ...k })));
         }
       }
     }
     if (Array.isArray(serverData.memberTransactions)) {
       for (const tx of serverData.memberTransactions) {
-        if (tx && tx.id && !lastWrittenMap.has(`transactions/${tx.id}`)) {
-          lastWrittenMap.set(`transactions/${tx.id}`, JSON.stringify(sanitizeForFirestore({ ...tx })));
+        if (tx && tx.id) {
+          setHash(`transactions/${tx.id}`, JSON.stringify(sanitizeForFirestore({ ...tx })));
         }
       }
     }
     if (Array.isArray(serverData.chatMessages)) {
       for (const c of serverData.chatMessages.slice(-100)) {
-        if (c && c.id && !lastWrittenMap.has(`chats/${c.id}`)) {
-          lastWrittenMap.set(`chats/${c.id}`, JSON.stringify(sanitizeForFirestore({ ...c })));
+        if (c && c.id) {
+          setHash(`chats/${c.id}`, JSON.stringify(sanitizeForFirestore({ ...c })));
         }
       }
     }
     if (Array.isArray(serverData.suratList)) {
       for (const sr of serverData.suratList) {
-        if (sr && sr.id && !lastWrittenMap.has(`surat/${sr.id}`)) {
-          lastWrittenMap.set(`surat/${sr.id}`, JSON.stringify(sanitizeForFirestore({ ...sr })));
+        if (sr && sr.id) {
+          setHash(`surat/${sr.id}`, JSON.stringify(sanitizeForFirestore({ ...sr })));
         }
       }
     }
@@ -2683,7 +2699,7 @@ export async function fetchStateFromServer(): Promise<AppState> {
         if (text && text.trim().startsWith('{')) {
           const data = JSON.parse(text);
           if (data && typeof data === 'object' && (data.profile || data.members)) {
-            // Check if local device cache has any non-deleted registered members missing from server
+            // Check if local device cache has any non-deleted records created offline missing from server
             const serverDelSet = new Set<string>([
               ...(data.deletedMemberIds || []),
               ...(globalState.deletedMemberIds || []),
@@ -2703,8 +2719,30 @@ export async function fetchStateFromServer(): Promise<AppState> {
                 (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
             );
 
+            const delSetoran = new Set<string>([...(data.deletedSetoranIds || []), ...(globalState.deletedSetoranIds || [])]);
+            const delKas = new Set<string>([...(data.deletedKasIds || []), ...(globalState.deletedKasIds || [])]);
+            const delTx = new Set<string>([...(data.deletedTransactionIds || []), ...(globalState.deletedTransactionIds || [])]);
+            const delAdmin = new Set<string>([...(data.deletedAdminIds || []), ...((globalState as any).deletedAdminIds || [])]);
+
+            const serverSetoranIds = new Set((data.setoranList || []).map((s: any) => s?.id));
+            const serverKasIds = new Set((data.kasList || []).map((k: any) => k?.id));
+            const serverTxIds = new Set((data.memberTransactions || []).map((t: any) => t?.id));
+            const serverSedekahIds = new Set((data.sedekahList || []).map((s: any) => s?.id));
+            const serverChatIds = new Set((data.chatMessages || []).map((c: any) => c?.id));
+            const serverSuratIds = new Set((data.suratList || []).map((sr: any) => sr?.id));
+            const serverAdminIds = new Set((data.admins || []).map((a: any) => a?.id));
+
+            const hasUnsyncedLocalSlices =
+              (globalState.setoranList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSetoranIds.has(s.id)) ||
+              (globalState.kasList || []).some((k) => k?.id && !delKas.has(k.id) && !serverKasIds.has(k.id)) ||
+              (globalState.memberTransactions || []).some((t) => t?.id && !delTx.has(t.id) && !serverTxIds.has(t.id)) ||
+              (globalState.sedekahList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSedekahIds.has(s.id)) ||
+              (globalState.chatMessages || []).some((c) => c?.id && !serverChatIds.has(c.id)) ||
+              (globalState.suratList || []).some((sr) => sr?.id && !serverSuratIds.has(sr.id)) ||
+              (globalState.admins || []).some((a) => a?.id && !delAdmin.has(a.id) && !serverAdminIds.has(a.id));
+
             hasHydratedRemoteState = true;
-            seedFirestoreSyncedHashesFromServer(data);
+            seedFirestoreSyncedHashesFromServer(data, true);
             globalState = mergeStates(globalState, data);
             try {
               localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
@@ -2731,6 +2769,16 @@ export async function fetchStateFromServer(): Promise<AppState> {
                 .catch(() => {});
             }
 
+            // Safely push any offline-created non-deleted local records from Android/iOS/Web/PC to server & Firestore
+            if (hasUnsyncedLocalSlices) {
+              fetch('/api/state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(globalState),
+              }).catch(() => {});
+              scheduleShardedFirestoreSync(globalState, 300);
+            }
+
             return globalState;
           }
         }
@@ -2740,48 +2788,143 @@ export async function fetchStateFromServer(): Promise<AppState> {
     // Graceful offline fallback to local cached state without console noise
   }
 
-  // Direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
+  // Full multi-collection direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
   try {
     const { db, ensureFirestoreOnline } = await import('./firebase-init');
     await ensureFirestoreOnline();
-    const { collection, getDocs, doc, getDoc } = await import('firebase/firestore');
-    const [memSnap, genSnap] = await Promise.all([
-      getDocs(collection(db, 'members')),
-      getDoc(doc(db, 'settings', 'general')),
+    const { collection, getDocs, doc, getDoc, query, orderBy, limit } = await import('firebase/firestore');
+    const [
+      memSnap,
+      genSnap,
+      adminsColSnap,
+      adminsDocSnap,
+      setoranSnap,
+      sedekahSnap,
+      kasSnap,
+      txSnap,
+      chatSnap,
+      suratSnap,
+      logsSnap,
+    ] = await Promise.all([
+      getDocs(collection(db, 'members')).catch(() => null),
+      getDoc(doc(db, 'settings', 'general')).catch(() => null),
+      getDocs(collection(db, 'admins')).catch(() => null),
+      getDoc(doc(db, 'settings', 'admins')).catch(() => null),
+      getDocs(collection(db, 'setoran')).catch(() => null),
+      getDocs(collection(db, 'sedekah')).catch(() => null),
+      getDocs(collection(db, 'kas')).catch(() => null),
+      getDocs(collection(db, 'transactions')).catch(() => null),
+      getDocs(collection(db, 'chats')).catch(() => null),
+      getDocs(collection(db, 'surat')).catch(() => null),
+      getDocs(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200))).catch(() => null),
     ]);
-    let patch: Partial<AppState> = {};
-    if (genSnap.exists()) {
+
+    const patch: Partial<AppState> & { deletedAdminIds?: string[] } = {};
+    if (genSnap && genSnap.exists()) {
       const data = genSnap.data();
       if (data) {
-        patch = {
-          profile: data.profile || globalState.profile,
-          categoriesKasKoperasi: data.categoriesKasKoperasi || globalState.categoriesKasKoperasi,
-          pengaturanBerbagi: data.pengaturanBerbagi || globalState.pengaturanBerbagi,
-          penyaluranList: data.penyaluranList || globalState.penyaluranList,
-          maintenanceLock: data.maintenanceLock || globalState.maintenanceLock,
-          accountNumberSchemaVersion: data.accountNumberSchemaVersion || globalState.accountNumberSchemaVersion || 2,
-          lastRunningNumber: data.lastRunningNumber || globalState.lastRunningNumber,
-          deletedMemberIds: data.deletedMemberIds || globalState.deletedMemberIds,
-          deletedTransactionIds: data.deletedTransactionIds || globalState.deletedTransactionIds,
-          deletedKasIds: data.deletedKasIds || globalState.deletedKasIds,
-          deletedSetoranIds: data.deletedSetoranIds || globalState.deletedSetoranIds,
-          usedAccountNumbers: data.usedAccountNumbers || globalState.usedAccountNumbers,
-          usedMemberNumbers: data.usedMemberNumbers || globalState.usedMemberNumbers,
-        };
+        if (data.profile) patch.profile = data.profile;
+        if (data.categoriesKasKoperasi) patch.categoriesKasKoperasi = data.categoriesKasKoperasi;
+        if (data.pengaturanBerbagi) patch.pengaturanBerbagi = data.pengaturanBerbagi;
+        if (Array.isArray(data.sedekahList)) patch.sedekahList = data.sedekahList;
+        if (Array.isArray(data.penyaluranList)) patch.penyaluranList = data.penyaluranList;
+        if (data.maintenanceLock) patch.maintenanceLock = data.maintenanceLock;
+        if (data.accountNumberSchemaVersion) patch.accountNumberSchemaVersion = data.accountNumberSchemaVersion;
+        if (data.lastRunningNumber) patch.lastRunningNumber = data.lastRunningNumber;
+        if (Array.isArray(data.deletedMemberIds)) patch.deletedMemberIds = data.deletedMemberIds;
+        if (Array.isArray(data.deletedTransactionIds)) patch.deletedTransactionIds = data.deletedTransactionIds;
+        if (Array.isArray(data.deletedKasIds)) patch.deletedKasIds = data.deletedKasIds;
+        if (Array.isArray(data.deletedSetoranIds)) patch.deletedSetoranIds = data.deletedSetoranIds;
+        if (Array.isArray(data.usedAccountNumbers)) patch.usedAccountNumbers = data.usedAccountNumbers;
+        if (Array.isArray(data.usedMemberNumbers)) patch.usedMemberNumbers = data.usedMemberNumbers;
       }
     }
-    if (!memSnap.empty) {
-      const delSet = new Set([...(globalState.deletedMemberIds || []), ...(patch.deletedMemberIds || [])]);
+
+    const delMemSet = new Set([...(globalState.deletedMemberIds || []), ...(patch.deletedMemberIds || [])]);
+    if (memSnap && !memSnap.empty) {
       const remoteMembers = memSnap.docs
         .map((d) => d.data() as MemberUser)
-        .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
-      if (remoteMembers.length > 0) {
-        patch.members = remoteMembers;
+        .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delMemSet.has(m.id));
+      if (remoteMembers.length > 0) patch.members = remoteMembers;
+    }
+
+    const remoteAdmins: AdminUser[] = [];
+    const delAdmSet = new Set<string>((globalState as any).deletedAdminIds || []);
+    if (adminsDocSnap && adminsDocSnap.exists()) {
+      const adData = adminsDocSnap.data();
+      if (Array.isArray(adData?.deletedAdminIds)) {
+        adData.deletedAdminIds.forEach((id: string) => delAdmSet.add(id));
+      }
+      if (Array.isArray(adData?.admins)) {
+        adData.admins.forEach((a: AdminUser) => {
+          if (a && (a.id || a.username) && !delAdmSet.has(a.id)) remoteAdmins.push(a);
+        });
       }
     }
+    if (adminsColSnap && !adminsColSnap.empty) {
+      adminsColSnap.docs.forEach((d) => {
+        const a = d.data() as AdminUser;
+        if (a && (a.id || a.username) && !delAdmSet.has(a.id)) remoteAdmins.push(a);
+      });
+    }
+    if (remoteAdmins.length > 0) patch.admins = remoteAdmins;
+    if (delAdmSet.size > 0) patch.deletedAdminIds = Array.from(delAdmSet);
+
+    const delSetoranSet = new Set([...(globalState.deletedSetoranIds || []), ...(patch.deletedSetoranIds || [])]);
+    if (setoranSnap && !setoranSnap.empty) {
+      patch.setoranList = setoranSnap.docs
+        .map((d) => d.data() as SetoranVerifikasi)
+        .filter((s) => s && s.id && !delSetoranSet.has(s.id));
+    }
+    if (sedekahSnap && !sedekahSnap.empty) {
+      const colSedekah = sedekahSnap.docs
+        .map((d) => d.data() as any)
+        .filter((s) => s && s.id && !delSetoranSet.has(s.id));
+      const combined = new Map<string, any>();
+      (patch.sedekahList || []).forEach((s: any) => s?.id && combined.set(s.id, s));
+      colSedekah.forEach((s: any) => s?.id && combined.set(s.id, s));
+      if (combined.size > 0) patch.sedekahList = Array.from(combined.values());
+    }
+
+    const delKasSet = new Set([...(globalState.deletedKasIds || []), ...(patch.deletedKasIds || [])]);
+    if (kasSnap && !kasSnap.empty) {
+      patch.kasList = kasSnap.docs
+        .map((d) => d.data() as KasEntry)
+        .filter((k) => k && k.id && !delKasSet.has(k.id));
+    }
+
+    const delTxSet = new Set([...(globalState.deletedTransactionIds || []), ...(patch.deletedTransactionIds || [])]);
+    if (txSnap && !txSnap.empty) {
+      patch.memberTransactions = txSnap.docs
+        .map((d) => d.data() as MemberTransaction)
+        .filter((t) => t && t.id && !delTxSet.has(t.id));
+    }
+
+    if (chatSnap && !chatSnap.empty) {
+      patch.chatMessages = chatSnap.docs.map((d) => d.data() as ChatMessage);
+    }
+    if (suratSnap && !suratSnap.empty) {
+      patch.suratList = suratSnap.docs.map((d) => d.data() as SuratResmi);
+    }
+    if (logsSnap && !logsSnap.empty) {
+      patch.auditLogs = logsSnap.docs.map((d) => {
+        const ld = d.data();
+        return {
+          id: d.id,
+          timestamp: ld.timestamp || new Date().toISOString(),
+          adminId: ld.adminId || 'admin',
+          adminNama: ld.adminNama || 'Admin',
+          adminRole: ld.adminRole || 'admin_write',
+          action: ld.action || 'Aktivitas Admin',
+          detail: ld.detail || '',
+          targetId: ld.targetId || undefined,
+        };
+      });
+    }
+
     if (Object.keys(patch).length > 0) {
       hasHydratedRemoteState = true;
-      seedFirestoreSyncedHashesFromServer(patch);
+      seedFirestoreSyncedHashesFromServer(patch, true);
       globalState = mergeStates(globalState, { ...globalState, ...patch });
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
@@ -2790,7 +2933,6 @@ export async function fetchStateFromServer(): Promise<AppState> {
     }
   } catch {}
 
-  hasHydratedRemoteState = true;
   return globalState;
 }
 
@@ -2805,9 +2947,14 @@ export function useKoperasiState() {
     };
     listeners.add(handler);
 
-    // Initial fetch + live Firestore network activation whenever app opens
+    // Initial fetch + live Firestore connection check & activation whenever app opens
     if (getIsInternetConnected()) {
-      import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+      import('./firebase-init')
+        .then(({ testFirestoreConnection, ensureFirestoreOnline }) => {
+          testFirestoreConnection().catch(() => {});
+          ensureFirestoreOnline().catch(() => {});
+        })
+        .catch(() => {});
       fetchStateFromServer();
     }
 
@@ -2867,7 +3014,8 @@ export function useKoperasiState() {
             const data = JSON.parse(event.data);
             if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
               if (data.payload) {
-                seedFirestoreSyncedHashesFromServer(data.payload);
+                hasHydratedRemoteState = true;
+                seedFirestoreSyncedHashesFromServer(data.payload, true);
                 globalState = mergeStates(globalState, data.payload);
                 try {
                   localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
@@ -3010,10 +3158,12 @@ export function useKoperasiState() {
             collection(db, 'members'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const delSet = new Set(globalState.deletedMemberIds || []);
               const remoteMembers = snapshot.docs
                 .map((d) => d.data() as MemberUser)
                 .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
+              seedFirestoreSyncedHashesFromServer({ members: remoteMembers }, true);
               globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
               scheduleDebouncedNotify(150, false);
             },
@@ -3026,10 +3176,12 @@ export function useKoperasiState() {
             collection(db, 'setoran'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const delSet = new Set(globalState.deletedSetoranIds || []);
               const remoteSetoran = snapshot.docs
                 .map((d) => d.data() as SetoranVerifikasi)
                 .filter((s) => s && s.id && !delSet.has(s.id));
+              seedFirestoreSyncedHashesFromServer({ setoranList: remoteSetoran }, true);
               globalState = mergeStates(globalState, { ...globalState, setoranList: remoteSetoran });
               scheduleDebouncedNotify();
             },
@@ -3042,10 +3194,12 @@ export function useKoperasiState() {
             collection(db, 'kas'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const delSet = new Set(globalState.deletedKasIds || []);
               const remoteKas = snapshot.docs
                 .map((d) => d.data() as KasEntry)
                 .filter((k) => k && k.id && !delSet.has(k.id));
+              seedFirestoreSyncedHashesFromServer({ kasList: remoteKas }, true);
               globalState = mergeStates(globalState, { ...globalState, kasList: remoteKas });
               scheduleDebouncedNotify();
             },
@@ -3058,10 +3212,12 @@ export function useKoperasiState() {
             collection(db, 'transactions'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const delSet = new Set(globalState.deletedTransactionIds || []);
               const remoteTx = snapshot.docs
                 .map((d) => d.data() as MemberTransaction)
                 .filter((tx) => tx && tx.id && !delSet.has(tx.id));
+              seedFirestoreSyncedHashesFromServer({ memberTransactions: remoteTx }, true);
               globalState = mergeStates(globalState, { ...globalState, memberTransactions: remoteTx });
               scheduleDebouncedNotify();
             },
@@ -3074,8 +3230,13 @@ export function useKoperasiState() {
             collection(db, 'chats'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const remoteChats = snapshot.docs.map((d) => d.data() as ChatMessage);
+              seedFirestoreSyncedHashesFromServer({ chatMessages: remoteChats }, true);
               globalState = mergeStates(globalState, { ...globalState, chatMessages: remoteChats });
+              try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+              } catch {}
               notifyListeners();
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
@@ -3113,7 +3274,7 @@ export function useKoperasiState() {
                     ),
                   };
                   if (data.updatedBy !== CLIENT_ID) {
-                    seedFirestoreSyncedHashesFromServer(generalSnapshotState);
+                    seedFirestoreSyncedHashesFromServer(generalSnapshotState, true);
                     globalState = mergeStates(globalState, {
                       ...globalState,
                       ...generalSnapshotState,
@@ -3135,12 +3296,16 @@ export function useKoperasiState() {
                 const data = snap.data();
                 if (data && data.admins && data.updatedBy !== CLIENT_ID) {
                   hasHydratedRemoteState = true;
-                  globalState = mergeStates(globalState, {
-                    ...globalState,
+                  const admSlice = {
                     admins: data.admins,
                     deletedAdminIds: Array.from(
                       new Set([...((globalState as any).deletedAdminIds || []), ...(data.deletedAdminIds || [])])
                     ),
+                  };
+                  seedFirestoreSyncedHashesFromServer(admSlice as any, true);
+                  globalState = mergeStates(globalState, {
+                    ...globalState,
+                    ...admSlice,
                   });
                   scheduleDebouncedNotify();
                 }
@@ -3160,6 +3325,7 @@ export function useKoperasiState() {
                 .map((d) => d.data() as AdminUser)
                 .filter((a) => a && (a.id || a.username) && !delAdmSet.has(a.id));
               if (remoteAdmins.length > 0) {
+                seedFirestoreSyncedHashesFromServer({ admins: remoteAdmins }, true);
                 globalState = mergeStates(globalState, { ...globalState, admins: remoteAdmins });
                 scheduleDebouncedNotify();
               }
@@ -3173,10 +3339,12 @@ export function useKoperasiState() {
             collection(db, 'sedekah'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const delSet = new Set(globalState.deletedSetoranIds || []);
               const remoteSedekah = snapshot.docs
                 .map((d) => d.data() as any)
                 .filter((s) => s && s.id && !delSet.has(s.id));
+              seedFirestoreSyncedHashesFromServer({ sedekahList: remoteSedekah }, true);
               globalState = mergeStates(globalState, { ...globalState, sedekahList: remoteSedekah });
               scheduleDebouncedNotify();
             },
@@ -3189,6 +3357,7 @@ export function useKoperasiState() {
             query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const remoteLogs: AuditLog[] = snapshot.docs.map((d) => {
                 const data = d.data();
                 return {
@@ -3214,7 +3383,9 @@ export function useKoperasiState() {
             collection(db, 'surat'),
             (snapshot) => {
               if (snapshot.empty) return;
+              hasHydratedRemoteState = true;
               const remoteSurat = snapshot.docs.map((d) => d.data() as SuratResmi);
+              seedFirestoreSyncedHashesFromServer({ suratList: remoteSurat }, true);
               globalState = mergeStates(globalState, { ...globalState, suratList: remoteSurat });
               scheduleDebouncedNotify();
             },
