@@ -784,8 +784,47 @@ export function getMemberSeqNum(nomorOrRek?: string): number {
   return match ? parseInt(match[1], 10) || 0 : 0;
 }
 
-export function sortMembersDesc<T extends { nomorRekening?: string; nomorAnggota?: string; id?: string }>(members: T[]): T[] {
+export function getMemberRegistrationTimeInfo(
+  m: { terdaftarSejak?: string; createdAt?: string; id?: string } | null | undefined
+): { dayMs: number; tsMs: number } {
+  const rawDate = String(m?.terdaftarSejak || '').trim();
+  const isoMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const dmyMatch = rawDate.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+  let dayMs = 0;
+  if (isoMatch) {
+    dayMs = Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+  } else if (dmyMatch) {
+    dayMs = Date.UTC(Number(dmyMatch[3]), Number(dmyMatch[2]) - 1, Number(dmyMatch[1]));
+  } else if (rawDate) {
+    const parsedRaw = new Date(rawDate);
+    if (!isNaN(parsedRaw.getTime())) {
+      dayMs = Date.UTC(parsedRaw.getUTCFullYear(), parsedRaw.getUTCMonth(), parsedRaw.getUTCDate());
+    }
+  }
+  let tsMs = 0;
+  if (m?.createdAt) {
+    const parsed = new Date(m.createdAt).getTime();
+    if (Number.isFinite(parsed) && parsed > 0) tsMs = parsed;
+  }
+  if (!tsMs && m?.id) {
+    const idMatch = String(m.id).match(/(\d{12,15})/);
+    if (idMatch) tsMs = Number(idMatch[1]);
+  }
+  if (!dayMs && tsMs > 0) {
+    const d = new Date(tsMs);
+    dayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  return { dayMs, tsMs };
+}
+
+export function sortMembersDesc<
+  T extends { terdaftarSejak?: string; createdAt?: string; nomorRekening?: string; nomorAnggota?: string; id?: string }
+>(members: T[]): T[] {
   return [...(Array.isArray(members) ? members : [])].sort((a, b) => {
+    const ra = getMemberRegistrationTimeInfo(a);
+    const rb = getMemberRegistrationTimeInfo(b);
+    if (rb.dayMs !== ra.dayMs) return rb.dayMs - ra.dayMs;
+    if (rb.tsMs !== ra.tsMs) return rb.tsMs - ra.tsMs;
     const aKey = a?.nomorRekening || a?.nomorAnggota;
     const bKey = b?.nomorRekening || b?.nomorAnggota;
     const seqDiff = getMemberSeqNum(bKey) - getMemberSeqNum(aKey);
@@ -3705,9 +3744,10 @@ export async function registerMemberOnline(
     }
 
     // 3. Pastikan No. Rekening = No. Anggota tunggal mengikuti format KW+DD+HP2+YY+Seq (mulai 770+)
-    let candidateToSave = {
+    let candidateToSave: MemberUser = {
       ...newMember,
       nik: normalizeNik(newMember.nik),
+      createdAt: newMember.createdAt || new Date().toISOString(),
     };
     const usedUnifiedSet = new Set<string>(
       sanitizeUsedUnifiedNumbersClient(

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { LogoHws } from '../lib/logo';
 import { AppState, MemberUser, AdminUser, WilayahKoperasi } from '../types';
-import { generateNomorRekening, createAuditLog, registerMemberOnline, validateMemberBiodata } from '../lib/storage';
+import { generateNomorRekening, createAuditLog, registerMemberOnline, validateMemberBiodata, getWibDateStr } from '../lib/storage';
 import { detectPlatform } from '../lib/activityLogger';
 import {
   authenticateBiometric,
@@ -766,7 +766,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsRegistering(true);
 
     try {
-      const regDateStr = new Date().toISOString().split('T')[0];
+      const regDateStr = getWibDateStr();
       // Generate No. Rekening = No. Anggota tunggal tanpa mengotori globalState sebelum konfirmasi server
       const { nomorRekening, nextRunningNumber } = generateNomorRekening(
         regForm.wilayah,
@@ -813,6 +813,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         totalSimpanan: 0,
         status: 'aktif',
         terdaftarSejak: regDateStr,
+        createdAt: new Date().toISOString(),
       };
 
       // Authoritative Realtime Online Registration (Anti-Meniban & Anti-Pendaftaran Berulang across all devices)

@@ -185,6 +185,7 @@ export interface MemberUser {
   freezeRequest?: FreezeRequest;
   lockPokokRequest?: LockPokokRequest;
   terdaftarSejak: string;
+  createdAt?: string;
   updatedAt?: string;
   legacyNomorAnggota?: string;
 }

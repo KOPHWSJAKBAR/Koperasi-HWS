@@ -1,5 +1,5 @@
 import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry, SedekahBerbagiEntry } from '../types';
-import { formatRupiah, sortMembersDesc } from './storage';
+import { formatRupiah, sortMembersDesc, formatWibDateShort } from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
 export function printDocumentHtml(htmlContent: string, title: string = 'Dokumen Koperasi HWS') {
@@ -489,7 +489,7 @@ export function exportAnggotaExcel(
       <tr>
         <td class="center">${idx + 1}</td>
         <td style="font-weight: bold;">${m.nama}</td>
-        <td class="center" style="mso-number-format:'\\@';">${m.nomorRekening || m.nomorAnggota || '-'}</td>
+        <td class="center" style="mso-number-format:'\\@';">${m.nomorRekening || m.nomorAnggota || '-'}<br/><span style="font-size:8pt;color:#64748b;">Terdaftar: ${formatWibDateShort(m.terdaftarSejak)}</span></td>
         <td class="center">${m.wilayah}</td>
         <td class="num">${pokok}</td>
         <td class="num">${zakat}</td>
@@ -604,7 +604,10 @@ export function exportAnggotaPdf(
         <tr style="border-bottom: 1px solid #e2e8f0; font-size: 10px;">
           <td style="padding: 5px 4px; text-align: center; color: #64748b;">${idx + 1}</td>
           <td style="padding: 5px 6px; font-weight: 700; color: #0f172a;">${m.nama}</td>
-          <td style="padding: 5px 4px; font-family: 'JetBrains Mono', monospace; font-size: 9px; text-align: center;">${m.nomorRekening}</td>
+          <td style="padding: 5px 4px; font-family: 'JetBrains Mono', monospace; font-size: 9px; text-align: center;">
+            ${m.nomorRekening}
+            <div style="font-size: 8px; color: #64748b; margin-top: 1px;">Tgl: ${formatWibDateShort(m.terdaftarSejak)}</div>
+          </td>
           <td style="padding: 5px 4px; text-align: center; font-size: 9px;">${m.wilayah}</td>
           <td style="padding: 5px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(pokok)}</td>
           <td style="padding: 5px 6px; text-align: right; font-family: 'JetBrains Mono', monospace;">${formatRupiah(zakat)}</td>

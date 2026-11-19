@@ -349,6 +349,51 @@ function getMemberSortSeqServer(m: any): number {
   return match ? parseInt(match[1], 10) || 0 : 0;
 }
 
+function getMemberRegistrationTimeInfoServer(m: any): { dayMs: number; tsMs: number } {
+  const rawDate = String(m?.terdaftarSejak || '').trim();
+  const isoMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const dmyMatch = rawDate.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
+  let dayMs = 0;
+  if (isoMatch) {
+    dayMs = Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+  } else if (dmyMatch) {
+    dayMs = Date.UTC(Number(dmyMatch[3]), Number(dmyMatch[2]) - 1, Number(dmyMatch[1]));
+  } else if (rawDate) {
+    const parsedRaw = new Date(rawDate);
+    if (!isNaN(parsedRaw.getTime())) {
+      dayMs = Date.UTC(parsedRaw.getUTCFullYear(), parsedRaw.getUTCMonth(), parsedRaw.getUTCDate());
+    }
+  }
+  let tsMs = 0;
+  if (m?.createdAt) {
+    const parsed = new Date(m.createdAt).getTime();
+    if (Number.isFinite(parsed) && parsed > 0) tsMs = parsed;
+  }
+  if (!tsMs && m?.id) {
+    const idMatch = String(m.id).match(/(\d{12,15})/);
+    if (idMatch) tsMs = Number(idMatch[1]);
+  }
+  if (!dayMs && tsMs > 0) {
+    const d = new Date(tsMs);
+    dayMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  return { dayMs, tsMs };
+}
+
+function compareMembersNewestFirstServer(a: any, b: any): number {
+  const ra = getMemberRegistrationTimeInfoServer(a);
+  const rb = getMemberRegistrationTimeInfoServer(b);
+  if (rb.dayMs !== ra.dayMs) return rb.dayMs - ra.dayMs;
+  if (rb.tsMs !== ra.tsMs) return rb.tsMs - ra.tsMs;
+  const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
+  if (seqDiff !== 0) return seqDiff;
+  const noDiff = String(b?.nomorRekening || b?.nomorAnggota || '').localeCompare(
+    String(a?.nomorRekening || a?.nomorAnggota || '')
+  );
+  if (noDiff !== 0) return noDiff;
+  return String(b?.id || '').localeCompare(String(a?.id || ''));
+}
+
 function sanitizeUsedUnifiedNumbersServer(usedList: any[], members: any[] = []): string[] {
   const result = new Set<string>();
   (members || []).forEach((m: any) => {
@@ -550,11 +595,7 @@ function deduplicateMembersServer(members: any[], deletedIds: string[] = []): an
     result.push(m);
   }
 
-  result.sort((a, b) => {
-    const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
-    if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorRekening || b.nomorAnggota || '').localeCompare(String(a.nomorRekening || a.nomorAnggota || ''));
-  });
+  result.sort(compareMembersNewestFirstServer);
 
   return result;
 }
@@ -1904,7 +1945,7 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
     state.lastRunningNumber = Math.max(769, seq);
     state.usedAccountNumbers = assignedV2;
     state.usedMemberNumbers = assignedV2;
-    state.members.sort((a: any, b: any) => getMemberSortSeqServer(b) - getMemberSortSeqServer(a));
+    state.members.sort(compareMembersNewestFirstServer);
     return { state, migratedCount };
   }
 
@@ -2026,12 +2067,8 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
     migratedCount++;
   });
 
-  // Sort final active members from largest (newest) on top to smallest (oldest) at bottom
-  state.members.sort((a: any, b: any) => {
-    const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
-    if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorRekening || b.nomorAnggota || '').localeCompare(String(a.nomorRekening || a.nomorAnggota || ''));
-  });
+  // Sort final active members from newest registration on top to oldest at bottom
+  state.members.sort(compareMembersNewestFirstServer);
 
   const finalUsed = sanitizeUsedUnifiedNumbersServer(Array.from(usedNoSet), state.members);
   state.accountNumberSchemaVersion = 2;
@@ -2314,11 +2351,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     };
   });
 
-  state.members.sort((a: any, b: any) => {
-    const seqDiff = getMemberSortSeqServer(b) - getMemberSortSeqServer(a);
-    if (seqDiff !== 0) return seqDiff;
-    return String(b.nomorRekening || b.nomorAnggota || '').localeCompare(String(a.nomorRekening || a.nomorAnggota || ''));
-  });
+  state.members.sort(compareMembersNewestFirstServer);
 
   state.memberTransactions = nextTxList.sort((a: any, b: any) =>
     `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
@@ -4405,11 +4438,12 @@ async function startServer() {
           totalSimpanan: 0,
           status: 'aktif',
           terdaftarSejak: regDate,
+          createdAt: member.createdAt || new Date().toISOString(),
         };
         delete finalMember.biometricActive;
 
         currentState.members.push(finalMember);
-        currentState.members.sort((a: any, b: any) => getMemberSortSeqServer(b) - getMemberSortSeqServer(a));
+        currentState.members.sort(compareMembersNewestFirstServer);
       }
 
       // Remove from deletedMemberIds if previously deleted
