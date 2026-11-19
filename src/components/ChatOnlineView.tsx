@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   AppState,
   AdminUser,
@@ -6,20 +6,22 @@ import {
   ChatMessage,
 } from '../types';
 import { downloadExcelCsv } from '../lib/exportPdf';
-import { fetchStateFromServer, sanitizeForFirestore, applyRealtimeChatMessages, handleFirestoreError, OperationType, sortMembersDesc } from '../lib/storage';
+import {
+  commitLocalStatePatch,
+  isChatMessageClearedClient,
+  maxIsoTsClient,
+  sanitizeForFirestore,
+  applyRealtimeChatMessages,
+  handleFirestoreError,
+  OperationType,
+  sortMembersDesc,
+} from '../lib/storage';
 import {
   MessageSquare,
   Send,
-  User,
-  Shield,
   Download,
-  Check,
   CheckCheck,
-  Phone,
-  Video,
-  Smile,
   Paperclip,
-  Wifi,
   ArrowLeft,
   X,
   Search,
@@ -28,22 +30,28 @@ import {
   Clock,
   ChevronDown,
   Sparkles,
+  Trash2,
+  Eraser,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface ChatOnlineViewProps {
   state: AppState;
-  updateState: (updater: (prev: AppState) => AppState) => Promise<void>;
+  updateState?: (updater: (prev: AppState) => AppState) => Promise<void>;
   currentAdmin?: AdminUser;
   currentMember?: MemberUser;
 }
 
 export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   state,
-  updateState,
   currentAdmin,
   currentMember,
 }) => {
   const isMember = !!currentMember;
+  const canManageChat =
+    !isMember && !!currentAdmin && currentAdmin.role !== 'admin_laporan';
+
   const [selectedMemberId, setSelectedMemberId] = useState<string>(
     isMember ? currentMember.id : sortMembersDesc(state.members)[0]?.id || ''
   );
@@ -53,14 +61,48 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       setSelectedMemberId(currentMember.id);
     }
   }, [isMember, currentMember?.id]);
+
   const [mobileChatOpen, setMobileChatOpen] = useState(isMember ? true : false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [inputPesan, setInputPesan] = useState('');
   const [searchMemberQuery, setSearchMemberQuery] = useState('');
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [showClearMenu, setShowClearMenu] = useState(false);
   const [lampiranUrl, setLampiranUrl] = useState<string>('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [confirmClearModal, setConfirmClearModal] = useState<
+    | { mode: 'single_msg'; msg: ChatMessage }
+    | { mode: 'member'; member: MemberUser }
+    | { mode: 'all' }
+    | null
+  >(null);
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Keep latest deletion/clear state accessible inside onSnapshot listener
+  const clearFilterRef = useRef({
+    deletedChatIds: state.deletedChatIds || [],
+    chatClearedAt: state.chatClearedAt,
+    chatClearedBeforeByMember: state.chatClearedBeforeByMember,
+  });
+  useEffect(() => {
+    clearFilterRef.current = {
+      deletedChatIds: state.deletedChatIds || [],
+      chatClearedAt: state.chatClearedAt,
+      chatClearedBeforeByMember: state.chatClearedBeforeByMember,
+    };
+  }, [state.deletedChatIds, state.chatClearedAt, state.chatClearedBeforeByMember]);
+
+  useEffect(() => {
+    if (!statusBanner) return;
+    const timer = setTimeout(() => setStatusBanner(null), 5000);
+    return () => clearTimeout(timer);
+  }, [statusBanner]);
 
   // Quick Questions for Members
   const QUICK_PROMPTS = [
@@ -84,7 +126,10 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
   const handleUploadLampiran = (file: File) => {
     if (!file.type.startsWith('image/')) {
-      alert('Hanya berkas gambar (JPG, PNG, WEBP) yang didukung untuk lampiran chat.');
+      setStatusBanner({
+        type: 'error',
+        message: 'Hanya berkas gambar (JPG, PNG, WEBP) yang didukung untuk lampiran chat.',
+      });
       return;
     }
     const reader = new FileReader();
@@ -94,7 +139,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Online Presence Polling (Req 19: chat admin tampilkan anggota online yang sedang membuka aplikasi)
+  // Online Presence Polling (optimized interval 15s)
   useEffect(() => {
     const fetchPresence = async () => {
       try {
@@ -109,11 +154,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       } catch {}
     };
     fetchPresence();
-    const interval = setInterval(fetchPresence, 5000);
+    const interval = setInterval(fetchPresence, 15000);
     return () => clearInterval(interval);
   }, []);
 
-  // Dedicated Direct Firestore Realtime Online Chat Listener (Zero Delay Sync)
+  // Dedicated Direct Firestore Realtime Online Chat Listener (Zero Delay Sync, respects tombstones)
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
     let active = true;
@@ -128,10 +173,21 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
             q,
             (snapshot) => {
               if (snapshot.empty && snapshot.metadata.hasPendingWrites === false) return;
+              const delSet = new Set<string>(clearFilterRef.current.deletedChatIds);
               const incoming: ChatMessage[] = [];
               snapshot.forEach((docSnap) => {
                 const data = docSnap.data() as ChatMessage;
-                if (data && data.id && data.memberId) {
+                if (
+                  data &&
+                  data.id &&
+                  data.memberId &&
+                  !isChatMessageClearedClient(
+                    data,
+                    delSet,
+                    clearFilterRef.current.chatClearedAt,
+                    clearFilterRef.current.chatClearedBeforeByMember
+                  )
+                ) {
                   incoming.push(data);
                 }
               });
@@ -150,16 +206,34 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       });
     });
 
-    const interval = setInterval(() => {
-      fetchStateFromServer();
-    }, 3000);
-
     return () => {
       active = false;
       if (unsubscribe) unsubscribe();
-      clearInterval(interval);
     };
   }, []);
+
+  const delChatSet = useMemo(
+    () => new Set<string>(state.deletedChatIds || []),
+    [state.deletedChatIds]
+  );
+
+  const visibleAllMessages = useMemo(() => {
+    return (state.chatMessages || []).filter(
+      (m) =>
+        m &&
+        !isChatMessageClearedClient(
+          m,
+          delChatSet,
+          state.chatClearedAt,
+          state.chatClearedBeforeByMember
+        )
+    );
+  }, [
+    state.chatMessages,
+    delChatSet,
+    state.chatClearedAt,
+    state.chatClearedBeforeByMember,
+  ]);
 
   // Filter members based on search query (diurutkan dari no anggota terbesar ke terkecil)
   const filteredMembers = sortMembersDesc(state.members).filter((mem) => {
@@ -175,9 +249,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
 
   // Group messages by member & track online status
   const memberListWithLastMsg = filteredMembers.map((mem) => {
-    const memMsgs = state.chatMessages.filter((m) => m.memberId === mem.id);
+    const memMsgs = visibleAllMessages.filter((m) => m.memberId === mem.id);
     const lastMsg = memMsgs[memMsgs.length - 1];
-    const unreadCount = memMsgs.filter((m) => m.senderType === 'member' && !m.isReadByAdmin).length;
+    const unreadCount = memMsgs.filter(
+      (m) => m.senderType === 'member' && !m.isReadByAdmin
+    ).length;
     const isOnline = onlineUserIds.has(mem.id);
     return {
       member: mem,
@@ -196,16 +272,17 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   });
 
   // Active member object
-  const targetMemberId = isMember ? (currentMember?.id || selectedMemberId) : selectedMemberId;
-  const activeMember = isMember ? (currentMember || state.members.find((m) => m.id === targetMemberId)) : state.members.find((m) => m.id === targetMemberId);
+  const targetMemberId = isMember ? currentMember?.id || selectedMemberId : selectedMemberId;
+  const activeMember = isMember
+    ? currentMember || state.members.find((m) => m.id === targetMemberId)
+    : state.members.find((m) => m.id === targetMemberId);
 
-  // Current active conversation messages (strictly 10 days retention per user req)
+  // Current active conversation messages (strictly 10 days retention)
   const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const activeMessages = state.chatMessages.filter((m) => {
+  const activeMessages = visibleAllMessages.filter((m) => {
     if (m.memberId !== targetMemberId) return false;
     const time = new Date(m.timestamp).getTime();
-    // Strictly retain messages within 10 days
     return !isNaN(time) ? now - time <= TEN_DAYS_MS : true;
   });
 
@@ -223,7 +300,6 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       : activeMessages.some((m) => m.senderType === 'member' && !m.isReadByAdmin);
 
     if (hasUnread) {
-      // 1. Authoritative Server Disk Persistence
       try {
         fetch('/api/chat/read', {
           method: 'POST',
@@ -235,7 +311,6 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         }).catch(() => {});
       } catch {}
 
-      // 2. Direct Firestore update for read status
       try {
         import('../lib/firebase').then(({ db }) => {
           import('firebase/firestore').then(({ doc, updateDoc }) => {
@@ -254,8 +329,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         });
       } catch {}
 
-      // 3. Local State Update
-      updateState((prev) => ({
+      commitLocalStatePatch((prev) => ({
         ...prev,
         chatMessages: prev.chatMessages.map((m) => {
           if (m.memberId === targetMemberId) {
@@ -271,12 +345,12 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     }
   }, [targetMemberId, activeMessages.length, isMember]);
 
-  // Send message
+  // Send message (targeted endpoint + local patch, zero 5MB POST /api/state)
   const handleSendMessage = async (textToSend?: string) => {
     const msgText = (textToSend || inputPesan).trim();
     if (!msgText && !lampiranUrl) return;
 
-    const convMemberId = isMember ? (currentMember?.id || selectedMemberId) : selectedMemberId;
+    const convMemberId = isMember ? currentMember?.id || selectedMemberId : selectedMemberId;
     if (!convMemberId) return;
 
     const newMsg: ChatMessage = {
@@ -294,7 +368,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
     setInputPesan('');
     setLampiranUrl('');
 
-    // 1. Direct Firestore setDoc with deep undefined sanitization for immediate zero-delay cross-device sync
+    // 1. Direct Firestore setDoc for immediate zero-delay cross-device sync
     try {
       const { db } = await import('../lib/firebase');
       const { doc, setDoc } = await import('firebase/firestore');
@@ -304,7 +378,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       console.warn('Direct Firestore chat error:', e);
     }
 
-    // 2. Also notify server endpoint
+    // 2. Notify lightweight server endpoint
     try {
       fetch('/api/chat', {
         method: 'POST',
@@ -313,14 +387,17 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       }).catch(() => {});
     } catch {}
 
-    // 3. Local State Update
-    await updateState((prev) => ({
+    // 3. Instant local patch
+    commitLocalStatePatch((prev) => ({
       ...prev,
-      chatMessages: [...prev.chatMessages, newMsg],
+      chatMessages: [
+        ...(prev.chatMessages || []).filter((m) => m.id !== newMsg.id),
+        newMsg,
+      ],
     }));
   };
 
-  // Mark all chat messages as read (Req: Hilangkan notifikasi chat setelah dibaca)
+  // Mark all chat messages as read
   const handleMarkAllChatRead = async () => {
     try {
       await fetch('/api/chat/read', {
@@ -334,14 +411,163 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       });
     } catch {}
 
-    await updateState((prev) => ({
+    commitLocalStatePatch((prev) => ({
       ...prev,
       chatMessages: prev.chatMessages.map((m) => ({
         ...m,
         isReadByAdmin: isMember ? m.isReadByAdmin : true,
-        isReadByMember: isMember ? (m.memberId === currentMember.id ? true : m.isReadByMember) : m.isReadByMember,
+        isReadByMember: isMember
+          ? m.memberId === currentMember.id
+            ? true
+            : m.isReadByMember
+          : m.isReadByMember,
       })),
     }));
+  };
+
+  // Delete single chat message (Admin)
+  const executeDeleteSingleMessage = async (msg: ChatMessage) => {
+    if (!canManageChat || !currentAdmin || isProcessingAction) return;
+    setIsProcessingAction(true);
+    try {
+      const res = await fetch('/api/chat/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messageId: msg.id,
+          adminId: currentAdmin.id,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+        }),
+      });
+      const resJson = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatusBanner({
+          type: 'error',
+          message: resJson?.error || 'Gagal menghapus pesan chat.',
+        });
+        return;
+      }
+
+      try {
+        const { db } = await import('../lib/firebase');
+        const { doc, deleteDoc } = await import('firebase/firestore');
+        await deleteDoc(doc(db, 'chats', msg.id)).catch(() => {});
+      } catch {}
+
+      commitLocalStatePatch((prev) => ({
+        ...prev,
+        chatMessages: (prev.chatMessages || []).filter((m) => m.id !== msg.id),
+        deletedChatIds: Array.from(
+          new Set([...(prev.deletedChatIds || []), msg.id])
+        ).slice(-2000),
+      }));
+
+      setConfirmClearModal(null);
+      setStatusBanner({
+        type: 'success',
+        message: 'Pesan chat berhasil dihapus permanen di semua perangkat.',
+      });
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        message: err?.message || 'Gagal menghapus pesan chat.',
+      });
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // Clear chat for selected member or all members (Admin)
+  const executeClearChat = async (mode: 'member' | 'all', member?: MemberUser) => {
+    if (!canManageChat || !currentAdmin || isProcessingAction) return;
+    if (mode === 'member' && !member) return;
+
+    setIsProcessingAction(true);
+    try {
+      const res = await fetch('/api/chat/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memberId: mode === 'member' ? member!.id : undefined,
+          clearAll: mode === 'all',
+          adminId: currentAdmin.id,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+        }),
+      });
+      const resJson = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setStatusBanner({
+          type: 'error',
+          message: resJson?.error || 'Gagal membersihkan riwayat chat.',
+        });
+        return;
+      }
+
+      const clearedAt = resJson.clearedAt || new Date().toISOString();
+
+      // Mirror deletion to Firestore client-side as well
+      try {
+        const { db } = await import('../lib/firebase');
+        const { collection, getDocs, deleteDoc, doc } = await import('firebase/firestore');
+        const snap = await getDocs(collection(db, 'chats')).catch(() => null);
+        if (snap) {
+          const toDelete = snap.docs.filter((d) => {
+            if (mode === 'all') return true;
+            const data = d.data() as Partial<ChatMessage>;
+            return data?.memberId === member?.id;
+          });
+          await Promise.all(
+            toDelete.map((d) => deleteDoc(doc(db, 'chats', d.id)).catch(() => {}))
+          );
+        }
+      } catch {}
+
+      commitLocalStatePatch((prev) => {
+        const delSet = new Set<string>(prev.deletedChatIds || []);
+        const nextMessages = (prev.chatMessages || []).filter((m) => {
+          const shouldRemove = mode === 'all' || m.memberId === member?.id;
+          if (shouldRemove && m.id) delSet.add(m.id);
+          return !shouldRemove;
+        });
+
+        return {
+          ...prev,
+          chatMessages: nextMessages,
+          deletedChatIds: Array.from(delSet).slice(-2000),
+          chatClearedAt:
+            mode === 'all' ? maxIsoTsClient(prev.chatClearedAt, clearedAt) : prev.chatClearedAt,
+          chatClearedBeforeByMember:
+            mode === 'all'
+              ? {}
+              : {
+                  ...(prev.chatClearedBeforeByMember || {}),
+                  [member!.id]: maxIsoTsClient(
+                    prev.chatClearedBeforeByMember?.[member!.id],
+                    clearedAt
+                  ),
+                },
+        };
+      });
+
+      setConfirmClearModal(null);
+      setShowClearMenu(false);
+      setStatusBanner({
+        type: 'success',
+        message:
+          mode === 'all'
+            ? 'Seluruh riwayat chat online berhasil dibersihkan secara permanen.'
+            : `Riwayat chat ${member?.nama} berhasil dibersihkan secara permanen.`,
+      });
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        message: err?.message || 'Gagal melakukan clear chat.',
+      });
+    } finally {
+      setIsProcessingAction(false);
+    }
   };
 
   // Download Chat Transcript of Current Member
@@ -357,7 +583,10 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
       Pesan: m.pesan,
       Lampiran: m.lampiranUrl ? 'Ada Foto' : 'Tidak Ada',
     }));
-    downloadExcelCsv(rows, `Transcript_Chat_${activeMember.nama.replace(/\s+/g, '_')}_20Hari_${Date.now()}`);
+    downloadExcelCsv(
+      rows,
+      `Transcript_Chat_${activeMember.nama.replace(/\s+/g, '_')}_10Hari_${Date.now()}`
+    );
     setShowDownloadMenu(false);
   };
 
@@ -365,7 +594,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   const handleDownloadAllChatHistory = () => {
     const memberMap = new Map(state.members.map((m) => [m.id, m]));
     const cutoff = Date.now() - TEN_DAYS_MS;
-    const allRecentMessages = state.chatMessages.filter((m) => {
+    const allRecentMessages = visibleAllMessages.filter((m) => {
       const t = new Date(m.timestamp).getTime();
       return !isNaN(t) ? t >= cutoff : false;
     });
@@ -392,7 +621,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
   // Download Raw JSON Archive of Chat History
   const handleDownloadJsonArchive = () => {
     const cutoff = Date.now() - TEN_DAYS_MS;
-    const recentMessages = state.chatMessages.filter((m) => {
+    const recentMessages = visibleAllMessages.filter((m) => {
       const t = new Date(m.timestamp).getTime();
       return !isNaN(t) ? t >= cutoff : false;
     });
@@ -538,9 +767,8 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         }`}
       >
         {/* Chat Header */}
-        <div className="p-3.5 bg-[#162035] border-b border-slate-700/80 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Mobile Back Button to Member List */}
+        <div className="p-3.5 bg-[#162035] border-b border-slate-700/80 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
             {!isMember && (
               <button
                 type="button"
@@ -558,28 +786,32 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                 {isMember ? 'HWS' : activeMember?.nama.charAt(0).toUpperCase() || 'A'}
               </div>
             </div>
-            <div>
-              <div className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2">
-                {isMember ? 'Layanan Pengurus Koperasi HWS' : activeMember?.nama}
+            <div className="min-w-0">
+              <div className="text-xs sm:text-sm font-extrabold text-white flex items-center gap-2 truncate">
+                <span className="truncate">
+                  {isMember ? 'Layanan Pengurus Koperasi HWS' : activeMember?.nama || 'Pilih Anggota'}
+                </span>
                 <span
-                  className={`w-2 h-2 rounded-full ${
+                  className={`w-2 h-2 rounded-full shrink-0 ${
                     !isMember && activeMember && !onlineUserIds.has(activeMember.id)
                       ? 'bg-slate-500'
                       : 'bg-emerald-400 animate-pulse'
                   }`}
                 />
               </div>
-              <div className="text-[10px] text-slate-400 flex items-center gap-2">
+              <div className="text-[10px] text-slate-400 truncate">
                 {isMember ? (
                   <span>Realtime Online • Siap Membantu Transaksi & Verifikasi</span>
                 ) : (
-                  <span>Rek: {activeMember?.nomorRekening || '-'} • WA: {activeMember?.whatsapp || '-'}</span>
+                  <span>
+                    Rek: {activeMember?.nomorRekening || '-'} • WA: {activeMember?.whatsapp || '-'}
+                  </span>
                 )}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={handleMarkAllChatRead}
@@ -590,70 +822,173 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
               <span className="hidden sm:inline">Tandai Dibaca</span>
             </button>
 
+            {/* Admin Clear Chat Menu */}
+            {canManageChat && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowClearMenu(!showClearMenu);
+                    setShowDownloadMenu(false);
+                  }}
+                  className="py-1.5 px-2.5 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 rounded-xl text-xs font-bold flex items-center gap-1 border border-rose-500/30 transition-all shadow-sm cursor-pointer"
+                  title="Hapus atau bersihkan riwayat chat"
+                >
+                  <Eraser className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Clear Chat</span>
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+
+                {showClearMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-64 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl p-2 z-30 space-y-1">
+                    <div className="px-2.5 py-1.5 border-b border-slate-800">
+                      <span className="text-[10px] uppercase font-black text-rose-400">
+                        Opsi Clear Chat Admin
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={!activeMember || activeMessages.length === 0}
+                      onClick={() => {
+                        if (activeMember) {
+                          setConfirmClearModal({ mode: 'member', member: activeMember });
+                        }
+                        setShowClearMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      <Eraser className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <div>
+                        <div className="font-semibold text-white">Clear Chat Anggota Ini</div>
+                        <div className="text-[10px] text-slate-400">
+                          {activeMember?.nama || '-'} ({activeMessages.length} pesan)
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={visibleAllMessages.length === 0}
+                      onClick={() => {
+                        setConfirmClearModal({ mode: 'all' });
+                        setShowClearMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs text-rose-300 hover:bg-rose-500/15 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <div>
+                        <div className="font-semibold text-rose-200">Clear Semua Chat</div>
+                        <div className="text-[10px] text-rose-400/80">
+                          Semua anggota ({visibleAllMessages.length} pesan)
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Admin Download Chat Transcript Menu */}
             {!isMember && (
               <div className="relative">
                 <button
                   type="button"
-                  onClick={() => setShowDownloadMenu(!showDownloadMenu)}
-                className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-500/30 transition-all shadow-sm cursor-pointer active:scale-95"
-                title="Unduh Riwayat Chat"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Unduh Chat</span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
-              </button>
+                  onClick={() => {
+                    setShowDownloadMenu(!showDownloadMenu);
+                    setShowClearMenu(false);
+                  }}
+                  className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-emerald-500/30 transition-all shadow-sm cursor-pointer active:scale-95"
+                  title="Unduh Riwayat Chat"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Unduh Chat</span>
+                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                </button>
 
-              {showDownloadMenu && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl p-2 z-30 space-y-1">
-                  <div className="px-2.5 py-1.5 border-b border-slate-800">
-                    <span className="text-[10px] uppercase font-black text-amber-400">
-                      Opsi Unduh Riwayat Chat (10 Hari)
-                    </span>
+                {showDownloadMenu && (
+                  <div className="absolute right-0 top-full mt-2 w-64 bg-[#0f172a] border border-slate-700 rounded-2xl shadow-2xl p-2 z-30 space-y-1">
+                    <div className="px-2.5 py-1.5 border-b border-slate-800">
+                      <span className="text-[10px] uppercase font-black text-amber-400">
+                        Opsi Unduh Riwayat Chat (10 Hari)
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadCurrentTranscript}
+                      disabled={!activeMember}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <div>
+                        <div className="font-semibold text-white">Chat Anggota Terpilih</div>
+                        <div className="text-[10px] text-slate-400">
+                          {activeMember?.nama || '-'} (Excel / CSV)
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadAllChatHistory}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <div>
+                        <div className="font-semibold text-white">Seluruh Percakapan (10 Hari)</div>
+                        <div className="text-[10px] text-slate-400">
+                          Semua anggota koperasi (Excel / CSV)
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadJsonArchive}
+                      className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      <div>
+                        <div className="font-semibold text-white">Cadangan Arsip JSON</div>
+                        <div className="text-[10px] text-slate-400">
+                          Penyimpanan audit & arsip 10 hari
+                        </div>
+                      </div>
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={handleDownloadCurrentTranscript}
-                    disabled={!activeMember}
-                    className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-white">Chat Anggota Terpilih</div>
-                      <div className="text-[10px] text-slate-400">{activeMember?.nama || '-'} (Excel / CSV)</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleDownloadAllChatHistory}
-                    className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-white">Seluruh Percakapan (10 Hari)</div>
-                      <div className="text-[10px] text-slate-400">Semua anggota koperasi (Excel / CSV)</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleDownloadJsonArchive}
-                    className="w-full text-left px-3 py-2 rounded-xl text-xs text-slate-200 hover:bg-slate-800 flex items-center gap-2 transition-colors cursor-pointer"
-                  >
-                    <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <div>
-                      <div className="font-semibold text-white">Cadangan Arsip JSON</div>
-                      <div className="text-[10px] text-slate-400">Penyimpanan audit & arsip 10 hari</div>
-                    </div>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+
+        {/* Status Notification Banner */}
+        {statusBanner && (
+          <div
+            className={`mx-3 mt-2 px-3 py-2 rounded-xl border text-[11px] font-semibold flex items-center justify-between gap-2 ${
+              statusBanner.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {statusBanner.type === 'success' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+              )}
+              <span>{statusBanner.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStatusBanner(null)}
+              className="text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Message Bubble List */}
         <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-3 overscroll-contain">
@@ -661,7 +996,10 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           <div className="text-center my-1.5">
             <span className="text-[10px] bg-slate-800/80 text-slate-300 px-3.5 py-1.5 rounded-full border border-slate-700/80 inline-flex items-center gap-1.5 shadow-sm">
               <Clock className="w-3 h-3 text-amber-400" />
-              <span>Riwayat chat tersimpan <strong>10 hari</strong> & tersinkronisasi realtime ke semua perangkat.</span>
+              <span>
+                Riwayat chat tersimpan <strong>10 hari</strong> & tersinkronisasi realtime ke semua
+                perangkat.
+              </span>
             </span>
           </div>
 
@@ -673,18 +1011,34 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                 className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
               >
                 <div
-                  className={`max-w-[80%] sm:max-w-[70%] rounded-2xl px-3.5 py-2.5 text-xs shadow-md ${
+                  className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-3.5 py-2.5 text-xs shadow-md group relative ${
                     isMe
                       ? 'bg-amber-500 text-slate-950 font-medium rounded-tr-none'
                       : 'bg-[#1c273e] text-slate-100 rounded-tl-none border border-slate-700/60'
                   }`}
                 >
-                  <div
-                    className={`text-[9px] font-extrabold mb-0.5 ${
-                      isMe ? 'text-slate-900' : 'text-amber-400'
-                    }`}
-                  >
-                    {msg.senderNama}
+                  <div className="flex items-center justify-between gap-3 mb-0.5">
+                    <span
+                      className={`text-[9px] font-extrabold ${
+                        isMe ? 'text-slate-900' : 'text-amber-400'
+                      }`}
+                    >
+                      {msg.senderNama}
+                    </span>
+                    {canManageChat && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearModal({ mode: 'single_msg', msg })}
+                        className={`p-0.5 rounded transition-opacity cursor-pointer ${
+                          isMe
+                            ? 'text-slate-800/70 hover:text-rose-700'
+                            : 'text-slate-400 hover:text-rose-400'
+                        }`}
+                        title="Hapus pesan ini"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                   <p className="whitespace-pre-line leading-relaxed">{msg.pesan}</p>
                   {msg.lampiranUrl && (
@@ -692,7 +1046,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                       className="mt-1.5 mb-1 max-w-[200px] rounded-xl overflow-hidden cursor-pointer border border-slate-700/60 shadow hover:opacity-90 transition-opacity"
                       onClick={() => setPreviewImage(msg.lampiranUrl!)}
                     >
-                      <img src={msg.lampiranUrl} alt="Lampiran Foto" className="w-full max-h-40 object-cover" />
+                      <img
+                        src={msg.lampiranUrl}
+                        alt="Lampiran Foto"
+                        className="w-full max-h-40 object-cover"
+                      />
                     </div>
                   )}
                   <div
@@ -741,7 +1099,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
         {lampiranUrl && (
           <div className="px-3 py-1.5 bg-[#141d30] border-t border-slate-700 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
-              <img src={lampiranUrl} alt="Pratinjau" className="w-9 h-9 object-cover rounded-lg border border-amber-500/40" />
+              <img
+                src={lampiranUrl}
+                alt="Pratinjau"
+                className="w-9 h-9 object-cover rounded-lg border border-amber-500/40"
+              />
               <span className="text-[11px] text-amber-300 font-bold">1 Lampiran Foto Terpilih</span>
             </div>
             <button
@@ -754,7 +1116,7 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
           </div>
         )}
 
-        {/* Message Input Box - Always Visible on All Devices (Android, iOS, Web, PC) */}
+        {/* Message Input Box */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -786,7 +1148,11 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
                 chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
               }, 250);
             }}
-            placeholder={isMember ? 'Ketik pertanyaan untuk pengurus koperasi...' : `Ketik balasan untuk ${activeMember?.nama || 'anggota'}...`}
+            placeholder={
+              isMember
+                ? 'Ketik pertanyaan untuk pengurus koperasi...'
+                : `Ketik balasan untuk ${activeMember?.nama || 'anggota'}...`
+            }
             className="flex-1 px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-base sm:text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500 min-w-0"
           />
           <button
@@ -812,7 +1178,70 @@ export const ChatOnlineView: React.FC<ChatOnlineViewProps> = ({
               >
                 <X className="w-5 h-5" />
               </button>
-              <img src={previewImage} alt="Lampiran Penuh" className="max-w-full max-h-[80vh] object-contain rounded-xl mx-auto" />
+              <img
+                src={previewImage}
+                alt="Lampiran Penuh"
+                className="max-w-full max-h-[80vh] object-contain rounded-xl mx-auto"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Confirmation Modal for Delete Single Message / Clear Chat */}
+        {confirmClearModal && canManageChat && (
+          <div className="fixed inset-0 z-[60] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-[#0f172a] border border-rose-500/40 w-full max-w-md rounded-3xl p-5 shadow-2xl space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-extrabold text-white">
+                    {confirmClearModal.mode === 'single_msg'
+                      ? 'Hapus Pesan Chat Ini?'
+                      : confirmClearModal.mode === 'member'
+                      ? `Clear Chat ${confirmClearModal.member.nama}?`
+                      : 'Clear Semua Riwayat Chat Online?'}
+                  </h4>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {confirmClearModal.mode === 'single_msg'
+                      ? `Pesan "${confirmClearModal.msg.pesan.slice(0, 80)}${
+                          confirmClearModal.msg.pesan.length > 80 ? '...' : ''
+                        }" akan dihapus permanen di semua perangkat.`
+                      : confirmClearModal.mode === 'member'
+                      ? `Seluruh pesan percakapan dengan ${confirmClearModal.member.nama} akan dibersihkan secara permanen dari server, Cloud Firestore, dan semua perangkat.`
+                      : 'Seluruh riwayat percakapan chat online untuk semua anggota akan dibersihkan secara permanen di semua perangkat.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={isProcessingAction}
+                  onClick={() => setConfirmClearModal(null)}
+                  className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessingAction}
+                  onClick={() => {
+                    if (confirmClearModal.mode === 'single_msg') {
+                      executeDeleteSingleMessage(confirmClearModal.msg);
+                    } else if (confirmClearModal.mode === 'member') {
+                      executeClearChat('member', confirmClearModal.member);
+                    } else {
+                      executeClearChat('all');
+                    }
+                  }}
+                  className="py-2 px-4 bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white text-xs font-black rounded-xl flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isProcessingAction ? 'Memproses...' : 'Ya, Hapus Permanen'}</span>
+                </button>
+              </div>
             </div>
           </div>
         )}

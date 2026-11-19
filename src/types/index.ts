@@ -298,6 +298,8 @@ export interface SuratResmi {
   isiSurat: string;
   lampiranTeks?: string;
   diterbitkanOleh: string;
+  senderAdminId?: string;
+  senderRole?: AdminRole | string;
   statusTerkirimWa: boolean;
   statusTerkirimEmail: boolean;
   readByMemberIds?: string[];
@@ -402,6 +404,11 @@ export interface AppState {
   deletedAdminIds?: string[];
   deletedKasIds?: string[];
   deletedSetoranIds?: string[];
+  deletedSuratIds?: string[];
+  deletedChatIds?: string[];
+  suratResetAt?: string;
+  chatClearedAt?: string;
+  chatClearedBeforeByMember?: Record<string, string>;
   usedAccountNumbers?: string[]; // Rekening yang pernah dipakai tidak dapat digunakan kembali (termasuk anggota dihapus)
   usedMemberNumbers?: string[];  // Disamakan dengan usedAccountNumbers untuk kompatibilitas sinkronisasi
 }

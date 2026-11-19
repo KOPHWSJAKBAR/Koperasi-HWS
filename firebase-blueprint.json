@@ -12,6 +12,8 @@
         "totalKas": { "type": "number" },
         "totalSetoran": { "type": "number" },
         "totalTransactions": { "type": "number" },
+        "totalChats": { "type": "number" },
+        "totalSurat": { "type": "number" },
         "isSharded": { "type": "boolean" }
       },
       "required": ["id", "lastSynced", "updatedBy"]

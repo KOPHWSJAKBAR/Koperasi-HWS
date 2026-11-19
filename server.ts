@@ -4,6 +4,7 @@ import http from 'http';
 import https from 'https';
 import path from 'path';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 
@@ -110,6 +111,11 @@ const getInitialState = () => ({
   deletedTransactionIds: [],
   deletedKasIds: [],
   deletedSetoranIds: [],
+  deletedSuratIds: [],
+  deletedChatIds: [],
+  suratResetAt: '',
+  chatClearedAt: '',
+  chatClearedBeforeByMember: {},
   usedAccountNumbers: [],
   usedMemberNumbers: [],
   setoranList: [],
@@ -789,10 +795,29 @@ function mergeServerState(current: any, incoming: any): any {
   });
   const mergedDeletedSetoranIds = Array.from(allDeletedSetoranIds);
 
-  // 3. Chat Messages (Preserve all messages & attachments - PERMANENT)
+  // 3. Chat Messages (Preserve non-deleted messages & filter deletedChatIds + clear cutoffs)
+  const allDeletedChatIds = new Set<string>([
+    ...(current.deletedChatIds || []),
+    ...(incoming.deletedChatIds || []),
+  ]);
+  const mergedChatClearedAt = maxIsoTsServer(current.chatClearedAt, incoming.chatClearedAt);
+  const mergedChatClearedByMember: Record<string, string> = {
+    ...(current.chatClearedBeforeByMember || {}),
+  };
+  Object.entries(incoming.chatClearedBeforeByMember || {}).forEach(([mid, ts]) => {
+    mergedChatClearedByMember[mid] = maxIsoTsServer(mergedChatClearedByMember[mid], String(ts || ''));
+  });
+
   const chatMap = new Map<string, any>();
-  (current.chatMessages || []).forEach((c: any) => chatMap.set(c.id, { ...c }));
+  (current.chatMessages || []).forEach((c: any) => {
+    if (!isChatMessageClearedServer(c, allDeletedChatIds, mergedChatClearedAt, mergedChatClearedByMember)) {
+      chatMap.set(c.id, { ...c });
+    }
+  });
   (incoming.chatMessages || []).forEach((c: any) => {
+    if (isChatMessageClearedServer(c, allDeletedChatIds, mergedChatClearedAt, mergedChatClearedByMember)) {
+      return;
+    }
     const existing = chatMap.get(c.id);
     if (!existing) {
       chatMap.set(c.id, c);
@@ -807,10 +832,23 @@ function mergeServerState(current: any, incoming: any): any {
     }
   });
 
-  // 4. Surat Resmi List (Preserve all letters & documents - PERMANENT)
+  // 4. Surat Resmi List (Filter deletedSuratIds + suratResetAt)
+  const allDeletedSuratIds = new Set<string>([
+    ...(current.deletedSuratIds || []),
+    ...(incoming.deletedSuratIds || []),
+  ]);
+  const mergedSuratResetAt = maxIsoTsServer(current.suratResetAt, incoming.suratResetAt);
+
   const suratMap = new Map<string, any>();
-  (current.suratList || []).forEach((s: any) => suratMap.set(s.id, { ...s }));
+  (current.suratList || []).forEach((s: any) => {
+    if (!isSuratDeletedServer(s, allDeletedSuratIds, mergedSuratResetAt)) {
+      suratMap.set(s.id, { ...s });
+    }
+  });
   (incoming.suratList || []).forEach((s: any) => {
+    if (isSuratDeletedServer(s, allDeletedSuratIds, mergedSuratResetAt)) {
+      return;
+    }
     if (!suratMap.has(s.id)) {
       suratMap.set(s.id, s);
     } else {
@@ -1025,6 +1063,11 @@ function mergeServerState(current: any, incoming: any): any {
     deletedTransactionIds: mergedDeletedTxIds,
     deletedKasIds: mergedDeletedKasIds,
     deletedSetoranIds: mergedDeletedSetoranIds,
+    deletedSuratIds: Array.from(allDeletedSuratIds),
+    deletedChatIds: Array.from(allDeletedChatIds),
+    suratResetAt: mergedSuratResetAt,
+    chatClearedAt: mergedChatClearedAt,
+    chatClearedBeforeByMember: mergedChatClearedByMember,
     usedAccountNumbers: sanitizedUsedUnified,
     usedMemberNumbers: sanitizedUsedUnified,
     setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
@@ -1080,6 +1123,86 @@ function cleanStalePresence() {
 }
 setInterval(cleanStalePresence, 20000);
 
+const SURAT_ALLOWED_ROLES = new Set([
+  'super_admin',
+  'admin_approval',
+  'admin_kelola',
+  'admin_pembukuan',
+  'admin_write',
+]);
+
+function maxIsoTsServer(a?: string, b?: string): string {
+  const ta = a ? new Date(a).getTime() : NaN;
+  const tb = b ? new Date(b).getTime() : NaN;
+  if (!Number.isFinite(ta) || isNaN(ta)) return b || '';
+  if (!Number.isFinite(tb) || isNaN(tb)) return a || '';
+  return ta >= tb ? (a as string) : (b as string);
+}
+
+function isChatMessageClearedServer(
+  msg: any,
+  delChatSet: Set<string>,
+  chatClearedAt?: string,
+  chatClearedByMember?: Record<string, string>
+): boolean {
+  if (!msg || !msg.id || delChatSet.has(msg.id)) return true;
+  const msgTs = msg.timestamp ? new Date(msg.timestamp).getTime() : NaN;
+  if (chatClearedAt && Number.isFinite(msgTs)) {
+    const clearTs = new Date(chatClearedAt).getTime();
+    if (Number.isFinite(clearTs) && msgTs <= clearTs) return true;
+  }
+  const memClear = msg.memberId ? chatClearedByMember?.[msg.memberId] : '';
+  if (memClear && Number.isFinite(msgTs)) {
+    const mTs = new Date(memClear).getTime();
+    if (Number.isFinite(mTs) && msgTs <= mTs) return true;
+  }
+  return false;
+}
+
+function isSuratDeletedServer(
+  s: any,
+  delSuratSet: Set<string>,
+  suratResetAt?: string
+): boolean {
+  if (!s || !s.id || delSuratSet.has(s.id)) return true;
+  if (suratResetAt && s.createdAt) {
+    const sTs = new Date(s.createdAt).getTime();
+    const rTs = new Date(suratResetAt).getTime();
+    if (Number.isFinite(sTs) && Number.isFinite(rTs) && sTs <= rTs) return true;
+  }
+  return false;
+}
+
+function resolveAuthorizedAdmin(state: any, adminId?: string, roleHint?: string): any | null {
+  const admins = Array.isArray(state?.admins) ? state.admins : [];
+  if (adminId) {
+    const found = admins.find((a: any) => a && a.id === adminId);
+    if (found) return found;
+  }
+  if (roleHint) {
+    const foundByRole = admins.find((a: any) => a && a.role === roleHint);
+    if (foundByRole) return foundByRole;
+  }
+  return null;
+}
+
+let cachedStateDigest = '';
+let cachedStateJsonBuffer: Buffer | null = null;
+let cachedStateGzipBuffer: Buffer | null = null;
+
+function rebuildStateHttpCache(state: any) {
+  try {
+    const digestSource = buildStateSyncDigest(state);
+    cachedStateDigest = crypto.createHash('sha1').update(digestSource).digest('hex');
+    cachedStateJsonBuffer = Buffer.from(JSON.stringify(state));
+    cachedStateGzipBuffer = zlib.gzipSync(cachedStateJsonBuffer, { level: 6 });
+  } catch (err) {
+    cachedStateDigest = String(Date.now());
+    cachedStateJsonBuffer = null;
+    cachedStateGzipBuffer = null;
+  }
+}
+
 function broadcastEvent(type: string, payload: any) {
   if (!sseClients || sseClients.size === 0) return;
   const data = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
@@ -1090,6 +1213,14 @@ function broadcastEvent(type: string, payload: any) {
       sseClients.delete(client);
     }
   }
+}
+
+function broadcastStatePulse(reason = 'updated') {
+  broadcastEvent('STATE_SYNC_PULSE', {
+    digest: cachedStateDigest,
+    reason,
+    lastSynced: currentState?.serverSyncStatus?.lastSynced || new Date().toISOString(),
+  });
 }
 
 // Server-Side Realtime Cloud Firestore Synchronizer (Triple Redundancy Realtime Database)
@@ -1135,6 +1266,11 @@ function buildGeneralCorePayloadServer(state: any) {
     deletedTransactionIds: state.deletedTransactionIds || [],
     deletedKasIds: state.deletedKasIds || [],
     deletedSetoranIds: state.deletedSetoranIds || [],
+    deletedSuratIds: (state.deletedSuratIds || []).slice(-500),
+    deletedChatIds: (state.deletedChatIds || []).slice(-1000),
+    suratResetAt: state.suratResetAt || '',
+    chatClearedAt: state.chatClearedAt || '',
+    chatClearedBeforeByMember: state.chatClearedBeforeByMember || {},
     usedAccountNumbers: state.usedAccountNumbers || [],
     usedMemberNumbers: state.usedMemberNumbers || [],
   });
@@ -1401,9 +1537,10 @@ async function syncStateToFirestoreServer(state: any) {
       }
     }
 
-    // 8. Synchronize recent Chats to Firestore
+    // 8. Synchronize recent Chats to Firestore & delete tombstoned chats
+    const delChatSet = new Set<string>(state.deletedChatIds || []);
     for (const c of (state.chatMessages || []).slice(-100)) {
-      if (c && c.id) {
+      if (c && c.id && !delChatSet.has(c.id)) {
         const cleanChat = sanitizeServerDocForFirestore({ ...c });
         const cKey = `chats/${c.id}`;
         const cStr = JSON.stringify(cleanChat);
@@ -1414,10 +1551,19 @@ async function syncStateToFirestoreServer(state: any) {
         }
       }
     }
+    for (const delChatId of (state.deletedChatIds || []).slice(-200)) {
+      const delKey = `deleted_chats/${delChatId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'chats', delChatId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
+    }
 
-    // 9. Synchronize Surat to Firestore
+    // 9. Synchronize Surat to Firestore & delete tombstoned surat
+    const delSuratSet = new Set<string>(state.deletedSuratIds || []);
     for (const sr of state.suratList || []) {
-      if (sr && sr.id) {
+      if (sr && sr.id && !delSuratSet.has(sr.id)) {
         const cleanSurat = sanitizeServerDocForFirestore({ ...sr });
         const srKey = `surat/${sr.id}`;
         const srStr = JSON.stringify(cleanSurat);
@@ -1426,6 +1572,14 @@ async function syncStateToFirestoreServer(state: any) {
           serverFirestoreHashMap.set(srKey, srStr);
           hasAnyDocWritten = true;
         }
+      }
+    }
+    for (const delSuratId of (state.deletedSuratIds || []).slice(-200)) {
+      const delKey = `deleted_surat/${delSuratId}`;
+      if (!serverFirestoreHashMap.has(delKey)) {
+        await deleteDoc(doc(db, 'surat', delSuratId)).catch(() => {});
+        serverFirestoreHashMap.set(delKey, '1');
+        hasAnyDocWritten = true;
       }
     }
 
@@ -1496,7 +1650,7 @@ function saveDatabase(state: any, options?: { skipFirestore?: boolean }) {
     archiveAllUploadedFiles(state);
 
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
-    broadcastEvent('STATE_UPDATED', state);
+    rebuildStateHttpCache(state);
 
     // Asynchronous Realtime sync to Cloud Firestore (unless just pulled directly from Firestore)
     if (!options?.skipFirestore) {
@@ -1534,6 +1688,11 @@ function buildStateSyncDigest(st: any): string {
       deletedTransactionIds: st.deletedTransactionIds || [],
       deletedKasIds: st.deletedKasIds || [],
       deletedSetoranIds: st.deletedSetoranIds || [],
+      deletedSuratIds: st.deletedSuratIds || [],
+      deletedChatIds: st.deletedChatIds || [],
+      suratResetAt: st.suratResetAt || '',
+      chatClearedAt: st.chatClearedAt || '',
+      chatClearedBeforeByMember: st.chatClearedBeforeByMember || {},
       accountNumberSchemaVersion: st.accountNumberSchemaVersion || 2,
       lastRunningNumber: st.lastRunningNumber || 769,
     });
@@ -1707,6 +1866,21 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
           if (Array.isArray(genData.deletedSetoranIds)) {
             remoteSettingsPatch.deletedSetoranIds = genData.deletedSetoranIds;
           }
+          if (Array.isArray(genData.deletedSuratIds)) {
+            remoteSettingsPatch.deletedSuratIds = genData.deletedSuratIds;
+          }
+          if (Array.isArray(genData.deletedChatIds)) {
+            remoteSettingsPatch.deletedChatIds = genData.deletedChatIds;
+          }
+          if (typeof genData.suratResetAt === 'string' && genData.suratResetAt) {
+            remoteSettingsPatch.suratResetAt = genData.suratResetAt;
+          }
+          if (typeof genData.chatClearedAt === 'string' && genData.chatClearedAt) {
+            remoteSettingsPatch.chatClearedAt = genData.chatClearedAt;
+          }
+          if (genData.chatClearedBeforeByMember && typeof genData.chatClearedBeforeByMember === 'object') {
+            remoteSettingsPatch.chatClearedBeforeByMember = genData.chatClearedBeforeByMember;
+          }
           if (Array.isArray(genData.penyaluranList)) {
             remoteSettingsPatch.penyaluranList = genData.penyaluranList;
           }
@@ -1750,6 +1924,40 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       }
     } catch {}
 
+    const effDelChats = new Set<string>([
+      ...(currentState.deletedChatIds || []),
+      ...(remoteSettingsPatch.deletedChatIds || []),
+    ]);
+    const effChatClearedAt = maxIsoTsServer(currentState.chatClearedAt, remoteSettingsPatch.chatClearedAt);
+    const effChatClearedByMember: Record<string, string> = {
+      ...(currentState.chatClearedBeforeByMember || {}),
+      ...(remoteSettingsPatch.chatClearedBeforeByMember || {}),
+    };
+    const filteredRemoteChats = remoteChats.filter(
+      (c) => !isChatMessageClearedServer(c, effDelChats, effChatClearedAt, effChatClearedByMember)
+    );
+    const staleRemoteChats = remoteChats.filter((c) =>
+      isChatMessageClearedServer(c, effDelChats, effChatClearedAt, effChatClearedByMember)
+    );
+    if (staleRemoteChats.length > 0) {
+      Promise.all(staleRemoteChats.map((c) => deleteDoc(doc(db, 'chats', c.id)).catch(() => {}))).catch(() => {});
+    }
+
+    const effDelSurat = new Set<string>([
+      ...(currentState.deletedSuratIds || []),
+      ...(remoteSettingsPatch.deletedSuratIds || []),
+    ]);
+    const effSuratResetAt = maxIsoTsServer(currentState.suratResetAt, remoteSettingsPatch.suratResetAt);
+    const filteredRemoteSurat = remoteSurat.filter(
+      (sr) => !isSuratDeletedServer(sr, effDelSurat, effSuratResetAt)
+    );
+    const staleRemoteSurat = remoteSurat.filter((sr) =>
+      isSuratDeletedServer(sr, effDelSurat, effSuratResetAt)
+    );
+    if (staleRemoteSurat.length > 0) {
+      Promise.all(staleRemoteSurat.map((sr) => deleteDoc(doc(db, 'surat', sr.id)).catch(() => {}))).catch(() => {});
+    }
+
     const remoteSlicePayload = {
       ...remoteSettingsPatch,
       members: remoteMembers,
@@ -1759,8 +1967,8 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       setoranList: remoteSetoran,
       kasList: remoteKas,
       sedekahList: remoteSedekah,
-      chatMessages: remoteChats,
-      suratList: remoteSurat,
+      chatMessages: filteredRemoteChats,
+      suratList: filteredRemoteSurat,
       auditLogs: remoteLogs,
     };
 
@@ -1771,8 +1979,8 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       remoteSetoran.length > 0 ||
       remoteKas.length > 0 ||
       remoteSedekah.length > 0 ||
-      remoteChats.length > 0 ||
-      remoteSurat.length > 0 ||
+      filteredRemoteChats.length > 0 ||
+      filteredRemoteSurat.length > 0 ||
       remoteLogs.length > 0 ||
       Object.keys(remoteSettingsPatch).length > 0;
 
@@ -1795,6 +2003,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       if (afterDigest !== beforeDigest || reconResult.migratedCount > 0) {
         console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount})`);
         saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 });
+        broadcastStatePulse('firestore_sync');
       }
       return { success: true, newMembersCount: Math.max(0, afterCount - beforeCount) };
     }
@@ -2681,11 +2890,60 @@ async function startServer() {
     });
   });
 
-  // Get full state (strictly uncached for installed devices, mobile apps & PWAs)
+  // Lightweight digest endpoint for instant cross-device state comparison
+  app.get('/api/sync/digest', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (!cachedStateDigest) rebuildStateHttpCache(currentState);
+    res.json({
+      digest: cachedStateDigest,
+      lastSynced: currentState.serverSyncStatus?.lastSynced || new Date().toISOString(),
+      totalMembers: (currentState.members || []).length,
+      totalChats: (currentState.chatMessages || []).length,
+      totalSurat: (currentState.suratList || []).length,
+      totalSetoran: (currentState.setoranList || []).length,
+      totalKas: (currentState.kasList || []).length,
+      serverTime: Date.now(),
+    });
+  });
+
+  // Get full state with fast digest conditional short-circuit + pre-gzipped RAM buffer
   app.get('/api/state', (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+
+    if (!cachedStateDigest || !cachedStateJsonBuffer) {
+      rebuildStateHttpCache(currentState);
+    }
+
+    const clientDigest = typeof req.query.digest === 'string' ? req.query.digest.trim() : '';
+    const ifNoneMatch = String(req.headers['if-none-match'] || '').replace(/"/g, '').trim();
+
+    if (clientDigest && clientDigest === cachedStateDigest) {
+      return res.status(200).json({
+        unchanged: true,
+        digest: cachedStateDigest,
+        lastSynced: currentState.serverSyncStatus?.lastSynced || new Date().toISOString(),
+        serverTime: Date.now(),
+      });
+    }
+    if (ifNoneMatch && ifNoneMatch === cachedStateDigest) {
+      return res.status(304).end();
+    }
+
+    res.setHeader('ETag', `"${cachedStateDigest}"`);
+    res.setHeader('X-State-Digest', cachedStateDigest);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+    const acceptEncoding = String(req.headers['accept-encoding'] || '');
+    if (cachedStateGzipBuffer && acceptEncoding.includes('gzip')) {
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Vary', 'Accept-Encoding');
+      return res.status(200).send(cachedStateGzipBuffer);
+    }
+    if (cachedStateJsonBuffer) {
+      return res.status(200).send(cachedStateJsonBuffer);
+    }
     res.json(currentState);
   });
 
@@ -2700,9 +2958,10 @@ async function startServer() {
     const postRecon = reconcileLegacyMemberNumbers(currentState);
     currentState = postRecon.state;
     saveDatabase(currentState);
-    broadcastEvent('STATE_UPDATED', currentState);
+    broadcastStatePulse('state_post');
     res.json({
       success: true,
+      digest: cachedStateDigest,
       timestamp: currentState.serverSyncStatus?.lastSynced || new Date().toISOString(),
       permanentFilesProtected: true,
       totalMembers: (currentState.members || []).length,
@@ -2815,7 +3074,7 @@ async function startServer() {
         const recon = reconcileLegacyMemberNumbers(currentState);
         currentState = recon.state;
         saveDatabase(currentState);
-        broadcastEvent('STATE_UPDATED', currentState);
+        broadcastStatePulse('updated');
       }
 
       res.json({
@@ -2844,14 +3103,21 @@ async function startServer() {
   // Send Chat message & Broadcast Push Notification (Tersimpan 10 Hari)
   app.post('/api/chat', (req: Request, res: Response) => {
     const { message } = req.body;
-    if (!message || !message.memberId) {
+    if (!message || !message.memberId || !message.id) {
       return res.status(400).json({ error: 'Invalid message payload' });
     }
+    const delChats = new Set<string>(currentState.deletedChatIds || []);
+    if (isChatMessageClearedServer(message, delChats, currentState.chatClearedAt, currentState.chatClearedBeforeByMember)) {
+      return res.status(409).json({ error: 'Pesan sudah dihapus atau di-clear' });
+    }
     currentState.chatMessages = currentState.chatMessages || [];
-    currentState.chatMessages.push(message);
+    if (!currentState.chatMessages.some((m: any) => m && m.id === message.id)) {
+      currentState.chatMessages.push(message);
+    }
     purgeOldChatMessages(currentState);
     saveDatabase(currentState);
     broadcastEvent('NEW_CHAT_MESSAGE', message);
+    broadcastStatePulse('chat_new');
 
     // Push notification ke penerima (Admin atau Anggota)
     const isFromMember = message.senderType === 'member';
@@ -2869,7 +3135,7 @@ async function startServer() {
       data: { memberId: message.memberId, messageId: message.id },
     });
 
-    res.json({ success: true, message });
+    res.json({ success: true, message, digest: cachedStateDigest });
   });
 
   // Get Chat History with strictly 5-day retention (Req: chating realtime hanya tersimpan 5 hari)
@@ -2932,11 +3198,187 @@ async function startServer() {
 
       saveDatabase(currentState);
       broadcastEvent('CHAT_READ', { memberId, readBy: readType, updatedCount });
-      broadcastEvent('STATE_UPDATED', currentState);
-      res.json({ success: true, updatedCount });
+      broadcastStatePulse('chat_read');
+      res.json({ success: true, updatedCount, digest: cachedStateDigest });
     } catch (err: any) {
       console.error('Error in /api/chat/read:', err);
       res.status(500).json({ error: 'Gagal memperbarui status baca chat: ' + (err.message || 'Server error') });
+    }
+  });
+
+  // Admin Delete Single Chat Message (Syncs across Backend, Cloud Firestore & All Devices)
+  app.post('/api/chat/delete', async (req: Request, res: Response) => {
+    try {
+      const { messageId, adminId, adminName, adminRole } = req.body || {};
+      if (!messageId) {
+        return res.status(400).json({ error: 'ID pesan chat diperlukan' });
+      }
+      const actor = resolveAuthorizedAdmin(currentState, adminId, adminRole);
+      const effectiveRole = actor?.role || adminRole;
+      if (!effectiveRole || effectiveRole === 'member' || effectiveRole === 'admin_laporan') {
+        return res.status(403).json({ error: 'Hanya Admin Pengurus yang berwenang menghapus pesan chat.' });
+      }
+
+      const targetMsg = (currentState.chatMessages || []).find((m: any) => m && m.id === messageId);
+      currentState.chatMessages = (currentState.chatMessages || []).filter((m: any) => m && m.id !== messageId);
+      const delChatSet = new Set<string>(currentState.deletedChatIds || []);
+      delChatSet.add(messageId);
+      currentState.deletedChatIds = Array.from(delChatSet).slice(-2000);
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-chat-del-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: actor?.id || adminId || 'admin',
+        adminNama: actor?.nama || adminName || 'Admin',
+        adminRole: effectiveRole,
+        action: 'Hapus Pesan Chat Online',
+        detail: `Menghapus 1 pesan chat (${targetMsg?.senderNama || messageId}).`,
+        targetId: messageId,
+      });
+
+      try {
+        const fsCtx = await ensureServerFirestore();
+        if (fsCtx) {
+          await fsCtx.deleteDoc(fsCtx.doc(fsCtx.db, 'chats', messageId)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_chats/${messageId}`, '1');
+        }
+      } catch {}
+
+      saveDatabase(currentState);
+      broadcastEvent('CHAT_DELETED', { messageId, deletedBy: actor?.nama || adminName || 'Admin' });
+      broadcastStatePulse('chat_deleted');
+
+      res.json({
+        success: true,
+        messageId,
+        totalChats: (currentState.chatMessages || []).length,
+        digest: cachedStateDigest,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menghapus pesan chat: ' + (err.message || 'Server error') });
+    }
+  });
+
+  // Admin Clear Chat (Per Anggota atau Seluruh Percakapan)
+  app.post('/api/chat/clear', async (req: Request, res: Response) => {
+    try {
+      const { memberId, clearAll, adminId, adminName, adminRole } = req.body || {};
+      const actor = resolveAuthorizedAdmin(currentState, adminId, adminRole);
+      const effectiveRole = actor?.role || adminRole;
+      if (!effectiveRole || effectiveRole === 'member' || effectiveRole === 'admin_laporan') {
+        return res.status(403).json({ error: 'Hanya Admin Pengurus yang berwenang melakukan Clear Chat.' });
+      }
+      if (!clearAll && !memberId) {
+        return res.status(400).json({ error: 'Pilih anggota atau opsi Clear Semua Chat.' });
+      }
+
+      const clearedAt = new Date().toISOString();
+      const delChatSet = new Set<string>(currentState.deletedChatIds || []);
+      const removedIds: string[] = [];
+
+      if (clearAll) {
+        (currentState.chatMessages || []).forEach((m: any) => {
+          if (m && m.id) {
+            delChatSet.add(m.id);
+            removedIds.push(m.id);
+          }
+        });
+        currentState.chatMessages = [];
+        currentState.chatClearedAt = clearedAt;
+        currentState.chatClearedBeforeByMember = {};
+      } else {
+        currentState.chatMessages = (currentState.chatMessages || []).filter((m: any) => {
+          if (m && m.memberId === memberId) {
+            if (m.id) {
+              delChatSet.add(m.id);
+              removedIds.push(m.id);
+            }
+            return false;
+          }
+          return true;
+        });
+        currentState.chatClearedBeforeByMember = {
+          ...(currentState.chatClearedBeforeByMember || {}),
+          [memberId]: clearedAt,
+        };
+      }
+
+      currentState.deletedChatIds = Array.from(delChatSet).slice(-2000);
+
+      const targetMember = memberId
+        ? (currentState.members || []).find((m: any) => m.id === memberId)
+        : null;
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-chat-clear-${Date.now()}`,
+        timestamp: clearedAt,
+        adminId: actor?.id || adminId || 'admin',
+        adminNama: actor?.nama || adminName || 'Admin',
+        adminRole: effectiveRole,
+        action: clearAll ? 'Clear Semua Chat Online' : 'Clear Chat Anggota',
+        detail: clearAll
+          ? `Membersihkan seluruh riwayat chat online (${removedIds.length} pesan).`
+          : `Membersihkan riwayat chat anggota ${targetMember?.nama || memberId} (${removedIds.length} pesan).`,
+        targetId: memberId || 'all',
+      });
+
+      // Delete matching docs directly from Cloud Firestore `chats` collection
+      try {
+        const fsCtx = await ensureServerFirestore();
+        if (fsCtx) {
+          const { db, collection, getDocs, deleteDoc, doc } = fsCtx;
+          if (clearAll) {
+            const snap = await getDocs(collection(db, 'chats')).catch(() => null);
+            if (snap) {
+              await Promise.all(
+                snap.docs.map((d: any) => {
+                  serverFirestoreHashMap.set(`deleted_chats/${d.id}`, '1');
+                  return deleteDoc(doc(db, 'chats', d.id)).catch(() => {});
+                })
+              );
+            }
+          } else {
+            const snap = await getDocs(collection(db, 'chats')).catch(() => null);
+            const docIdsToDelete = new Set<string>(removedIds);
+            if (snap) {
+              snap.docs.forEach((d: any) => {
+                const data = d.data();
+                if (data && data.memberId === memberId) {
+                  docIdsToDelete.add(d.id);
+                }
+              });
+            }
+            await Promise.all(
+              Array.from(docIdsToDelete).map((id) => {
+                serverFirestoreHashMap.set(`deleted_chats/${id}`, '1');
+                return deleteDoc(doc(db, 'chats', id)).catch(() => {});
+              })
+            );
+          }
+        }
+      } catch {}
+
+      saveDatabase(currentState);
+      broadcastEvent('CHAT_CLEARED', {
+        memberId: clearAll ? undefined : memberId,
+        clearAll: Boolean(clearAll),
+        clearedAt,
+        removedCount: removedIds.length,
+      });
+      broadcastStatePulse('chat_cleared');
+
+      res.json({
+        success: true,
+        clearAll: Boolean(clearAll),
+        memberId: clearAll ? undefined : memberId,
+        clearedAt,
+        removedCount: removedIds.length,
+        totalChats: (currentState.chatMessages || []).length,
+        digest: cachedStateDigest,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal melakukan Clear Chat: ' + (err.message || 'Server error') });
     }
   });
 
@@ -3125,7 +3567,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       broadcastEvent('SETORAN_UPDATED', { action: 'submit', deposit });
       res.json({ success: true, message: 'Setoran berhasil diajukan online ke server!', deposit });
     } catch (err: any) {
@@ -3182,7 +3624,7 @@ async function startServer() {
           dep.verifiedBy = dep.verifiedBy || adminName || 'Admin Koperasi';
           currentState.setoranList[depIndex] = dep;
           saveDatabase(currentState);
-          broadcastEvent('STATE_UPDATED', currentState);
+          broadcastStatePulse('updated');
           return res.json({
             success: true,
             message: `Setoran a/n ${targetMember.nama} telah tercatat sebelumnya, status diselaraskan tanpa duplikasi.`,
@@ -3483,7 +3925,7 @@ async function startServer() {
       }
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       broadcastEvent('SETORAN_UPDATED', { action: 'verify', deposit: dep });
 
       // FCM Realtime Member Notification (Req 1)
@@ -3692,7 +4134,7 @@ async function startServer() {
       const reconResult = reconcileBalancesWithDeposits(currentState);
       currentState = reconResult.state;
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       broadcastEvent('SETORAN_UPDATED', { action: 'tftu', deposit: newSetoranEntry });
 
       res.json({
@@ -3747,7 +4189,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       broadcastEvent('SETORAN_DELETED', { deletedCount, deletedIds: Array.from(idsToDelete) });
 
       res.json({ success: true, message: `${deletedCount} setoran berhasil dihapus secara permanen oleh Super Admin!`, state: currentState });
@@ -3838,7 +4280,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       broadcastEvent('TRANSFER_COMPLETED', { refId, senderId: sender.id, recipientId: recipient.id, amount });
 
       // Realtime Notification for new mutasi rekening (Req 1)
@@ -3888,7 +4330,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Transaksi kas berhasil diperbarui', entry: currentState.kasList[idx] });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal mengedit transaksi kas: ' + err.message });
@@ -4082,7 +4524,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({
         success: true,
         message: isDirectDelete ? 'Transaksi kas berhasil dihapus dan saldo dikoreksi' : 'Pengajuan hapus transaksi berhasil dikirim',
@@ -4154,7 +4596,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: `Transaksi kas berhasil ${isApproved ? 'disetujui' : 'ditolak'}`, state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal mengesahkan transaksi kas: ' + err.message });
@@ -4287,7 +4729,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Anggota berhasil dihapus secara permanen dari server' });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus anggota: ' + err.message });
@@ -4517,7 +4959,7 @@ async function startServer() {
 
       // Realtime online broadcast to ALL connected devices (Android, iOS, PC, Web, AI Studio)
       broadcastEvent('MEMBER_REGISTERED', { member: finalMember });
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
 
       res.json({ success: true, member: finalMember, state: currentState });
     } catch (err: any) {
@@ -4564,7 +5006,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, admin, state: currentState });
     } catch (err: any) {
       console.error('Error in /api/admins/register:', err);
@@ -4609,7 +5051,7 @@ async function startServer() {
         console.warn('Notice pushing reconciled members to firestore:', e);
       }
 
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({
         success: true,
         migratedCount: recon.migratedCount,
@@ -4650,7 +5092,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, admin: currentState.admins[idx], state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal mengupdate admin: ' + err.message });
@@ -4684,7 +5126,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Admin berhasil dihapus permanen', state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus admin: ' + err.message });
@@ -4710,7 +5152,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       broadcastEvent('BALANCE_RECONCILED', {
         reconciledCount: result.reconciledCount,
         addedKasCount: result.addedKasCount,
@@ -4736,7 +5178,7 @@ async function startServer() {
       const result = reconcileBalancesWithDeposits(currentState);
       currentState = result.state;
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({
         success: true,
         message: 'Saldo anggota dan admin pada dashboard berhasil disinkronkan 100%!',
@@ -4934,7 +5376,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, count: targetIds.length, totalDana, state: currentState });
     } catch (err: any) {
       console.error('Error in /api/balance/adjust:', err);
@@ -4971,7 +5413,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Semua transaksi anggota berhasil dihapus dan saldo dimulai kembali dari 0', state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal mereset transaksi: ' + err.message });
@@ -4995,6 +5437,7 @@ async function startServer() {
       }
 
       // 1. Hapus semua riwayat transaksi anggota, setoran, kas, sedekah & chat
+      const resetTs = new Date().toISOString();
       currentState.memberTransactions = [];
       currentState.setoranList = [];
       currentState.sedekahList = [];
@@ -5002,6 +5445,9 @@ async function startServer() {
       currentState.kasList = [];
       currentState.chatMessages = [];
       currentState.suratList = [];
+      currentState.suratResetAt = resetTs;
+      currentState.chatClearedAt = resetTs;
+      currentState.chatClearedBeforeByMember = {};
 
       // 2. Reset saldo simpanan seluruh anggota menjadi 0 (atau kosongkan jika diinginkan, namun pertahankan akun)
       if (Array.isArray(currentState.members)) {
@@ -5041,7 +5487,7 @@ async function startServer() {
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-reset-zero-${Date.now()}`,
-        timestamp: new Date().toISOString(),
+        timestamp: resetTs,
         adminId: 'super_admin',
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
@@ -5050,7 +5496,9 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastEvent('SURAT_RESET', { resetAt: resetTs });
+      broadcastEvent('CHAT_CLEARED', { clearAll: true, clearedAt: resetTs });
+      broadcastStatePulse('app_reset_zero');
       res.json({
         success: true,
         message: 'Seluruh transaksi berhasil di-reset mulai dari 0. Seluruh akun admin dan konfigurasi setingan tetap aman dipertahankan.',
@@ -5335,7 +5783,7 @@ async function startServer() {
 
       saveDatabase(currentState);
       broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: newlyDeletedIds, affectedMemberIds: affectedIds });
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, removedCount, state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus transaksi: ' + err.message });
@@ -5517,7 +5965,7 @@ async function startServer() {
 
       saveDatabase(currentState);
       broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: [deletedTx.id], affectedMemberIds: [targetMemberId] });
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, deletedTx, state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus mutasi transaksi: ' + err.message });
@@ -5547,7 +5995,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, rekeningPenampungan: currentState.profile.rekeningPenampungan, state: currentState });
     } catch (err: any) {
       console.error('Error in /api/profile/rekening-penampungan:', err);
@@ -5585,7 +6033,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, profile: currentState.profile, state: currentState });
     } catch (err: any) {
       console.error('Error in /api/profile/biodata:', err);
@@ -5625,7 +6073,7 @@ async function startServer() {
       }
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Riwayat log admin berhasil dibersihkan.', state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal membersihkan log: ' + err.message });
@@ -5677,7 +6125,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, maintenanceLock: currentState.maintenanceLock });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal mengunci maintenance: ' + err.message });
@@ -5719,7 +6167,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, maintenanceLock: currentState.maintenanceLock });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal membuka maintenance: ' + err.message });
@@ -5755,7 +6203,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Database & pengaturan berhasil disinkronkan ke AI Studio Cloud', state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menyelaraskan database ke AI Studio: ' + err.message });
@@ -5808,25 +6256,79 @@ async function startServer() {
     }
   });
 
-  // Surat Menyurat Endpoints with Realtime Broadcast & Read Tracking (Req 5)
+  // Surat Menyurat Endpoints: Khusus Admin (super_admin, admin_approval, admin_write) kepada Anggota
   app.post('/api/surat/create', (req: Request, res: Response) => {
     try {
-      const { surat, adminName } = req.body;
-      if (!surat || !surat.id) return res.status(400).json({ error: 'Data surat tidak lengkap' });
+      const { surat, adminId, adminName, senderRole, senderType } = req.body || {};
+      if (!surat || !surat.id || !surat.perihal || !surat.isiSurat) {
+        return res.status(400).json({ error: 'Data surat tidak lengkap' });
+      }
+      if (senderType === 'member') {
+        return res.status(403).json({
+          error: 'Surat menyurat hanya dapat diterbitkan oleh Admin (Super Admin, Admin Approval, atau Admin Write) kepada Anggota.',
+        });
+      }
 
-      currentState.suratList = [surat, ...(currentState.suratList || [])];
-      saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
-      broadcastEvent('NEW_SURAT', { surat });
-      broadcastEvent('MEMBER_NOTIFICATION', {
-        recipientId: surat.tujuanTipe === 'perorangan' ? surat.targetMemberId : 'all',
-        recipientNama: surat.targetMemberNama,
-        title: '📬 Surat Resmi Baru Koperasi HWS',
-        body: `Perihal: "${surat.perihal}". Nomor: ${surat.nomorSurat}`,
-        type: 'surat_baru',
-        data: { suratId: surat.id }
+      const actor = resolveAuthorizedAdmin(currentState, adminId || surat.senderAdminId, senderRole || surat.senderRole);
+      const effectiveRole = actor?.role || senderRole || surat.senderRole;
+      if (!effectiveRole || !SURAT_ALLOWED_ROLES.has(effectiveRole)) {
+        return res.status(403).json({
+          error: 'Akses ditolak. Hanya Super Admin, Admin Approval, dan Admin Write yang berhak menerbitkan surat kepada anggota.',
+        });
+      }
+
+      if (surat.tujuanTipe === 'perorangan') {
+        const targetMem = (currentState.members || []).find((m: any) => m && m.id === surat.targetMemberId);
+        if (!surat.targetMemberId || !targetMem) {
+          return res.status(400).json({ error: 'Anggota penerima surat wajib dipilih dengan benar.' });
+        }
+      }
+
+      const existingIdx = (currentState.suratList || []).findIndex((s: any) => s && s.id === surat.id);
+      if (existingIdx !== -1) {
+        return res.json({ success: true, surat: currentState.suratList[existingIdx], duplicateIgnored: true });
+      }
+
+      const nextSeqNum = (currentState.suratList || []).reduce((max: number, s: any) => {
+        const match = String(s?.nomorSurat || '').match(/(\d+)$/);
+        const val = match ? parseInt(match[1], 10) : 0;
+        return Number.isFinite(val) && val > max ? val : max;
+      }, 0) + 1;
+
+      const enrichedSurat = {
+        ...surat,
+        nomorSurat: surat.nomorSurat || `HWS/DIR/${new Date().getFullYear()}/${String(nextSeqNum).padStart(3, '0')}`,
+        diterbitkanOleh: actor?.nama || adminName || surat.diterbitkanOleh || 'Pengurus Koperasi',
+        senderAdminId: actor?.id || adminId || surat.senderAdminId,
+        senderRole: effectiveRole,
+        createdAt: surat.createdAt || new Date().toISOString(),
+      };
+
+      currentState.suratList = [enrichedSurat, ...(currentState.suratList || [])];
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-srt-crt-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: actor?.id || adminId || 'admin',
+        adminNama: enrichedSurat.diterbitkanOleh,
+        adminRole: effectiveRole,
+        action: 'Penerbitan Surat Resmi',
+        detail: `Menerbitkan surat "${enrichedSurat.perihal}" nomor ${enrichedSurat.nomorSurat} kepada ${enrichedSurat.targetMemberNama || 'Anggota'}`,
+        targetId: enrichedSurat.id,
       });
-      res.json({ success: true, surat });
+
+      saveDatabase(currentState);
+      broadcastStatePulse('surat_created');
+      broadcastEvent('NEW_SURAT', { surat: enrichedSurat });
+      broadcastEvent('MEMBER_NOTIFICATION', {
+        recipientId: enrichedSurat.tujuanTipe === 'perorangan' ? enrichedSurat.targetMemberId : 'all',
+        recipientNama: enrichedSurat.targetMemberNama,
+        title: '📬 Surat Resmi Baru Koperasi HWS',
+        body: `Perihal: "${enrichedSurat.perihal}". Nomor: ${enrichedSurat.nomorSurat}`,
+        type: 'surat_baru',
+        data: { suratId: enrichedSurat.id },
+      });
+      res.json({ success: true, surat: enrichedSurat, digest: cachedStateDigest });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menerbitkan surat: ' + err.message });
     }
@@ -5875,10 +6377,136 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
-      res.json({ success: true, updatedCount });
+      broadcastEvent('SURAT_READ', { suratId, suratIds, readerId, readerType, markAll });
+      broadcastStatePulse('surat_read');
+      res.json({ success: true, updatedCount, digest: cachedStateDigest });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal memperbarui status baca surat: ' + err.message });
+    }
+  });
+
+  // Delete single Surat Resmi (Khusus Super Admin, Admin Approval, Admin Write)
+  app.post('/api/surat/delete', async (req: Request, res: Response) => {
+    try {
+      const { suratId, adminId, adminName, adminRole } = req.body || {};
+      if (!suratId) {
+        return res.status(400).json({ error: 'ID surat diperlukan' });
+      }
+      const actor = resolveAuthorizedAdmin(currentState, adminId, adminRole);
+      const effectiveRole = actor?.role || adminRole;
+      if (!effectiveRole || !SURAT_ALLOWED_ROLES.has(effectiveRole)) {
+        return res.status(403).json({
+          error: 'Hanya Super Admin, Admin Approval, atau Admin Write yang berhak menghapus surat.',
+        });
+      }
+
+      const targetSurat = (currentState.suratList || []).find((s: any) => s && s.id === suratId);
+      currentState.suratList = (currentState.suratList || []).filter((s: any) => s && s.id !== suratId);
+      const delSet = new Set<string>(currentState.deletedSuratIds || []);
+      delSet.add(suratId);
+      currentState.deletedSuratIds = Array.from(delSet).slice(-1000);
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-srt-del-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: actor?.id || adminId || 'admin',
+        adminNama: actor?.nama || adminName || 'Admin',
+        adminRole: effectiveRole,
+        action: 'Hapus Surat Menyurat',
+        detail: `Menghapus surat "${targetSurat?.perihal || suratId}" (${targetSurat?.nomorSurat || '-'}).`,
+        targetId: suratId,
+      });
+
+      try {
+        const fsCtx = await ensureServerFirestore();
+        if (fsCtx) {
+          await fsCtx.deleteDoc(fsCtx.doc(fsCtx.db, 'surat', suratId)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_surat/${suratId}`, '1');
+        }
+      } catch {}
+
+      saveDatabase(currentState);
+      broadcastEvent('SURAT_DELETED', { suratId });
+      broadcastStatePulse('surat_deleted');
+
+      res.json({
+        success: true,
+        suratId,
+        totalSurat: (currentState.suratList || []).length,
+        digest: cachedStateDigest,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal menghapus surat: ' + err.message });
+    }
+  });
+
+  // Reset Surat Menyurat dari 0 (Menghapus seluruh surat di Server, Firestore & semua device)
+  app.post('/api/surat/reset', async (req: Request, res: Response) => {
+    try {
+      const { adminId, adminName, adminRole } = req.body || {};
+      const actor = resolveAuthorizedAdmin(currentState, adminId, adminRole);
+      const effectiveRole = actor?.role || adminRole;
+      if (!effectiveRole || !SURAT_ALLOWED_ROLES.has(effectiveRole)) {
+        return res.status(403).json({
+          error: 'Hanya Super Admin, Admin Approval, atau Admin Write yang berhak mereset surat menyurat.',
+        });
+      }
+
+      const resetAt = new Date().toISOString();
+      const delSet = new Set<string>(currentState.deletedSuratIds || []);
+      const removedIds: string[] = [];
+      (currentState.suratList || []).forEach((s: any) => {
+        if (s && s.id) {
+          delSet.add(s.id);
+          removedIds.push(s.id);
+        }
+      });
+
+      currentState.suratList = [];
+      currentState.deletedSuratIds = Array.from(delSet).slice(-1000);
+      currentState.suratResetAt = resetAt;
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-srt-rst-${Date.now()}`,
+        timestamp: resetAt,
+        adminId: actor?.id || adminId || 'admin',
+        adminNama: actor?.nama || adminName || 'Admin',
+        adminRole: effectiveRole,
+        action: 'Reset Surat Menyurat dari 0',
+        detail: `Mereset seluruh daftar surat menyurat (${removedIds.length} surat dihapus). Penomoran surat dimulai kembali dari 001.`,
+      });
+
+      try {
+        const fsCtx = await ensureServerFirestore();
+        if (fsCtx) {
+          const { db, collection, getDocs, deleteDoc, doc } = fsCtx;
+          const snap = await getDocs(collection(db, 'surat')).catch(() => null);
+          if (snap) {
+            await Promise.all(
+              snap.docs.map((d: any) => {
+                serverFirestoreHashMap.set(`deleted_surat/${d.id}`, '1');
+                return deleteDoc(doc(db, 'surat', d.id)).catch(() => {});
+              })
+            );
+          }
+        }
+      } catch {}
+
+      saveDatabase(currentState);
+      broadcastEvent('SURAT_RESET', { resetAt, removedCount: removedIds.length });
+      broadcastStatePulse('surat_reset');
+
+      res.json({
+        success: true,
+        resetAt,
+        removedCount: removedIds.length,
+        totalSurat: 0,
+        digest: cachedStateDigest,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mereset surat menyurat: ' + err.message });
     }
   });
 
@@ -5887,7 +6515,7 @@ async function startServer() {
     try {
       currentState.auditLogs = [];
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Seluruh riwayat log audit berhasil dihapus bersih (0 log).' });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus log history: ' + err.message });
@@ -6022,7 +6650,7 @@ async function startServer() {
     currentState.auditLogs = currentState.auditLogs || [];
     currentState.auditLogs.unshift(log);
     saveDatabase(currentState);
-    broadcastEvent('STATE_UPDATED', currentState);
+    broadcastStatePulse('updated');
     res.json({ success: true, log });
   });
 
@@ -6148,7 +6776,7 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('STATE_UPDATED', currentState);
+      broadcastStatePulse('updated');
       res.json({ success: true, message: 'Database berhasil dipulihkan dari file backup', state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal memulihkan backup: ' + (err.message || 'Error') });
@@ -6438,9 +7066,10 @@ exit
   initServerFirestoreRealtimeWatchers().catch(() => {});
 
   server.listen(Number(PORT), '0.0.0.0', () => {
+    rebuildStateHttpCache(currentState);
     console.log(`Koperasi HWS Realtime Server running on http://0.0.0.0:${PORT}`);
-    // Polling berkala setiap 4 detik sebagai fallback tambahan di samping realtime Firestore onSnapshot listener
-    setInterval(pullFromFirestoreServer, 4000);
+    // Polling berkala setiap 30 detik sebagai fallback tambahan di samping realtime Firestore onSnapshot listener
+    setInterval(pullFromFirestoreServer, 30000);
   });
 }
 

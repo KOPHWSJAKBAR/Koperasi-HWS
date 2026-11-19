@@ -889,6 +889,63 @@ function scheduleDebouncedServerPush(delay = 1500) {
   }, delay);
 }
 
+export function maxIsoTsClient(a?: string, b?: string): string {
+  const ta = a ? new Date(a).getTime() : NaN;
+  const tb = b ? new Date(b).getTime() : NaN;
+  if (!Number.isFinite(ta) || isNaN(ta)) return b || '';
+  if (!Number.isFinite(tb) || isNaN(tb)) return a || '';
+  return ta >= tb ? (a as string) : (b as string);
+}
+
+export function isChatMessageClearedClient(
+  msg: Partial<ChatMessage> | null | undefined,
+  delChatSet: Set<string>,
+  chatClearedAt?: string,
+  chatClearedByMember?: Record<string, string>
+): boolean {
+  if (!msg || !msg.id || delChatSet.has(msg.id)) return true;
+  const msgTs = msg.timestamp ? new Date(msg.timestamp).getTime() : NaN;
+  if (chatClearedAt && Number.isFinite(msgTs)) {
+    const clearTs = new Date(chatClearedAt).getTime();
+    if (Number.isFinite(clearTs) && msgTs <= clearTs) return true;
+  }
+  const memClear = msg.memberId ? chatClearedByMember?.[msg.memberId] : '';
+  if (memClear && Number.isFinite(msgTs)) {
+    const mTs = new Date(memClear).getTime();
+    if (Number.isFinite(mTs) && msgTs <= mTs) return true;
+  }
+  return false;
+}
+
+export function isSuratDeletedClient(
+  s: Partial<SuratResmi> | null | undefined,
+  delSuratSet: Set<string>,
+  suratResetAt?: string
+): boolean {
+  if (!s || !s.id || delSuratSet.has(s.id)) return true;
+  if (suratResetAt && s.createdAt) {
+    const sTs = new Date(s.createdAt).getTime();
+    const rTs = new Date(suratResetAt).getTime();
+    if (Number.isFinite(sTs) && Number.isFinite(rTs) && sTs <= rTs) return true;
+  }
+  return false;
+}
+
+let storagePersistTimer: any = null;
+function scheduleLocalStoragePersist() {
+  if (typeof window === 'undefined') return;
+  if (storagePersistTimer) clearTimeout(storagePersistTimer);
+  storagePersistTimer = setTimeout(() => {
+    storagePersistTimer = null;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+    } catch {}
+  }, 300);
+}
+
+let lastServerStateDigest = '';
+let inFlightServerFetch: Promise<AppState> | null = null;
+
 function notifyListeners() {
   if (debounceNotifyTimer) {
     clearTimeout(debounceNotifyTimer);
@@ -899,15 +956,22 @@ function notifyListeners() {
   }
 }
 
+export function commitLocalStatePatch(updater: (prev: AppState) => AppState): AppState {
+  hasHydratedRemoteState = true;
+  globalState = updater(globalState);
+  lastServerStateDigest = '';
+  scheduleLocalStoragePersist();
+  notifyListeners();
+  return globalState;
+}
+
 export function scheduleDebouncedNotify(delay = 120, pushToServer = false) {
   if (debounceNotifyTimer) {
     clearTimeout(debounceNotifyTimer);
   }
   debounceNotifyTimer = setTimeout(() => {
     debounceNotifyTimer = null;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-    } catch {}
+    scheduleLocalStoragePersist();
     for (const listener of listeners) {
       listener({ ...globalState });
     }
@@ -1237,10 +1301,29 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  // 3. Chat Messages (Preserve all messages & attachments - PERMANENT, read status monotonic)
+  // 3. Chat Messages (Filter deletedChatIds + clear cutoffs so cleared chats never resurrect)
+  const allDeletedChatIds = new Set<string>([
+    ...(base.deletedChatIds || []),
+    ...(incoming.deletedChatIds || []),
+  ]);
+  const mergedChatClearedAt = maxIsoTsClient(base.chatClearedAt, incoming.chatClearedAt);
+  const mergedChatClearedByMember: Record<string, string> = {
+    ...(base.chatClearedBeforeByMember || {}),
+  };
+  Object.entries(incoming.chatClearedBeforeByMember || {}).forEach(([mid, ts]) => {
+    mergedChatClearedByMember[mid] = maxIsoTsClient(mergedChatClearedByMember[mid], String(ts || ''));
+  });
+
   const chatMap = new Map<string, ChatMessage>();
-  (base.chatMessages || []).forEach((c) => chatMap.set(c.id, { ...c }));
+  (base.chatMessages || []).forEach((c) => {
+    if (!isChatMessageClearedClient(c, allDeletedChatIds, mergedChatClearedAt, mergedChatClearedByMember)) {
+      chatMap.set(c.id, { ...c });
+    }
+  });
   (incoming.chatMessages || []).forEach((c) => {
+    if (isChatMessageClearedClient(c, allDeletedChatIds, mergedChatClearedAt, mergedChatClearedByMember)) {
+      return;
+    }
     const existing = chatMap.get(c.id);
     if (!existing) {
       chatMap.set(c.id, c);
@@ -1255,10 +1338,23 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     }
   });
 
-  // 4. Surat Resmi List (Preserve all letters & documents - PERMANENT)
+  // 4. Surat Resmi List (Filter deletedSuratIds + suratResetAt)
+  const allDeletedSuratIds = new Set<string>([
+    ...(base.deletedSuratIds || []),
+    ...(incoming.deletedSuratIds || []),
+  ]);
+  const mergedSuratResetAt = maxIsoTsClient(base.suratResetAt, incoming.suratResetAt);
+
   const suratMap = new Map<string, SuratResmi>();
-  (base.suratList || []).forEach((s) => suratMap.set(s.id, { ...s }));
+  (base.suratList || []).forEach((s) => {
+    if (!isSuratDeletedClient(s, allDeletedSuratIds, mergedSuratResetAt)) {
+      suratMap.set(s.id, { ...s });
+    }
+  });
   (incoming.suratList || []).forEach((s) => {
+    if (isSuratDeletedClient(s, allDeletedSuratIds, mergedSuratResetAt)) {
+      return;
+    }
     if (!suratMap.has(s.id)) {
       suratMap.set(s.id, s);
     } else {
@@ -1541,6 +1637,11 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     deletedKasIds: Array.from(allDeletedKasIds),
     deletedSetoranIds: Array.from(allDeletedSetoranIds),
     deletedAdminIds: Array.from(allDeletedAdminIds),
+    deletedSuratIds: Array.from(allDeletedSuratIds),
+    deletedChatIds: Array.from(allDeletedChatIds),
+    suratResetAt: mergedSuratResetAt,
+    chatClearedAt: mergedChatClearedAt,
+    chatClearedBeforeByMember: mergedChatClearedByMember,
     usedAccountNumbers: finalSanitizedUsed,
     usedMemberNumbers: finalSanitizedUsed,
     serverSyncStatus: {
@@ -2299,6 +2400,11 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>, forc
         deletedTransactionIds: serverData.deletedTransactionIds || [],
         deletedKasIds: serverData.deletedKasIds || [],
         deletedSetoranIds: serverData.deletedSetoranIds || [],
+        deletedSuratIds: (serverData.deletedSuratIds || []).slice(-500),
+        deletedChatIds: (serverData.deletedChatIds || []).slice(-1000),
+        suratResetAt: serverData.suratResetAt || '',
+        chatClearedAt: serverData.chatClearedAt || '',
+        chatClearedBeforeByMember: serverData.chatClearedBeforeByMember || {},
         usedAccountNumbers: serverData.usedAccountNumbers || [],
         usedMemberNumbers: serverData.usedMemberNumbers || [],
       });
@@ -2372,13 +2478,18 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>, forc
 // Merge realtime chat snapshots locally without triggering a full /api/state or 260-doc Firestore writeback
 export function applyRealtimeChatMessages(incoming: ChatMessage[]): boolean {
   if (!Array.isArray(incoming) || incoming.length === 0) return false;
+  const delChatSet = new Set<string>(globalState.deletedChatIds || []);
   const existingMap = new Map<string, ChatMessage>();
   (globalState.chatMessages || []).forEach((m) => {
-    if (m && m.id) existingMap.set(m.id, m);
+    if (!isChatMessageClearedClient(m, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember)) {
+      existingMap.set(m.id, m);
+    }
   });
   let hasChanges = false;
   incoming.forEach((inMsg) => {
-    if (!inMsg || !inMsg.id) return;
+    if (isChatMessageClearedClient(inMsg, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember)) {
+      return;
+    }
     const ex = existingMap.get(inMsg.id);
     if (!ex) {
       existingMap.set(inMsg.id, inMsg);
@@ -2399,9 +2510,7 @@ export function applyRealtimeChatMessages(incoming: ChatMessage[]): boolean {
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     ),
   };
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-  } catch {}
+  scheduleLocalStoragePersist();
   notifyListeners();
   return true;
 }
@@ -2439,6 +2548,11 @@ export async function syncShardedToFirestore(state: AppState) {
       deletedTransactionIds: state.deletedTransactionIds || [],
       deletedKasIds: state.deletedKasIds || [],
       deletedSetoranIds: state.deletedSetoranIds || [],
+      deletedSuratIds: (state.deletedSuratIds || []).slice(-500),
+      deletedChatIds: (state.deletedChatIds || []).slice(-1000),
+      suratResetAt: state.suratResetAt || '',
+      chatClearedAt: state.chatClearedAt || '',
+      chatClearedBeforeByMember: state.chatClearedBeforeByMember || {},
       usedAccountNumbers: state.usedAccountNumbers || [],
       usedMemberNumbers: state.usedMemberNumbers || [],
     });
@@ -2600,10 +2714,11 @@ export async function syncShardedToFirestore(state: AppState) {
       }
     }
 
-    // 7. Sharded Chat Messages (Recent 100)
+    // 7. Sharded Chat Messages (Recent 100) + deletedChatIds cleanup
+    const delChatSetFs = new Set<string>(state.deletedChatIds || []);
     const recentChats = (state.chatMessages || []).slice(-100);
     for (const c of recentChats) {
-      if (c && c.id) {
+      if (c && c.id && !delChatSetFs.has(c.id)) {
         const key = `chats/${c.id}`;
         const cleanChat = sanitizeForFirestore({ ...c });
         const cStr = JSON.stringify(cleanChat);
@@ -2616,10 +2731,19 @@ export async function syncShardedToFirestore(state: AppState) {
         }
       }
     }
+    for (const delChatId of (state.deletedChatIds || []).slice(-200)) {
+      const delKey = `deleted_chats/${delChatId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'chats', delChatId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
+      }
+    }
 
-    // 8. Sharded Surat collection
+    // 8. Sharded Surat collection + deletedSuratIds cleanup
+    const delSuratSetFs = new Set<string>(state.deletedSuratIds || []);
     for (const sr of state.suratList || []) {
-      if (sr && sr.id) {
+      if (sr && sr.id && !delSuratSetFs.has(sr.id)) {
         const key = `surat/${sr.id}`;
         const cleanSurat = sanitizeForFirestore({ ...sr });
         const srStr = JSON.stringify(cleanSurat);
@@ -2630,6 +2754,14 @@ export async function syncShardedToFirestore(state: AppState) {
           lastWrittenMap.set(key, srStr);
           hasAnyDocWritten = true;
         }
+      }
+    }
+    for (const delSuratId of (state.deletedSuratIds || []).slice(-200)) {
+      const delKey = `deleted_surat/${delSuratId}`;
+      if (!lastWrittenMap.has(delKey)) {
+        await deleteDoc(doc(db, 'surat', delSuratId)).catch(() => {});
+        lastWrittenMap.set(delKey, '1');
+        hasAnyDocWritten = true;
       }
     }
 
@@ -2687,13 +2819,12 @@ export async function syncStateToServer(state: AppState) {
       filesProtected: true,
       permanentStorage: true,
     };
-    
+
     // Merge safely with globalState so no concurrent inputs or files are deleted
     globalState = mergeStates(globalState, state);
-    
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-    } catch {}
+    lastServerStateDigest = '';
+
+    scheduleLocalStoragePersist();
     notifyListeners();
 
     // 1. Post to Express realtime backend only when internet connection is active
@@ -2703,11 +2834,17 @@ export async function syncStateToServer(state: AppState) {
     }
 
     try {
-      await fetch('/api/state', {
+      const res = await fetch('/api/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(globalState),
       });
+      if (res.ok) {
+        const d = await res.json().catch(() => null);
+        if (d?.digest) {
+          lastServerStateDigest = String(d.digest);
+        }
+      }
     } catch {}
 
     // 2. Sharded sync to Google Cloud Firestore (Never exceeds 1MB!)
@@ -2717,262 +2854,319 @@ export async function syncStateToServer(state: AppState) {
   }
 }
 
-// Load from server on startup (with safe merge & anti-cache for all installed devices)
-export async function fetchStateFromServer(): Promise<AppState> {
+// Load from server on startup / realtime pulse (with digest short-circuit & single-flight dedupe)
+export async function fetchStateFromServer(forceFull = false): Promise<AppState> {
   if (!getIsInternetConnected()) {
     return globalState;
   }
-  try {
-    const res = await fetch(`/api/state?_t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-      },
-    });
-    if (res.ok) {
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const text = await res.text();
-        if (text && text.trim().startsWith('{')) {
-          const data = JSON.parse(text);
-          if (data && typeof data === 'object' && (data.profile || data.members)) {
-            // Check if local device cache has any non-deleted records created offline missing from server
-            const serverDelSet = new Set<string>([
-              ...(data.deletedMemberIds || []),
-              ...(globalState.deletedMemberIds || []),
-            ]);
-            const serverIds = new Set<string>((data.members || []).map((m: MemberUser) => m.id));
-            const serverPlaceholderIds = new Set<string>(
-              (data.members || [])
-                .filter((m: any) => m && m.isRestoredPlaceholder)
-                .map((m: MemberUser) => m.id)
-            );
-            const missingLocalMembers = (globalState.members || []).filter(
-              (lm: MemberUser) =>
-                lm &&
-                lm.id &&
-                !String(lm.id).includes('-dup-') &&
-                !serverDelSet.has(lm.id) &&
-                (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
-            );
+  if (!forceFull && inFlightServerFetch) {
+    return inFlightServerFetch;
+  }
 
-            const delSetoran = new Set<string>([...(data.deletedSetoranIds || []), ...(globalState.deletedSetoranIds || [])]);
-            const delKas = new Set<string>([...(data.deletedKasIds || []), ...(globalState.deletedKasIds || [])]);
-            const delTx = new Set<string>([...(data.deletedTransactionIds || []), ...(globalState.deletedTransactionIds || [])]);
-            const delAdmin = new Set<string>([...(data.deletedAdminIds || []), ...((globalState as any).deletedAdminIds || [])]);
+  const runFetch = async (): Promise<AppState> => {
+    try {
+      const digestParam = !forceFull && lastServerStateDigest ? `&digest=${encodeURIComponent(lastServerStateDigest)}` : '';
+      const res = await fetch(`/api/state?_t=${Date.now()}${digestParam}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      });
+      if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const text = await res.text();
+          if (text && text.trim().startsWith('{')) {
+            const data = JSON.parse(text);
+            // Fast 100-byte unchanged response: zero parse/merge/re-render overhead
+            if (data && data.unchanged === true && data.digest) {
+              lastServerStateDigest = String(data.digest);
+              hasHydratedRemoteState = true;
+              return globalState;
+            }
+            if (data && typeof data === 'object' && (data.profile || data.members)) {
+              const headerDigest = res.headers.get('x-state-digest') || res.headers.get('etag')?.replace(/"/g, '') || '';
+              if (headerDigest) {
+                lastServerStateDigest = headerDigest;
+              }
 
-            const serverSetoranIds = new Set((data.setoranList || []).map((s: any) => s?.id));
-            const serverKasIds = new Set((data.kasList || []).map((k: any) => k?.id));
-            const serverTxIds = new Set((data.memberTransactions || []).map((t: any) => t?.id));
-            const serverSedekahIds = new Set((data.sedekahList || []).map((s: any) => s?.id));
-            const serverChatIds = new Set((data.chatMessages || []).map((c: any) => c?.id));
-            const serverSuratIds = new Set((data.suratList || []).map((sr: any) => sr?.id));
-            const serverAdminIds = new Set((data.admins || []).map((a: any) => a?.id));
+              // Check if local device cache has any non-deleted records created offline missing from server
+              const serverDelSet = new Set<string>([
+                ...(data.deletedMemberIds || []),
+                ...(globalState.deletedMemberIds || []),
+              ]);
+              const serverIds = new Set<string>((data.members || []).map((m: MemberUser) => m.id));
+              const serverPlaceholderIds = new Set<string>(
+                (data.members || [])
+                  .filter((m: any) => m && m.isRestoredPlaceholder)
+                  .map((m: MemberUser) => m.id)
+              );
+              const missingLocalMembers = (globalState.members || []).filter(
+                (lm: MemberUser) =>
+                  lm &&
+                  lm.id &&
+                  !String(lm.id).includes('-dup-') &&
+                  !serverDelSet.has(lm.id) &&
+                  (!serverIds.has(lm.id) || (serverPlaceholderIds.has(lm.id) && (lm.nik || lm.whatsapp)))
+              );
 
-            const hasUnsyncedLocalSlices =
-              (globalState.setoranList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSetoranIds.has(s.id)) ||
-              (globalState.kasList || []).some((k) => k?.id && !delKas.has(k.id) && !serverKasIds.has(k.id)) ||
-              (globalState.memberTransactions || []).some((t) => t?.id && !delTx.has(t.id) && !serverTxIds.has(t.id)) ||
-              (globalState.sedekahList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSedekahIds.has(s.id)) ||
-              (globalState.chatMessages || []).some((c) => c?.id && !serverChatIds.has(c.id)) ||
-              (globalState.suratList || []).some((sr) => sr?.id && !serverSuratIds.has(sr.id)) ||
-              (globalState.admins || []).some((a) => a?.id && !delAdmin.has(a.id) && !serverAdminIds.has(a.id));
+              const delSetoran = new Set<string>([...(data.deletedSetoranIds || []), ...(globalState.deletedSetoranIds || [])]);
+              const delKas = new Set<string>([...(data.deletedKasIds || []), ...(globalState.deletedKasIds || [])]);
+              const delTx = new Set<string>([...(data.deletedTransactionIds || []), ...(globalState.deletedTransactionIds || [])]);
+              const delAdmin = new Set<string>([...(data.deletedAdminIds || []), ...((globalState as any).deletedAdminIds || [])]);
+              const delChat = new Set<string>([...(data.deletedChatIds || []), ...(globalState.deletedChatIds || [])]);
+              const delSurat = new Set<string>([...(data.deletedSuratIds || []), ...(globalState.deletedSuratIds || [])]);
+              const effChatClearedAt = maxIsoTsClient(data.chatClearedAt, globalState.chatClearedAt);
+              const effSuratResetAt = maxIsoTsClient(data.suratResetAt, globalState.suratResetAt);
+              const effChatClearedByMember: Record<string, string> = {
+                ...(globalState.chatClearedBeforeByMember || {}),
+                ...(data.chatClearedBeforeByMember || {}),
+              };
 
-            hasHydratedRemoteState = true;
-            seedFirestoreSyncedHashesFromServer(data, true);
-            globalState = mergeStates(globalState, data);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-            } catch {}
-            notifyListeners();
+              const serverSetoranIds = new Set((data.setoranList || []).map((s: any) => s?.id));
+              const serverKasIds = new Set((data.kasList || []).map((k: any) => k?.id));
+              const serverTxIds = new Set((data.memberTransactions || []).map((t: any) => t?.id));
+              const serverSedekahIds = new Set((data.sedekahList || []).map((s: any) => s?.id));
+              const serverChatIds = new Set((data.chatMessages || []).map((c: any) => c?.id));
+              const serverSuratIds = new Set((data.suratList || []).map((sr: any) => sr?.id));
+              const serverAdminIds = new Set((data.admins || []).map((a: any) => a?.id));
 
-            // Non-blocking restore of any missing non-deleted local members to server & Firestore
-            if (missingLocalMembers.length > 0) {
-              fetch('/api/members/sync-restore', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ members: missingLocalMembers }),
-              })
-                .then((r) => (r.ok ? r.json() : null))
-                .then((resData) => {
-                  if (resData?.restoredCount > 0 && resData?.state) {
-                    globalState = mergeStates(globalState, resData.state);
-                    try {
-                      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                    } catch {}
-                    notifyListeners();
-                  }
+              const hasUnsyncedLocalSlices =
+                (globalState.setoranList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSetoranIds.has(s.id)) ||
+                (globalState.kasList || []).some((k) => k?.id && !delKas.has(k.id) && !serverKasIds.has(k.id)) ||
+                (globalState.memberTransactions || []).some((t) => t?.id && !delTx.has(t.id) && !serverTxIds.has(t.id)) ||
+                (globalState.sedekahList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSedekahIds.has(s.id)) ||
+                (globalState.chatMessages || []).some(
+                  (c) =>
+                    c?.id &&
+                    !isChatMessageClearedClient(c, delChat, effChatClearedAt, effChatClearedByMember) &&
+                    !serverChatIds.has(c.id)
+                ) ||
+                (globalState.suratList || []).some(
+                  (sr) => sr?.id && !isSuratDeletedClient(sr, delSurat, effSuratResetAt) && !serverSuratIds.has(sr.id)
+                ) ||
+                (globalState.admins || []).some((a) => a?.id && !delAdmin.has(a.id) && !serverAdminIds.has(a.id));
+
+              hasHydratedRemoteState = true;
+              seedFirestoreSyncedHashesFromServer(data, true);
+              globalState = mergeStates(globalState, data);
+              scheduleLocalStoragePersist();
+              notifyListeners();
+
+              // Non-blocking restore of any missing non-deleted local members to server & Firestore
+              if (missingLocalMembers.length > 0) {
+                fetch('/api/members/sync-restore', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ members: missingLocalMembers }),
                 })
-                .catch(() => {});
-            }
+                  .then((r) => (r.ok ? r.json() : null))
+                  .then((resData) => {
+                    if (resData?.restoredCount > 0 && resData?.state) {
+                      globalState = mergeStates(globalState, resData.state);
+                      scheduleLocalStoragePersist();
+                      notifyListeners();
+                    }
+                  })
+                  .catch(() => {});
+              }
 
-            // Safely push any offline-created non-deleted local records from Android/iOS/Web/PC to server & Firestore
-            if (hasUnsyncedLocalSlices) {
-              fetch('/api/state', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(globalState),
-              }).catch(() => {});
-              scheduleShardedFirestoreSync(globalState, 300);
-            }
+              // Safely push any offline-created non-deleted local records from Android/iOS/Web/PC to server & Firestore
+              if (hasUnsyncedLocalSlices) {
+                fetch('/api/state', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(globalState),
+                }).catch(() => {});
+                scheduleShardedFirestoreSync(globalState, 300);
+              }
 
-            return globalState;
+              return globalState;
+            }
           }
         }
       }
+    } catch {
+      // Graceful offline fallback to local cached state without console noise
     }
-  } catch {
-    // Graceful offline fallback to local cached state without console noise
-  }
 
-  // Full multi-collection direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
-  try {
-    const { db, ensureFirestoreOnline } = await import('./firebase-init');
-    await ensureFirestoreOnline();
-    const { collection, getDocs, doc, getDoc, query, orderBy, limit } = await import('firebase/firestore');
-    const [
-      memSnap,
-      genSnap,
-      adminsColSnap,
-      adminsDocSnap,
-      setoranSnap,
-      sedekahSnap,
-      kasSnap,
-      txSnap,
-      chatSnap,
-      suratSnap,
-      logsSnap,
-    ] = await Promise.all([
-      getDocs(collection(db, 'members')).catch(() => null),
-      getDoc(doc(db, 'settings', 'general')).catch(() => null),
-      getDocs(collection(db, 'admins')).catch(() => null),
-      getDoc(doc(db, 'settings', 'admins')).catch(() => null),
-      getDocs(collection(db, 'setoran')).catch(() => null),
-      getDocs(collection(db, 'sedekah')).catch(() => null),
-      getDocs(collection(db, 'kas')).catch(() => null),
-      getDocs(collection(db, 'transactions')).catch(() => null),
-      getDocs(collection(db, 'chats')).catch(() => null),
-      getDocs(collection(db, 'surat')).catch(() => null),
-      getDocs(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200))).catch(() => null),
-    ]);
+    // Full multi-collection direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
+    try {
+      const { db, ensureFirestoreOnline } = await import('./firebase-init');
+      await ensureFirestoreOnline();
+      const { collection, getDocs, doc, getDoc, query, orderBy, limit } = await import('firebase/firestore');
+      const [
+        memSnap,
+        genSnap,
+        adminsColSnap,
+        adminsDocSnap,
+        setoranSnap,
+        sedekahSnap,
+        kasSnap,
+        txSnap,
+        chatSnap,
+        suratSnap,
+        logsSnap,
+      ] = await Promise.all([
+        getDocs(collection(db, 'members')).catch(() => null),
+        getDoc(doc(db, 'settings', 'general')).catch(() => null),
+        getDocs(collection(db, 'admins')).catch(() => null),
+        getDoc(doc(db, 'settings', 'admins')).catch(() => null),
+        getDocs(collection(db, 'setoran')).catch(() => null),
+        getDocs(collection(db, 'sedekah')).catch(() => null),
+        getDocs(collection(db, 'kas')).catch(() => null),
+        getDocs(collection(db, 'transactions')).catch(() => null),
+        getDocs(collection(db, 'chats')).catch(() => null),
+        getDocs(collection(db, 'surat')).catch(() => null),
+        getDocs(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200))).catch(() => null),
+      ]);
 
-    const patch: Partial<AppState> & { deletedAdminIds?: string[] } = {};
-    if (genSnap && genSnap.exists()) {
-      const data = genSnap.data();
-      if (data) {
-        if (data.profile) patch.profile = data.profile;
-        if (data.categoriesKasKoperasi) patch.categoriesKasKoperasi = data.categoriesKasKoperasi;
-        if (data.pengaturanBerbagi) patch.pengaturanBerbagi = data.pengaturanBerbagi;
-        if (Array.isArray(data.sedekahList)) patch.sedekahList = data.sedekahList;
-        if (Array.isArray(data.penyaluranList)) patch.penyaluranList = data.penyaluranList;
-        if (data.maintenanceLock) patch.maintenanceLock = data.maintenanceLock;
-        if (data.accountNumberSchemaVersion) patch.accountNumberSchemaVersion = data.accountNumberSchemaVersion;
-        if (data.lastRunningNumber) patch.lastRunningNumber = data.lastRunningNumber;
-        if (Array.isArray(data.deletedMemberIds)) patch.deletedMemberIds = data.deletedMemberIds;
-        if (Array.isArray(data.deletedTransactionIds)) patch.deletedTransactionIds = data.deletedTransactionIds;
-        if (Array.isArray(data.deletedKasIds)) patch.deletedKasIds = data.deletedKasIds;
-        if (Array.isArray(data.deletedSetoranIds)) patch.deletedSetoranIds = data.deletedSetoranIds;
-        if (Array.isArray(data.usedAccountNumbers)) patch.usedAccountNumbers = data.usedAccountNumbers;
-        if (Array.isArray(data.usedMemberNumbers)) patch.usedMemberNumbers = data.usedMemberNumbers;
+      const patch: Partial<AppState> & { deletedAdminIds?: string[] } = {};
+      if (genSnap && genSnap.exists()) {
+        const data = genSnap.data();
+        if (data) {
+          if (data.profile) patch.profile = data.profile;
+          if (data.categoriesKasKoperasi) patch.categoriesKasKoperasi = data.categoriesKasKoperasi;
+          if (data.pengaturanBerbagi) patch.pengaturanBerbagi = data.pengaturanBerbagi;
+          if (Array.isArray(data.sedekahList)) patch.sedekahList = data.sedekahList;
+          if (Array.isArray(data.penyaluranList)) patch.penyaluranList = data.penyaluranList;
+          if (data.maintenanceLock) patch.maintenanceLock = data.maintenanceLock;
+          if (data.accountNumberSchemaVersion) patch.accountNumberSchemaVersion = data.accountNumberSchemaVersion;
+          if (data.lastRunningNumber) patch.lastRunningNumber = data.lastRunningNumber;
+          if (Array.isArray(data.deletedMemberIds)) patch.deletedMemberIds = data.deletedMemberIds;
+          if (Array.isArray(data.deletedTransactionIds)) patch.deletedTransactionIds = data.deletedTransactionIds;
+          if (Array.isArray(data.deletedKasIds)) patch.deletedKasIds = data.deletedKasIds;
+          if (Array.isArray(data.deletedSetoranIds)) patch.deletedSetoranIds = data.deletedSetoranIds;
+          if (Array.isArray(data.deletedSuratIds)) patch.deletedSuratIds = data.deletedSuratIds;
+          if (Array.isArray(data.deletedChatIds)) patch.deletedChatIds = data.deletedChatIds;
+          if (typeof data.suratResetAt === 'string') patch.suratResetAt = data.suratResetAt;
+          if (typeof data.chatClearedAt === 'string') patch.chatClearedAt = data.chatClearedAt;
+          if (data.chatClearedBeforeByMember && typeof data.chatClearedBeforeByMember === 'object') {
+            patch.chatClearedBeforeByMember = data.chatClearedBeforeByMember;
+          }
+          if (Array.isArray(data.usedAccountNumbers)) patch.usedAccountNumbers = data.usedAccountNumbers;
+          if (Array.isArray(data.usedMemberNumbers)) patch.usedMemberNumbers = data.usedMemberNumbers;
+        }
       }
-    }
 
-    const delMemSet = new Set([...(globalState.deletedMemberIds || []), ...(patch.deletedMemberIds || [])]);
-    if (memSnap && !memSnap.empty) {
-      const remoteMembers = memSnap.docs
-        .map((d) => d.data() as MemberUser)
-        .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delMemSet.has(m.id));
-      if (remoteMembers.length > 0) patch.members = remoteMembers;
-    }
-
-    const remoteAdmins: AdminUser[] = [];
-    const delAdmSet = new Set<string>((globalState as any).deletedAdminIds || []);
-    if (adminsDocSnap && adminsDocSnap.exists()) {
-      const adData = adminsDocSnap.data();
-      if (Array.isArray(adData?.deletedAdminIds)) {
-        adData.deletedAdminIds.forEach((id: string) => delAdmSet.add(id));
+      const delMemSet = new Set([...(globalState.deletedMemberIds || []), ...(patch.deletedMemberIds || [])]);
+      if (memSnap && !memSnap.empty) {
+        const remoteMembers = memSnap.docs
+          .map((d) => d.data() as MemberUser)
+          .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delMemSet.has(m.id));
+        if (remoteMembers.length > 0) patch.members = remoteMembers;
       }
-      if (Array.isArray(adData?.admins)) {
-        adData.admins.forEach((a: AdminUser) => {
+
+      const remoteAdmins: AdminUser[] = [];
+      const delAdmSet = new Set<string>((globalState as any).deletedAdminIds || []);
+      if (adminsDocSnap && adminsDocSnap.exists()) {
+        const adData = adminsDocSnap.data();
+        if (Array.isArray(adData?.deletedAdminIds)) {
+          adData.deletedAdminIds.forEach((id: string) => delAdmSet.add(id));
+        }
+        if (Array.isArray(adData?.admins)) {
+          adData.admins.forEach((a: AdminUser) => {
+            if (a && (a.id || a.username) && !delAdmSet.has(a.id)) remoteAdmins.push(a);
+          });
+        }
+      }
+      if (adminsColSnap && !adminsColSnap.empty) {
+        adminsColSnap.docs.forEach((d) => {
+          const a = d.data() as AdminUser;
           if (a && (a.id || a.username) && !delAdmSet.has(a.id)) remoteAdmins.push(a);
         });
       }
-    }
-    if (adminsColSnap && !adminsColSnap.empty) {
-      adminsColSnap.docs.forEach((d) => {
-        const a = d.data() as AdminUser;
-        if (a && (a.id || a.username) && !delAdmSet.has(a.id)) remoteAdmins.push(a);
-      });
-    }
-    if (remoteAdmins.length > 0) patch.admins = remoteAdmins;
-    if (delAdmSet.size > 0) patch.deletedAdminIds = Array.from(delAdmSet);
+      if (remoteAdmins.length > 0) patch.admins = remoteAdmins;
+      if (delAdmSet.size > 0) patch.deletedAdminIds = Array.from(delAdmSet);
 
-    const delSetoranSet = new Set([...(globalState.deletedSetoranIds || []), ...(patch.deletedSetoranIds || [])]);
-    if (setoranSnap && !setoranSnap.empty) {
-      patch.setoranList = setoranSnap.docs
-        .map((d) => d.data() as SetoranVerifikasi)
-        .filter((s) => s && s.id && !delSetoranSet.has(s.id));
-    }
-    if (sedekahSnap && !sedekahSnap.empty) {
-      const colSedekah = sedekahSnap.docs
-        .map((d) => d.data() as any)
-        .filter((s) => s && s.id && !delSetoranSet.has(s.id));
-      const combined = new Map<string, any>();
-      (patch.sedekahList || []).forEach((s: any) => s?.id && combined.set(s.id, s));
-      colSedekah.forEach((s: any) => s?.id && combined.set(s.id, s));
-      if (combined.size > 0) patch.sedekahList = Array.from(combined.values());
-    }
+      const delSetoranSet = new Set([...(globalState.deletedSetoranIds || []), ...(patch.deletedSetoranIds || [])]);
+      if (setoranSnap && !setoranSnap.empty) {
+        patch.setoranList = setoranSnap.docs
+          .map((d) => d.data() as SetoranVerifikasi)
+          .filter((s) => s && s.id && !delSetoranSet.has(s.id));
+      }
+      if (sedekahSnap && !sedekahSnap.empty) {
+        const colSedekah = sedekahSnap.docs
+          .map((d) => d.data() as any)
+          .filter((s) => s && s.id && !delSetoranSet.has(s.id));
+        const combined = new Map<string, any>();
+        (patch.sedekahList || []).forEach((s: any) => s?.id && combined.set(s.id, s));
+        colSedekah.forEach((s: any) => s?.id && combined.set(s.id, s));
+        if (combined.size > 0) patch.sedekahList = Array.from(combined.values());
+      }
 
-    const delKasSet = new Set([...(globalState.deletedKasIds || []), ...(patch.deletedKasIds || [])]);
-    if (kasSnap && !kasSnap.empty) {
-      patch.kasList = kasSnap.docs
-        .map((d) => d.data() as KasEntry)
-        .filter((k) => k && k.id && !delKasSet.has(k.id));
-    }
+      const delKasSet = new Set([...(globalState.deletedKasIds || []), ...(patch.deletedKasIds || [])]);
+      if (kasSnap && !kasSnap.empty) {
+        patch.kasList = kasSnap.docs
+          .map((d) => d.data() as KasEntry)
+          .filter((k) => k && k.id && !delKasSet.has(k.id));
+      }
 
-    const delTxSet = new Set([...(globalState.deletedTransactionIds || []), ...(patch.deletedTransactionIds || [])]);
-    if (txSnap && !txSnap.empty) {
-      patch.memberTransactions = txSnap.docs
-        .map((d) => d.data() as MemberTransaction)
-        .filter((t) => t && t.id && !delTxSet.has(t.id));
-    }
+      const delTxSet = new Set([...(globalState.deletedTransactionIds || []), ...(patch.deletedTransactionIds || [])]);
+      if (txSnap && !txSnap.empty) {
+        patch.memberTransactions = txSnap.docs
+          .map((d) => d.data() as MemberTransaction)
+          .filter((t) => t && t.id && !delTxSet.has(t.id));
+      }
 
-    if (chatSnap && !chatSnap.empty) {
-      patch.chatMessages = chatSnap.docs.map((d) => d.data() as ChatMessage);
-    }
-    if (suratSnap && !suratSnap.empty) {
-      patch.suratList = suratSnap.docs.map((d) => d.data() as SuratResmi);
-    }
-    if (logsSnap && !logsSnap.empty) {
-      patch.auditLogs = logsSnap.docs.map((d) => {
-        const ld = d.data();
-        return {
-          id: d.id,
-          timestamp: ld.timestamp || new Date().toISOString(),
-          adminId: ld.adminId || 'admin',
-          adminNama: ld.adminNama || 'Admin',
-          adminRole: ld.adminRole || 'admin_write',
-          action: ld.action || 'Aktivitas Admin',
-          detail: ld.detail || '',
-          targetId: ld.targetId || undefined,
-        };
-      });
-    }
+      const delChatSet = new Set([...(globalState.deletedChatIds || []), ...(patch.deletedChatIds || [])]);
+      const effChatCleared = maxIsoTsClient(globalState.chatClearedAt, patch.chatClearedAt);
+      const effChatByMember = {
+        ...(globalState.chatClearedBeforeByMember || {}),
+        ...(patch.chatClearedBeforeByMember || {}),
+      };
+      if (chatSnap) {
+        patch.chatMessages = chatSnap.empty
+          ? []
+          : chatSnap.docs
+              .map((d) => d.data() as ChatMessage)
+              .filter((c) => !isChatMessageClearedClient(c, delChatSet, effChatCleared, effChatByMember));
+      }
 
-    if (Object.keys(patch).length > 0) {
-      hasHydratedRemoteState = true;
-      seedFirestoreSyncedHashesFromServer(patch, true);
-      globalState = mergeStates(globalState, { ...globalState, ...patch });
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-      } catch {}
-      notifyListeners();
-    }
-  } catch {}
+      const delSuratSet = new Set([...(globalState.deletedSuratIds || []), ...(patch.deletedSuratIds || [])]);
+      const effSuratReset = maxIsoTsClient(globalState.suratResetAt, patch.suratResetAt);
+      if (suratSnap) {
+        patch.suratList = suratSnap.empty
+          ? []
+          : suratSnap.docs
+              .map((d) => d.data() as SuratResmi)
+              .filter((sr) => !isSuratDeletedClient(sr, delSuratSet, effSuratReset));
+      }
 
-  return globalState;
+      if (logsSnap && !logsSnap.empty) {
+        patch.auditLogs = logsSnap.docs.map((d) => {
+          const ld = d.data();
+          return {
+            id: d.id,
+            timestamp: ld.timestamp || new Date().toISOString(),
+            adminId: ld.adminId || 'admin',
+            adminNama: ld.adminNama || 'Admin',
+            adminRole: ld.adminRole || 'admin_write',
+            action: ld.action || 'Aktivitas Admin',
+            detail: ld.detail || '',
+            targetId: ld.targetId || undefined,
+          };
+        });
+      }
+
+      if (Object.keys(patch).length > 0) {
+        hasHydratedRemoteState = true;
+        seedFirestoreSyncedHashesFromServer(patch, true);
+        globalState = mergeStates(globalState, { ...globalState, ...patch });
+        scheduleLocalStoragePersist();
+        notifyListeners();
+      }
+    } catch {}
+
+    return globalState;
+  };
+
+  inFlightServerFetch = runFetch().finally(() => {
+    inFlightServerFetch = null;
+  });
+  return inFlightServerFetch;
 }
 
 // React Hook
@@ -3022,12 +3216,12 @@ export function useKoperasiState() {
       window.addEventListener('hws:network_restored', handleNetworkRestored);
     }
 
-    // Regular polling fallback every 3 seconds & periodic Firestore online check so app always stays connected when open
+    // Smart conditional polling fallback every 10 seconds (transfers ~100 bytes if digest unchanged) + 45s Firestore keepalive
     const pollInterval = setInterval(() => {
       if (getIsInternetConnected()) {
         fetchStateFromServer();
       }
-    }, 3000);
+    }, 10000);
     const firestoreKeepAliveInterval = setInterval(() => {
       if (getIsInternetConnected()) {
         import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
@@ -3051,20 +3245,25 @@ export function useKoperasiState() {
         eventSource.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
+            if (data.type === 'STATE_SYNC_PULSE') {
+              const incomingDigest = data.payload?.digest;
+              if (!incomingDigest || incomingDigest !== lastServerStateDigest) {
+                fetchStateFromServer();
+              }
+            } else if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
               if (data.payload) {
                 hasHydratedRemoteState = true;
                 seedFirestoreSyncedHashesFromServer(data.payload, true);
                 globalState = mergeStates(globalState, data.payload);
-                try {
-                  localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                } catch {}
+                scheduleLocalStoragePersist();
                 notifyListeners();
               }
             } else if (
               data.type === 'SETORAN_UPDATED' ||
               data.type === 'TRANSFER_COMPLETED' ||
-              data.type === 'SYSTEM_REPAIRED'
+              data.type === 'SYSTEM_REPAIRED' ||
+              data.type === 'TRANSACTIONS_DELETED' ||
+              data.type === 'KAS_DELETED'
             ) {
               fetchStateFromServer();
             } else if (data.type === 'MEMBER_REGISTERED') {
@@ -3098,9 +3297,7 @@ export function useKoperasiState() {
                         [...globalState.members, regMem]
                       ),
                     };
-                    try {
-                      localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                    } catch {}
+                    scheduleLocalStoragePersist();
                     notifyListeners();
                   }
                 }
@@ -3109,16 +3306,54 @@ export function useKoperasiState() {
               fetchStateFromServer();
             } else if (data.type === 'NEW_CHAT_MESSAGE') {
               const msg = data.payload;
-              if (msg && !globalState.chatMessages.find((m) => m.id === msg.id)) {
+              const delChatSet = new Set<string>(globalState.deletedChatIds || []);
+              if (
+                msg &&
+                !isChatMessageClearedClient(msg, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember) &&
+                !globalState.chatMessages.find((m) => m.id === msg.id)
+              ) {
                 globalState = {
                   ...globalState,
                   chatMessages: [...globalState.chatMessages, msg],
                 };
-                try {
-                  localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                } catch {}
+                scheduleLocalStoragePersist();
                 notifyListeners();
               }
+            } else if (data.type === 'CHAT_DELETED') {
+              const delId = data.payload?.messageId;
+              if (delId) {
+                const delChatSet = new Set<string>([...(globalState.deletedChatIds || []), delId]);
+                globalState = {
+                  ...globalState,
+                  chatMessages: (globalState.chatMessages || []).filter((m) => m.id !== delId),
+                  deletedChatIds: Array.from(delChatSet),
+                };
+                scheduleLocalStoragePersist();
+                notifyListeners();
+              }
+            } else if (data.type === 'CHAT_CLEARED') {
+              const p = data.payload || {};
+              const clearedAt = p.clearedAt || new Date().toISOString();
+              if (p.clearAll) {
+                globalState = {
+                  ...globalState,
+                  chatMessages: [],
+                  chatClearedAt: maxIsoTsClient(globalState.chatClearedAt, clearedAt),
+                  chatClearedBeforeByMember: {},
+                };
+              } else if (p.memberId) {
+                const prevByMember = globalState.chatClearedBeforeByMember || {};
+                globalState = {
+                  ...globalState,
+                  chatMessages: (globalState.chatMessages || []).filter((m) => m.memberId !== p.memberId),
+                  chatClearedBeforeByMember: {
+                    ...prevByMember,
+                    [p.memberId]: maxIsoTsClient(prevByMember[p.memberId], clearedAt),
+                  },
+                };
+              }
+              scheduleLocalStoragePersist();
+              notifyListeners();
             } else if (data.type === 'MEMBER_NOTIFICATION') {
               const notif = data.payload;
               if (notif) {
@@ -3132,9 +3367,66 @@ export function useKoperasiState() {
               }
             } else if (data.type === 'NEW_SURAT') {
               playNotificationSound('chat');
-              const s = data.payload?.surat;
+              const s = data.payload?.surat as SuratResmi | undefined;
+              const delSuratSet = new Set<string>(globalState.deletedSuratIds || []);
+              if (s && s.id && !isSuratDeletedClient(s, delSuratSet, globalState.suratResetAt)) {
+                if (!globalState.suratList.some((ex) => ex.id === s.id)) {
+                  globalState = {
+                    ...globalState,
+                    suratList: [s, ...(globalState.suratList || [])],
+                  };
+                  scheduleLocalStoragePersist();
+                  notifyListeners();
+                }
+              }
               triggerBrowserNotification('📬 Surat Baru Koperasi HWS', s?.perihal || 'Ada surat masuk baru');
               window.dispatchEvent(new CustomEvent('hws:new_surat', { detail: data.payload }));
+            } else if (data.type === 'SURAT_READ') {
+              const p = data.payload;
+              if (p && p.readerId) {
+                globalState = {
+                  ...globalState,
+                  suratList: (globalState.suratList || []).map((s) => {
+                    let shouldMark = false;
+                    if (p.markAll) {
+                      shouldMark = p.readerType === 'member' ? s.tujuanTipe === 'semua' || s.targetMemberId === p.readerId : true;
+                    } else if (Array.isArray(p.suratIds) && p.suratIds.length > 0) {
+                      shouldMark = p.suratIds.includes(s.id);
+                    } else if (p.suratId) {
+                      shouldMark = s.id === p.suratId;
+                    }
+                    if (!shouldMark) return s;
+                    const memberSet = new Set(s.readByMemberIds || []);
+                    const adminSet = new Set(s.readByAdminIds || []);
+                    if (p.readerType === 'member') memberSet.add(p.readerId);
+                    else adminSet.add(p.readerId);
+                    return { ...s, readByMemberIds: Array.from(memberSet), readByAdminIds: Array.from(adminSet) };
+                  }),
+                };
+                scheduleLocalStoragePersist();
+                notifyListeners();
+              }
+            } else if (data.type === 'SURAT_DELETED') {
+              const delId = data.payload?.suratId;
+              if (delId) {
+                const delSuratSet = new Set<string>([...(globalState.deletedSuratIds || []), delId]);
+                globalState = {
+                  ...globalState,
+                  suratList: (globalState.suratList || []).filter((s) => s.id !== delId),
+                  deletedSuratIds: Array.from(delSuratSet),
+                };
+                scheduleLocalStoragePersist();
+                notifyListeners();
+              }
+            } else if (data.type === 'SURAT_RESET') {
+              const resetAt = data.payload?.resetAt || new Date().toISOString();
+              globalState = {
+                ...globalState,
+                suratList: [],
+                suratResetAt: maxIsoTsClient(globalState.suratResetAt, resetAt),
+              };
+              scheduleLocalStoragePersist();
+              notifyListeners();
             } else if (data.type === 'CHAT_READ') {
               const p = data.payload;
               if (p) {
@@ -3152,20 +3444,15 @@ export function useKoperasiState() {
                     return m;
                   }),
                 };
-                try {
-                  localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-                } catch {}
+                scheduleLocalStoragePersist();
                 notifyListeners();
               }
-            } else if (data.type === 'SURAT_READ' || data.type === 'TRANSACTIONS_DELETED' || data.type === 'KAS_DELETED') {
-              fetchStateFromServer();
             }
           } catch (e) {
             console.error('Error handling SSE event', e);
           }
         };
         eventSource.onerror = () => {
-          // Auto-reconnect after 3 seconds only when internet is connected
           if (eventSource) {
             eventSource.close();
             eventSource = null;
@@ -3264,19 +3551,29 @@ export function useKoperasiState() {
           );
           firestoreUnsubscribers.push(unsubTx);
 
-          // E. Chats Collection
+          // E. Chats Collection (Propagates remote deletes & clears too!)
           const unsubChats = onSnapshot(
             collection(db, 'chats'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              if (snapshot.empty && snapshot.metadata.fromCache) return;
               hasHydratedRemoteState = true;
-              const remoteChats = snapshot.docs.map((d) => d.data() as ChatMessage);
+              const delChatSet = new Set<string>(globalState.deletedChatIds || []);
+              const remoteChats = snapshot.docs
+                .map((d) => d.data() as ChatMessage)
+                .filter((c) => !isChatMessageClearedClient(c, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember));
+              const remoteIds = new Set(remoteChats.map((c) => c.id));
+              if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+                const locallyRemoved = (globalState.chatMessages || []).filter((c) => c && c.id && !remoteIds.has(c.id));
+                if (locallyRemoved.length > 0 && snapshot.empty) {
+                  globalState = { ...globalState, chatMessages: [] };
+                  scheduleLocalStoragePersist();
+                  notifyListeners();
+                  return;
+                }
+              }
               seedFirestoreSyncedHashesFromServer({ chatMessages: remoteChats }, true);
               globalState = mergeStates(globalState, { ...globalState, chatMessages: remoteChats });
-              try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
-              } catch {}
-              notifyListeners();
+              scheduleDebouncedNotify(100, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
           );
@@ -3290,6 +3587,14 @@ export function useKoperasiState() {
                 const data = snap.data();
                 if (data) {
                   hasHydratedRemoteState = true;
+                  const mergedChatByMember: Record<string, string> = {
+                    ...(globalState.chatClearedBeforeByMember || {}),
+                  };
+                  if (data.chatClearedBeforeByMember && typeof data.chatClearedBeforeByMember === 'object') {
+                    Object.entries(data.chatClearedBeforeByMember).forEach(([mid, ts]) => {
+                      mergedChatByMember[mid] = maxIsoTsClient(mergedChatByMember[mid], String(ts || ''));
+                    });
+                  }
                   const generalSnapshotState: Partial<AppState> = {
                     profile: data.profile || globalState.profile,
                     categoriesKasKoperasi: data.categoriesKasKoperasi || globalState.categoriesKasKoperasi,
@@ -3303,6 +3608,11 @@ export function useKoperasiState() {
                     deletedTransactionIds: Array.from(new Set([...(globalState.deletedTransactionIds || []), ...(data.deletedTransactionIds || [])])),
                     deletedKasIds: Array.from(new Set([...(globalState.deletedKasIds || []), ...(data.deletedKasIds || [])])),
                     deletedSetoranIds: Array.from(new Set([...(globalState.deletedSetoranIds || []), ...(data.deletedSetoranIds || [])])),
+                    deletedSuratIds: Array.from(new Set([...(globalState.deletedSuratIds || []), ...(data.deletedSuratIds || [])])),
+                    deletedChatIds: Array.from(new Set([...(globalState.deletedChatIds || []), ...(data.deletedChatIds || [])])),
+                    suratResetAt: maxIsoTsClient(globalState.suratResetAt, data.suratResetAt),
+                    chatClearedAt: maxIsoTsClient(globalState.chatClearedAt, data.chatClearedAt),
+                    chatClearedBeforeByMember: mergedChatByMember,
                     usedAccountNumbers: sanitizeUsedUnifiedNumbersClient(
                       [...(globalState.usedAccountNumbers || []), ...(data.usedAccountNumbers || [])],
                       globalState.members || []
@@ -3417,13 +3727,24 @@ export function useKoperasiState() {
           );
           firestoreUnsubscribers.push(unsubLogs);
 
-          // J. Realtime Surat Menyurat Collection
+          // J. Realtime Surat Menyurat Collection (Propagates remote deletes & resets too!)
           const unsubSurat = onSnapshot(
             collection(db, 'surat'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              if (snapshot.empty && snapshot.metadata.fromCache) return;
               hasHydratedRemoteState = true;
-              const remoteSurat = snapshot.docs.map((d) => d.data() as SuratResmi);
+              const delSuratSet = new Set<string>(globalState.deletedSuratIds || []);
+              const remoteSurat = snapshot.docs
+                .map((d) => d.data() as SuratResmi)
+                .filter((sr) => !isSuratDeletedClient(sr, delSuratSet, globalState.suratResetAt));
+              if (snapshot.empty && !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+                if ((globalState.suratList || []).length > 0) {
+                  globalState = { ...globalState, suratList: [] };
+                  scheduleLocalStoragePersist();
+                  notifyListeners();
+                }
+                return;
+              }
               seedFirestoreSyncedHashesFromServer({ suratList: remoteSurat }, true);
               globalState = mergeStates(globalState, { ...globalState, suratList: remoteSurat });
               scheduleDebouncedNotify();
