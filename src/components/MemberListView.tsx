@@ -11,6 +11,7 @@ import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnli
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
+import { MutasiRekeningView } from './MutasiRekeningView';
 import {
   Users,
   UserPlus,
@@ -37,6 +38,7 @@ import {
   KeyRound,
   FileText,
   RefreshCw,
+  Receipt,
 } from 'lucide-react';
 
 interface MemberListViewProps {
@@ -57,6 +59,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const [selectedMemberForKta, setSelectedMemberForKta] = useState<MemberUser | null>(null);
   const [editingMember, setEditingMember] = useState<MemberUser | null>(null);
   const [viewingMemberProfile, setViewingMemberProfile] = useState<MemberUser | null>(null);
+  const [mutasiMember, setMutasiMember] = useState<MemberUser | null>(null);
   const [memberToFreeze, setMemberToFreeze] = useState<MemberUser | null>(null);
   const [freezeReasonInput, setFreezeReasonInput] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -72,7 +75,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
     const handleDeviceBack = (e: Event) => {
-      if (selectedMemberForKta) {
+      if (mutasiMember) {
+        e.preventDefault();
+        setMutasiMember(null);
+      } else if (selectedMemberForKta) {
         e.preventDefault();
         setSelectedMemberForKta(null);
       } else if (viewingMemberProfile) {
@@ -97,7 +103,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     };
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
-  }, [selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, lockPokokModalMember, showHapusTxModal, showAddModal]);
+  }, [mutasiMember, selectedMemberForKta, viewingMemberProfile, editingMember, memberToFreeze, lockPokokModalMember, showHapusTxModal, showAddModal]);
 
   // Period filter states for reports
   const [periodeTipe, setPeriodeTipe] = useState<'semua' | 'harian' | 'bulanan' | 'tahunan'>('semua');
@@ -163,6 +169,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
   const isWriter = currentAdmin.role === 'admin_write';
   const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola' || currentAdmin.role === 'admin_pembukuan';
   const isKelola = isApproval;
+  const canViewMutasi = isSuperAdmin || isApproval || isWriter;
 
   // Lock/Unlock Tabungan Pokok State (Req 7)
   const [lockPokokTargetAction, setLockPokokTargetAction] = useState<'lock' | 'unlock'>('unlock');
@@ -1398,6 +1405,19 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   </td>
                   <td className="py-3 px-3 text-right">
                     <div className="flex justify-end gap-1.5">
+                      {/* Super Admin, Admin Approval, dan Admin Write dapat melihat Mutasi Rekening Anggota */}
+                      {canViewMutasi && (
+                        <button
+                          type="button"
+                          onClick={() => setMutasiMember(member)}
+                          className="px-2 py-1.5 bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 rounded-lg text-[10px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer"
+                          title={`Lihat Mutasi Rekening ${member.nama}`}
+                        >
+                          <Receipt className="w-3.5 h-3.5 text-indigo-400" />
+                          <span className="hidden lg:inline">Mutasi</span>
+                        </button>
+                      )}
+
                       {/* Req 14: Admin Super, Admin Write, dan Admin Approval dapat melihat profile anggota */}
                       <button
                         onClick={() => setViewingMemberProfile(member)}
@@ -2175,39 +2195,76 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </div>
               </div>
 
-              {/* Riwayat Mutasi & Hapus Mutasi Transaksi Anggota (Req 2) */}
+              {/* Riwayat Mutasi & Hapus Mutasi Transaksi Anggota (Super Admin, Admin Approval, Admin Write) */}
+              {canViewMutasi && (
               <div className="p-3 bg-slate-800/60 rounded-2xl border border-slate-700/80 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-bold text-white text-xs flex items-center gap-2">
                     <FileText className="w-4 h-4 text-amber-400" />
-                    <span>Riwayat Mutasi Transaksi ({state.memberTransactions.filter((t) => t.memberId === viewingMemberProfile.id).length})</span>
+                    <span>
+                      Riwayat Mutasi Transaksi (
+                      {
+                        state.memberTransactions.filter(
+                          (t) =>
+                            t.memberId === viewingMemberProfile.id &&
+                            !(state.deletedTransactionIds || []).includes(t.id) &&
+                            (t as any).status !== 'deleted'
+                        ).length
+                      }
+                      )
+                    </span>
                   </div>
-                  {isSuperAdmin && (
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => {
-                        setHapusTxInitialMemberId(viewingMemberProfile.id);
-                        setHapusTxInitialWilayah(viewingMemberProfile.wilayah);
-                        setShowHapusTxModal(true);
+                        setMutasiMember(viewingMemberProfile);
                         setViewingMemberProfile(null);
                       }}
-                      className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/40 flex items-center gap-1 transition-all"
-                      title="Buka form seleksi dan hapus mutasi anggota ini"
+                      className="px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/35 text-indigo-300 text-[11px] font-bold rounded-lg border border-indigo-500/40 flex items-center gap-1 transition-all cursor-pointer"
+                      title="Buka tampilan Mutasi Rekening Lengkap (Filter Periode, PDF & Excel)"
                     >
-                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                      <span>Hapus Semua Mutasi Anggota</span>
+                      <Receipt className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Mutasi Rekening Lengkap</span>
                     </button>
-                  )}
+
+                    {isSuperAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHapusTxInitialMemberId(viewingMemberProfile.id);
+                          setHapusTxInitialWilayah(viewingMemberProfile.wilayah);
+                          setShowHapusTxModal(true);
+                          setViewingMemberProfile(null);
+                        }}
+                        className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/40 flex items-center gap-1 transition-all"
+                        title="Buka form seleksi dan hapus mutasi anggota ini"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Hapus Semua Mutasi</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
-                  {state.memberTransactions.filter((t) => t.memberId === viewingMemberProfile.id).length === 0 ? (
+                  {state.memberTransactions.filter(
+                    (t) =>
+                      t.memberId === viewingMemberProfile.id &&
+                      !(state.deletedTransactionIds || []).includes(t.id) &&
+                      (t as any).status !== 'deleted'
+                  ).length === 0 ? (
                     <div className="text-center py-4 text-slate-400 text-xs italic">
                       Belum ada catatan mutasi transaksi untuk anggota ini.
                     </div>
                   ) : (
                     state.memberTransactions
-                      .filter((t) => t.memberId === viewingMemberProfile.id)
+                      .filter(
+                        (t) =>
+                          t.memberId === viewingMemberProfile.id &&
+                          !(state.deletedTransactionIds || []).includes(t.id) &&
+                          (t as any).status !== 'deleted'
+                      )
                       .map((tx) => (
                         <div
                           key={tx.id}
@@ -2266,6 +2323,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   )}
                 </div>
               </div>
+              )}
 
               {/* Actions from within View Profile Modal */}
               <div className="flex gap-2 pt-2">
@@ -2292,6 +2350,42 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* ================= MODAL MUTASI REKENING ANGGOTA (KHUSUS SUPER ADMIN, ADMIN APPROVAL, ADMIN WRITE) ================= */}
+      {mutasiMember && canViewMutasi && (() => {
+        const liveMutasiMember = state.members.find((m) => m.id === mutasiMember.id) || mutasiMember;
+        return (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+            <div className="bg-[#0b1120] border border-slate-700 w-full max-w-5xl rounded-3xl p-4 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto my-auto space-y-4">
+              <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-700/80 sticky top-0 bg-[#0b1120] z-20 pt-1">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0">
+                    <Receipt className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm sm:text-base font-black text-white truncate">
+                      Mutasi Rekening Anggota: {liveMutasiMember.nama}
+                    </h3>
+                    <p className="text-[11px] text-slate-400 font-mono truncate">
+                      No. Rek / Anggota: {liveMutasiMember.nomorRekening || liveMutasiMember.nomorAnggota} • Wilayah: {liveMutasiMember.wilayah}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMutasiMember(null)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center gap-1.5 text-xs font-bold shrink-0 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                  <span className="hidden sm:inline">Tutup</span>
+                </button>
+              </div>
+
+              <MutasiRekeningView state={state} member={liveMutasiMember} />
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ================= MODAL PENGAJUAN PEMBEKUAN AKUN (Req 4) ================= */}
       {memberToFreeze && (

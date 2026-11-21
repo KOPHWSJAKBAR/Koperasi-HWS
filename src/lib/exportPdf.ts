@@ -1287,7 +1287,7 @@ export function exportBukuKasPdf(payload: BukuKasExportPayload) {
 
       <div class="content-layer">
         <!-- ================= HALAMAN DEPAN: JURNAL & REKAPITULASI (PAGE 1) ================= -->
-        <div style="page-break-after: always; break-after: page; min-height: 94vh; display: flex; flex-direction: column; justify-content: space-between;">
+        <div style="page-break-after: always; break-after: page;">
           <div>
             <!-- Header Dokumen -->
             <div style="border-bottom: 2.5px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-end;">
@@ -1387,28 +1387,6 @@ export function exportBukuKasPdf(payload: BukuKasExportPayload) {
             </div>
 
             ${neracaExtraHtml}
-          </div>
-
-          <!-- Footer Tanda Tangan Halaman 1 -->
-          <div style="margin-top: 25px; padding-top: 12px; border-top: 1px dashed #cbd5e1; display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; font-size: 10px;">
-            <div>
-              <div style="color: #64748b; margin-bottom: 45px;">Dibuat Oleh (Admin Kasir),</div>
-              <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 130px;">
-                ( Petugas Koperasi )
-              </div>
-            </div>
-            <div>
-              <div style="color: #64748b; margin-bottom: 45px;">Diperiksa Oleh (Pembukuan),</div>
-              <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 130px;">
-                ( Robi Darwis )
-              </div>
-            </div>
-            <div>
-              <div style="color: #64748b; margin-bottom: 45px;">Mengetahui (Ketua / Pengawas),</div>
-              <div style="font-weight: 800; border-bottom: 1px solid #94a3b8; display: inline-block; min-width: 130px;">
-                ( Abzqar )
-              </div>
-            </div>
           </div>
         </div>
 
