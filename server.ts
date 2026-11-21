@@ -1351,16 +1351,49 @@ function seedServerFirestoreHashMap(data: Partial<any>, forceOverwrite = false) 
 async function ensureServerFirestore() {
   if (!serverFirestoreInstance || !serverFirestoreMethods) {
     const { initializeApp, getApps } = await import('firebase/app');
-    const { getFirestore, doc, setDoc, deleteDoc, getDoc, getDocs, collection, onSnapshot, query, orderBy, limit } = await import('firebase/firestore');
+    const {
+      initializeFirestore,
+      getFirestore,
+      doc,
+      setDoc,
+      deleteDoc,
+      getDoc,
+      getDocs,
+      collection,
+      onSnapshot,
+      query,
+      orderBy,
+      limit,
+    } = await import('firebase/firestore');
     const configPath = path.join(__dirname, 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
       const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(cfg);
-      serverFirestoreInstance = cfg.firestoreDatabaseId ? getFirestore(fbApp, cfg.firestoreDatabaseId) : getFirestore(fbApp);
+      try {
+        serverFirestoreInstance = initializeFirestore(
+          fbApp,
+          {
+            experimentalAutoDetectLongPolling: true,
+            ignoreUndefinedProperties: true,
+          },
+          cfg.firestoreDatabaseId || undefined
+        );
+      } catch {
+        serverFirestoreInstance = cfg.firestoreDatabaseId
+          ? getFirestore(fbApp, cfg.firestoreDatabaseId)
+          : getFirestore(fbApp);
+      }
       serverFirestoreMethods = { doc, setDoc, deleteDoc, getDoc, getDocs, collection, onSnapshot, query, orderBy, limit };
     }
   }
   return serverFirestoreInstance && serverFirestoreMethods ? { db: serverFirestoreInstance, ...serverFirestoreMethods } : null;
+}
+
+async function runServerFsTasksInChunks(tasks: Array<() => Promise<any>>, chunkSize = 20) {
+  for (let i = 0; i < tasks.length; i += chunkSize) {
+    const batch = tasks.slice(i, i + chunkSize);
+    await Promise.all(batch.map((fn) => fn().catch(() => {})));
+  }
 }
 
 async function syncStateToFirestoreServer(state: any) {
@@ -1376,6 +1409,7 @@ async function syncStateToFirestoreServer(state: any) {
     const { db, doc, setDoc, deleteDoc } = fsCtx;
     const now = new Date().toISOString();
     let hasAnyDocWritten = false;
+    const tasks: Array<() => Promise<any>> = [];
 
     // 1. Synchronize Members to Firestore (hash-diffed, strictly strip biometricActive)
     const cleanMembers = Array.isArray(state.members)
@@ -1388,8 +1422,10 @@ async function syncStateToFirestoreServer(state: any) {
         const mKey = `members/${m.id}`;
         const mStr = JSON.stringify(cleanMem);
         if (serverFirestoreHashMap.get(mKey) !== mStr) {
-          await setDoc(doc(db, 'members', m.id), cleanMem, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(mKey, mStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'members', m.id), cleanMem, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(mKey, mStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1397,8 +1433,10 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delId of state.deletedMemberIds || []) {
       const delKey = `deleted_members/${delId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'members', delId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'members', delId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -1418,8 +1456,10 @@ async function syncStateToFirestoreServer(state: any) {
     });
     const adminsCoreStr = JSON.stringify(adminsCore);
     if (serverFirestoreHashMap.get('settings/admins') !== adminsCoreStr) {
-      await setDoc(doc(db, 'settings', 'admins'), { ...adminsCore, updatedAt: now, updatedBy: SERVER_INSTANCE_ID }, { merge: true }).catch(() => {});
-      serverFirestoreHashMap.set('settings/admins', adminsCoreStr);
+      tasks.push(async () => {
+        await setDoc(doc(db, 'settings', 'admins'), { ...adminsCore, updatedAt: now, updatedBy: SERVER_INSTANCE_ID }, { merge: true }).catch(() => {});
+        serverFirestoreHashMap.set('settings/admins', adminsCoreStr);
+      });
       hasAnyDocWritten = true;
     }
     for (const a of cleanAdmins) {
@@ -1427,8 +1467,10 @@ async function syncStateToFirestoreServer(state: any) {
         const aKey = `admins/${a.id}`;
         const aStr = JSON.stringify(a);
         if (serverFirestoreHashMap.get(aKey) !== aStr) {
-          await setDoc(doc(db, 'admins', a.id), a, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(aKey, aStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'admins', a.id), a, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(aKey, aStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1436,8 +1478,10 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delAdmId of state.deletedAdminIds || []) {
       const delKey = `deleted_admins/${delAdmId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -1446,13 +1490,15 @@ async function syncStateToFirestoreServer(state: any) {
     const generalCore = buildGeneralCorePayloadServer(state);
     const generalCoreStr = JSON.stringify(generalCore);
     if (serverFirestoreHashMap.get('settings/general') !== generalCoreStr) {
-      await setDoc(
-        doc(db, 'settings', 'general'),
-        { ...generalCore, updatedAt: now, updatedBy: SERVER_INSTANCE_ID },
-        { merge: true }
-      ).catch(() => {});
-      serverFirestoreHashMap.set('settings/general', generalCoreStr);
-      lastAppliedFirestoreGeneralUpdatedAt = now;
+      tasks.push(async () => {
+        await setDoc(
+          doc(db, 'settings', 'general'),
+          { ...generalCore, updatedAt: now, updatedBy: SERVER_INSTANCE_ID },
+          { merge: true }
+        ).catch(() => {});
+        serverFirestoreHashMap.set('settings/general', generalCoreStr);
+        lastAppliedFirestoreGeneralUpdatedAt = now;
+      });
       hasAnyDocWritten = true;
     }
 
@@ -1463,8 +1509,10 @@ async function syncStateToFirestoreServer(state: any) {
         const kKey = `kas/${k.id}`;
         const kStr = JSON.stringify(cleanKas);
         if (serverFirestoreHashMap.get(kKey) !== kStr) {
-          await setDoc(doc(db, 'kas', k.id), cleanKas, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(kKey, kStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'kas', k.id), cleanKas, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(kKey, kStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1472,8 +1520,10 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delId of state.deletedKasIds || []) {
       const delKey = `deleted_kas/${delId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'kas', delId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'kas', delId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -1485,8 +1535,10 @@ async function syncStateToFirestoreServer(state: any) {
         const sKey = `setoran/${s.id}`;
         const sStr = JSON.stringify(cleanSetoran);
         if (serverFirestoreHashMap.get(sKey) !== sStr) {
-          await setDoc(doc(db, 'setoran', s.id), cleanSetoran, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(sKey, sStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'setoran', s.id), cleanSetoran, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(sKey, sStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1494,9 +1546,11 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delId of state.deletedSetoranIds || []) {
       const delKey = `deleted_setoran/${delId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'setoran', delId)).catch(() => {});
-        await deleteDoc(doc(db, 'sedekah', delId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'setoran', delId)).catch(() => {});
+          await deleteDoc(doc(db, 'sedekah', delId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -1508,8 +1562,10 @@ async function syncStateToFirestoreServer(state: any) {
         const txKey = `transactions/${tx.id}`;
         const txStr = JSON.stringify(cleanTx);
         if (serverFirestoreHashMap.get(txKey) !== txStr) {
-          await setDoc(doc(db, 'transactions', tx.id), cleanTx, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(txKey, txStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'transactions', tx.id), cleanTx, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(txKey, txStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1517,8 +1573,10 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delId of state.deletedTransactionIds || []) {
       const delKey = `deleted_tx/${delId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'transactions', delId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'transactions', delId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -1530,8 +1588,10 @@ async function syncStateToFirestoreServer(state: any) {
         const sdKey = `sedekah/${sd.id}`;
         const sdStr = JSON.stringify(cleanSd);
         if (serverFirestoreHashMap.get(sdKey) !== sdStr) {
-          await setDoc(doc(db, 'sedekah', sd.id), cleanSd, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(sdKey, sdStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'sedekah', sd.id), cleanSd, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(sdKey, sdStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1545,8 +1605,10 @@ async function syncStateToFirestoreServer(state: any) {
         const cKey = `chats/${c.id}`;
         const cStr = JSON.stringify(cleanChat);
         if (serverFirestoreHashMap.get(cKey) !== cStr) {
-          await setDoc(doc(db, 'chats', c.id), cleanChat, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(cKey, cStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'chats', c.id), cleanChat, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(cKey, cStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1554,8 +1616,10 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delChatId of (state.deletedChatIds || []).slice(-200)) {
       const delKey = `deleted_chats/${delChatId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'chats', delChatId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'chats', delChatId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -1568,8 +1632,10 @@ async function syncStateToFirestoreServer(state: any) {
         const srKey = `surat/${sr.id}`;
         const srStr = JSON.stringify(cleanSurat);
         if (serverFirestoreHashMap.get(srKey) !== srStr) {
-          await setDoc(doc(db, 'surat', sr.id), cleanSurat, { merge: true }).catch(() => {});
-          serverFirestoreHashMap.set(srKey, srStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'surat', sr.id), cleanSurat, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(srKey, srStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -1577,10 +1643,16 @@ async function syncStateToFirestoreServer(state: any) {
     for (const delSuratId of (state.deletedSuratIds || []).slice(-200)) {
       const delKey = `deleted_surat/${delSuratId}`;
       if (!serverFirestoreHashMap.has(delKey)) {
-        await deleteDoc(doc(db, 'surat', delSuratId)).catch(() => {});
-        serverFirestoreHashMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'surat', delSuratId)).catch(() => {});
+          serverFirestoreHashMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
+    }
+
+    if (tasks.length > 0) {
+      await runServerFsTasksInChunks(tasks, 20);
     }
 
     // 10. Lightweight Metadata Pulse to koperasi_state/main_database ONLY when something actually changed
@@ -1607,7 +1679,7 @@ async function syncStateToFirestoreServer(state: any) {
     if (nextQueued) {
       setTimeout(() => {
         syncStateToFirestoreServer(nextQueued);
-      }, 300);
+      }, 200);
     }
   }
 }
@@ -1669,12 +1741,12 @@ function buildStateSyncDigest(st: any): string {
     return JSON.stringify({
       members: (st.members || []).map((m: any) => `${m.id}:${m.nama}:${m.wilayah}:${m.nik}:${m.whatsapp}:${m.email}:${m.updatedAt || ''}:${m.bankPribadi?.nomorRekening || ''}:${m.nomorAnggota}:${m.nomorRekening}:${m.saldoPokok}:${m.saldoUmum}:${m.saldoZakatFitrah}:${m.saldoQurban}:${m.status}:${m.isPokokLocked}`),
       admins: (st.admins || []).map((a: any) => `${a.id}:${a.nama}:${a.role}:${a.username}:${a.email || ''}:${a.whatsapp || ''}:${a.wilayahKantor || ''}`),
-      setoran: (st.setoranList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedAt || ''}`),
+      setoran: (st.setoranList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedBy || ''}:${s.verifiedAt || ''}:${s.alasanTolak || s.catatanAdmin || ''}`),
       kas: (st.kasList || []).map((k: any) => `${k.id}:${k.status || ''}:${k.nominal}:${k.kategori}:${k.tanggal}:${k.keterangan || ''}`),
-      tx: (st.memberTransactions || []).map((t: any) => `${t.id}:${t.nominal}:${t.kategori}:${t.saldoAkhir}:${t.tanggal}:${t.keterangan || ''}`),
-      sedekah: (st.sedekahList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedAt || ''}`),
+      tx: (st.memberTransactions || []).map((t: any) => `${t.id}:${t.nominal}:${t.kategori}:${t.saldoSetelah || 0}:${t.tanggal}:${t.keterangan || ''}`),
+      sedekah: (st.sedekahList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedBy || ''}:${s.verifiedAt || ''}`),
       chats: (st.chatMessages || []).map((c: any) => `${c.id}:${Boolean(c.isReadByAdmin)}:${Boolean(c.isReadByMember)}`),
-      surat: (st.suratList || []).map((sr: any) => `${sr.id}:${(sr.readByMemberIds || []).length}:${(sr.readByAdminIds || []).length}`),
+      surat: (st.suratList || []).map((sr: any) => `${sr.id}:${sr.perihal || ''}:${sr.tujuanTipe || ''}:${(sr.readByMemberIds || []).length}:${(sr.readByAdminIds || []).length}`),
       logCount: (st.auditLogs || []).length,
       profile: st.profile || {},
       pengaturanBerbagi: st.pengaturanBerbagi || {},
@@ -2060,12 +2132,27 @@ async function initServerFirestoreRealtimeWatchers() {
       () => {}
     );
 
+    onSnapshot(
+      doc(db, 'settings', 'admins'),
+      (snap: any) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        if (d && d.updatedBy !== SERVER_INSTANCE_ID) {
+          triggerDebouncedPull();
+        }
+      },
+      () => {}
+    );
+
     onSnapshot(collection(db, 'members'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'admins'), () => triggerDebouncedPull(), () => {});
     onSnapshot(collection(db, 'setoran'), () => triggerDebouncedPull(), () => {});
     onSnapshot(collection(db, 'kas'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'transactions'), () => triggerDebouncedPull(), () => {});
     onSnapshot(collection(db, 'sedekah'), () => triggerDebouncedPull(), () => {});
     onSnapshot(collection(db, 'chats'), () => triggerDebouncedPull(), () => {});
     onSnapshot(collection(db, 'surat'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'logs'), () => triggerDebouncedPull(), () => {});
   } catch {}
 }
 
@@ -3600,8 +3687,20 @@ async function startServer() {
       }
 
       const now = new Date();
-      const tgl = now.toISOString().split('T')[0];
-      const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+      const wibDateParts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(now);
+      const tgl = `${wibDateParts.find((p) => p.type === 'year')?.value || now.getUTCFullYear()}-${wibDateParts.find((p) => p.type === 'month')?.value || '01'}-${wibDateParts.find((p) => p.type === 'day')?.value || '01'}`;
+      const wibTimeParts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Jakarta',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(now);
+      const jam = `${wibTimeParts.find((p) => p.type === 'hour')?.value || '00'}:${wibTimeParts.find((p) => p.type === 'minute')?.value || '00'}`;
 
       if (isApproved) {
         // Cek apakah setoran ini sudah disetujui sebelumnya untuk mencegah double saldo (Req 4)
@@ -3872,7 +3971,8 @@ async function startServer() {
         }
       } else {
         dep.status = 'ditolak';
-        dep.catatanAdmin = alasan || 'Ditolak oleh admin pengurus koperasi';
+        dep.alasanTolak = alasan || 'Ditolak oleh admin pengurus koperasi';
+        dep.catatanAdmin = dep.alasanTolak;
         dep.verifiedAt = now.toISOString();
         dep.verifiedBy = adminName || 'Admin Koperasi';
 

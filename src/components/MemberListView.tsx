@@ -1313,7 +1313,6 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               <tr className="border-b border-slate-700 bg-slate-800/40 text-slate-400 font-bold uppercase text-[10px]">
                 <th className="py-2.5 px-2 text-center w-10">No</th>
                 <th className="py-2.5 px-3">No. Rekening / Anggota</th>
-                <th className="py-2.5 px-3">Tgl Terdaftar</th>
                 <th className="py-2.5 px-3">Nama & Kontak</th>
                 <th className="py-2.5 px-3">Wilayah</th>
                 <th className="py-2.5 px-3 text-right">Tab. Pokok</th>
@@ -1331,13 +1330,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   </td>
                   <td className="py-3 px-3">
                     <div className="font-mono font-bold text-amber-400">{member.nomorRekening || member.nomorAnggota}</div>
-                    <div className="text-[10px] text-slate-400 mt-0.5 sm:hidden">
+                    <div className="text-[10px] text-slate-400 mt-0.5 whitespace-nowrap">
                       Daftar: {formatWibDateShort(member.terdaftarSejak)}
                     </div>
-                  </td>
-                  <td className="py-3 px-3 whitespace-nowrap">
-                    <div className="text-[11px] font-bold text-slate-200">{formatWibDateShort(member.terdaftarSejak)}</div>
-                    <div className="text-[10px] font-mono text-slate-400">{member.terdaftarSejak || '-'}</div>
                   </td>
                   <td className="py-3 px-3">
                     <div className="flex items-center gap-1.5">

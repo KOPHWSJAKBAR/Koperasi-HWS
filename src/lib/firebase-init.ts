@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
+  initializeFirestore,
   getFirestore,
   Firestore,
   setLogLevel,
@@ -49,10 +50,19 @@ export function getFirebaseApp(): FirebaseApp {
 export function getFirebaseFirestore(): Firestore {
   if (!cachedDb) {
     const currentApp = getFirebaseApp();
-    if (firebaseConfig.firestoreDatabaseId) {
-      cachedDb = getFirestore(currentApp, firebaseConfig.firestoreDatabaseId);
-    } else {
-      cachedDb = getFirestore(currentApp);
+    try {
+      cachedDb = initializeFirestore(
+        currentApp,
+        {
+          experimentalAutoDetectLongPolling: true,
+          ignoreUndefinedProperties: true,
+        },
+        firebaseConfig.firestoreDatabaseId || undefined
+      );
+    } catch {
+      cachedDb = firebaseConfig.firestoreDatabaseId
+        ? getFirestore(currentApp, firebaseConfig.firestoreDatabaseId)
+        : getFirestore(currentApp);
     }
   }
   return cachedDb;

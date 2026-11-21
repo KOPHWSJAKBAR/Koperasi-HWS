@@ -7,7 +7,16 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, fetchStateFromServer } from '../lib/storage';
+import {
+  formatRupiah,
+  createAuditLog,
+  fetchStateFromServer,
+  formatWibDateShort,
+  formatWibDateTime,
+  getWibDateStr,
+  getWibTimeStr,
+  applyAuthoritativeServerState,
+} from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { LogoHws } from '../lib/logo';
@@ -85,6 +94,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [actionBanner, setActionBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [rejectingDeposit, setRejectingDeposit] = useState<SetoranVerifikasi | null>(null);
+  const [rejectReasonInput, setRejectReasonInput] = useState<string>('');
+  const [deletingDeposit, setDeletingDeposit] = useState<SetoranVerifikasi | null>(null);
 
   // Deteksi Data Double / Pengajuan Setoran Ganda (Anggota, Nominal, & Tanggal yang sama)
   const getDepositSignature = (s: SetoranVerifikasi) => {
@@ -115,6 +128,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       if (previewBukti) {
         e.preventDefault();
         setPreviewBukti(null);
+      } else if (rejectingDeposit) {
+        e.preventDefault();
+        setRejectingDeposit(null);
+      } else if (deletingDeposit) {
+        e.preventDefault();
+        setDeletingDeposit(null);
       } else if (buktiSetorSuccess) {
         e.preventDefault();
         setBuktiSetorSuccess(null);
@@ -125,7 +144,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     };
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
-  }, [previewBukti, buktiSetorSuccess, isTarikModalOpen]);
+  }, [previewBukti, rejectingDeposit, deletingDeposit, buktiSetorSuccess, isTarikModalOpen]);
 
   // Calculations for setoran kewajiban (Req 1)
   const daysCount = parseInt(jumlahHari, 10) || 0;
@@ -140,8 +159,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const handleManualSync = async () => {
     setIsSyncing(true);
-    await fetchStateFromServer();
-    setTimeout(() => setIsSyncing(false), 500);
+    await fetchStateFromServer(true);
+    setTimeout(() => setIsSyncing(false), 400);
   };
 
   // Handle image upload for proof (Kompresi otomatis agar upload online realtime lancar)
@@ -447,11 +466,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       ctx.fillText(value, 360, y);
     };
 
-    const waktuStr = deposit.createdAt ? new Date(deposit.createdAt).toLocaleString('id-ID') : new Date().toLocaleString('id-ID');
-    drawRow('No. Referensi / Transaksi:', deposit.nomorReferensi || deposit.id, 290);
-    drawRow('Waktu Pengajuan:', waktuStr, 330);
-    drawRow('Nama Lengkap Anggota:', deposit.memberNama, 370);
-    drawRow('No. Rekening Anggota:', deposit.memberRekening, 410);
+    const waktuStr = deposit.createdAt ? formatWibDateTime(deposit.createdAt) : formatWibDateTime(new Date());
+    drawRow('No. Referensi / Transaksi:', deposit.nomorReferensi || deposit.id, 285);
+    drawRow('Waktu Pengajuan (WIB):', waktuStr, 322);
+    drawRow('Nama Lengkap Anggota:', deposit.memberNama, 359);
+    drawRow('No. Rekening Anggota:', deposit.memberRekening, 396);
     drawRow(
       'Jenis Setoran:',
       deposit.jenis === 'kewajiban'
@@ -459,10 +478,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         : deposit.jenis === 'sedekah'
         ? 'Setoran Sedekah / Berbagi'
         : 'Tabungan Umum Bebas',
-      450
+      433
     );
     if (deposit.jenis === 'kewajiban') {
-      drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || 1} Hari`, 490);
+      drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || 1} Hari`, 470);
     }
     const isApproved = deposit.status === 'disetujui';
     const isRejected = deposit.status === 'ditolak';
@@ -476,8 +495,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       deposit.metode === 'tabungan_umum'
         ? 'Tabungan Umum (TFTU)'
         : `${deposit.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} (${(deposit.metode || 'QRIS').toUpperCase()})`;
-    drawRow('Metode Pembayaran:', metodeSlipLabel, 530);
-    drawRow('Status Verifikasi:', statusLabel, 570, true);
+    drawRow('Metode Pembayaran:', metodeSlipLabel, 507);
+    drawRow('Status Verifikasi:', statusLabel, 544, true);
+    if (isApproved || isRejected) {
+      drawRow('Diverifikasi Oleh:', deposit.verifiedBy || 'Admin Koperasi', 576);
+      drawRow('Waktu Verifikasi (WIB):', deposit.verifiedAt ? formatWibDateTime(deposit.verifiedAt) : '-', 604);
+    }
 
     ctx.fillStyle = isApproved ? '#ecfdf5' : isRejected ? '#fef2f2' : '#fffbeb';
     ctx.fillRect(80, 620, 740, 90);
@@ -615,15 +638,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     if (approvingId) return; // Mencegah double click secara bersamaan
 
     if (dep.status === 'disetujui') {
-      alert(`Setoran a/n ${dep.memberNama} sudah disetujui sebelumnya.`);
-      onBackToDashboard?.();
+      setActionBanner({ type: 'success', text: `Setoran a/n ${dep.memberNama} sudah disetujui sebelumnya.` });
       return;
     }
 
     setApprovingId(dep.id);
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const tgl = getWibDateStr(now);
+    const jam = getWibTimeStr(now);
 
     let verifySuccess = false;
 
@@ -641,7 +663,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
       if (res.ok) {
         verifySuccess = true;
-        const data = await res.json();
+        let latestState = (await res.json())?.state;
 
         // Jika diminta otomatis menolak duplikat pengajuan lainnya dalam grup
         if (rejectOthers) {
@@ -651,7 +673,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           );
           for (const other of others) {
             try {
-              await fetch('/api/setoran/verify', {
+              const rejRes = await fetch('/api/setoran/verify', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -661,15 +683,20 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   alasan: 'Duplikat pengajuan setoran (telah disetujui pada pengajuan lainnya)',
                 }),
               });
+              if (rejRes.ok) {
+                const rejData = await rejRes.json().catch(() => null);
+                if (rejData?.state) latestState = rejData.state;
+              }
             } catch {}
           }
         }
 
-        if (data.state) {
-          await updateState(() => data.state);
+        if (latestState) {
+          applyAuthoritativeServerState(latestState, true);
         } else {
-          await fetchStateFromServer();
+          await fetchStateFromServer(true);
         }
+
         // Kirim FCM & Realtime Push Notifikasi ke Anggota (Req 1)
         sendRealtimeNotification({
           recipientId: dep.memberId,
@@ -681,14 +708,16 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               : dep.jenis === 'sedekah'
               ? 'Sedekah / Berbagi'
               : 'Tabungan Umum'
-          } sebesar ${formatRupiah(dep.nominal)} telah disetujui & diverifikasi oleh Admin.`,
+          } sebesar ${formatRupiah(dep.nominal)} telah disetujui & diverifikasi oleh Admin ${currentAdmin.nama}.`,
           type: 'setoran_verified',
           data: { depositId: dep.id, nominal: dep.nominal },
         }).catch(() => {});
 
-        alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui! Saldo tepat terupdate 1 kali.${rejectOthers ? ' Duplikat lainnya otomatis ditolak.' : ''}`);
+        setActionBanner({
+          type: 'success',
+          text: `✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi oleh ${currentAdmin.nama} pada ${getWibTimeStr(now)} WIB.${rejectOthers ? ' Duplikat lainnya otomatis ditolak.' : ''}`,
+        });
         setApprovingId(null);
-        onBackToDashboard?.();
         return;
       }
     } catch (e) {
@@ -988,19 +1017,32 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         type: 'setoran_verified',
         data: { depositId: dep.id, nominal: dep.nominal },
       }).catch(() => {});
-    }
 
-    alert(`✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi & disetujui online realtime! Saldo telah terupdate tepat 1 kali.`);
-    onBackToDashboard?.();
+      setActionBanner({
+        type: 'success',
+        text: `✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi oleh ${currentAdmin.nama} pada ${getWibTimeStr(now)} WIB.`,
+      });
+    }
   };
 
-  // ADMIN: Reject Deposit
-  const handleRejectDeposit = async (dep: SetoranVerifikasi) => {
+  // ADMIN: Reject Deposit (Open modal -> Confirm)
+  const handleRejectDeposit = (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
-    const reason = prompt('Masukkan alasan penolakan setoran:') || 'Bukti pembayaran QRIS tidak valid/dana belum masuk';
+    setRejectReasonInput('');
+    setRejectingDeposit(dep);
+  };
 
+  const confirmRejectDeposit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentAdmin || !rejectingDeposit) return;
+    const dep = rejectingDeposit;
+    const reason = rejectReasonInput.trim() || 'Bukti pembayaran QRIS tidak valid/dana belum masuk';
+    setRejectingDeposit(null);
+    setRejectReasonInput('');
+
+    let serverUpdated = false;
     try {
-      await fetch('/api/setoran/verify', {
+      const res = await fetch('/api/setoran/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1010,51 +1052,65 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           alasan: reason,
         }),
       });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.state) {
+          applyAuthoritativeServerState(data.state, true);
+          serverUpdated = true;
+        }
+      }
     } catch {}
 
-    await updateState((prev) => {
-      const nowIso = new Date().toISOString();
-      const updatedSetoran = prev.setoranList.map((s) =>
-        s.id === dep.id
-          ? {
-              ...s,
-              status: 'ditolak' as const,
-              alasanTolak: reason,
-              catatanAdmin: reason,
-              verifiedBy: currentAdmin.nama,
-              verifiedAt: nowIso,
-            }
-          : s
-      );
+    if (!serverUpdated) {
+      await updateState((prev) => {
+        const nowIso = new Date().toISOString();
+        const updatedSetoran = prev.setoranList.map((s) =>
+          s.id === dep.id
+            ? {
+                ...s,
+                status: 'ditolak' as const,
+                alasanTolak: reason,
+                catatanAdmin: reason,
+                verifiedBy: currentAdmin.nama,
+                verifiedAt: nowIso,
+              }
+            : s
+        );
 
-      const updatedSedekahList =
-        dep.jenis === 'sedekah'
-          ? (prev.sedekahList || []).map((sdk) =>
-              sdk.id === dep.id
-                ? {
-                    ...sdk,
-                    status: 'rejected' as const,
-                    rejectionReason: reason,
-                    verifiedBy: currentAdmin.nama,
-                    verifiedAt: nowIso,
-                  }
-                : sdk
-            )
-          : prev.sedekahList;
+        const updatedSedekahList =
+          dep.jenis === 'sedekah'
+            ? (prev.sedekahList || []).map((sdk) =>
+                sdk.id === dep.id
+                  ? {
+                      ...sdk,
+                      status: 'rejected' as const,
+                      rejectionReason: reason,
+                      verifiedBy: currentAdmin.nama,
+                      verifiedAt: nowIso,
+                    }
+                  : sdk
+              )
+            : prev.sedekahList;
 
-      const audit = createAuditLog(
-        currentAdmin,
-        'Tolak Setoran',
-        `Menolak setoran ${formatRupiah(dep.nominal)} dari ${dep.memberNama}. Alasan: ${reason}`,
-        dep.id
-      );
+        const audit = createAuditLog(
+          currentAdmin,
+          'Tolak Setoran',
+          `Menolak setoran ${formatRupiah(dep.nominal)} dari ${dep.memberNama}. Alasan: ${reason}`,
+          dep.id
+        );
 
-      return {
-        ...prev,
-        setoranList: updatedSetoran,
-        sedekahList: updatedSedekahList,
-        auditLogs: [audit, ...prev.auditLogs],
-      };
+        return {
+          ...prev,
+          setoranList: updatedSetoran,
+          sedekahList: updatedSedekahList,
+          auditLogs: [audit, ...prev.auditLogs],
+        };
+      });
+    }
+
+    setActionBanner({
+      type: 'error',
+      text: `Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) ditolak oleh ${currentAdmin.nama} pada ${getWibTimeStr(new Date())} WIB.`,
     });
 
     // Kirim notifikasi realtime ke anggota
@@ -1069,16 +1125,18 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   };
 
   // ADMIN: Delete Deposit Submission (Khusus Super Admin)
-  const handleDeleteDeposit = async (dep: SetoranVerifikasi) => {
+  const handleDeleteDeposit = (dep: SetoranVerifikasi) => {
     if (!currentAdmin || currentAdmin.role !== 'super_admin') {
-      alert('Hanya Super Admin yang berhak menghapus riwayat verifikasi setoran.');
+      setActionBanner({ type: 'error', text: 'Hanya Super Admin yang berhak menghapus riwayat verifikasi setoran.' });
       return;
     }
+    setDeletingDeposit(dep);
+  };
 
-    const confirmDel = confirm(
-      `PERINGATAN SUPER ADMIN:\nApakah Anda yakin ingin menghapus pengajuan setoran ini?\n\nAnggota: ${dep.memberNama}\nNominal: ${formatRupiah(dep.nominal)}\nNo. Referensi: ${dep.nomorReferensi}\n\nPenghapusan akan disinkronkan ke server dan database secara permanen. Lanjutkan?`
-    );
-    if (!confirmDel) return;
+  const confirmDeleteDeposit = async () => {
+    if (!currentAdmin || currentAdmin.role !== 'super_admin' || !deletingDeposit) return;
+    const dep = deletingDeposit;
+    setDeletingDeposit(null);
 
     try {
       await fetch('/api/setoran/delete', {
@@ -1104,7 +1162,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       };
     });
 
-    alert(`✓ Riwayat setoran ${dep.nomorReferensi} berhasil dihapus oleh Super Admin.`);
+    setActionBanner({
+      type: 'success',
+      text: `✓ Riwayat setoran ${dep.nomorReferensi} berhasil dihapus oleh ${currentAdmin.nama}.`,
+    });
   };
 
   // Export deposits table to CSV or printable PDF
@@ -1113,23 +1174,30 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       if (filterStatus === 'pending_double') {
         if (s.status !== 'pending' || !isDepositDouble(s)) return false;
       } else if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
-      if (filterStartDate && s.createdAt.split('T')[0] < filterStartDate) return false;
-      if (filterEndDate && s.createdAt.split('T')[0] > filterEndDate) return false;
+      if (filterStartDate && getWibDateStr(new Date(s.createdAt)) < filterStartDate) return false;
+      if (filterEndDate && getWibDateStr(new Date(s.createdAt)) > filterEndDate) return false;
       return true;
     });
 
     if (format === 'excel') {
       const rows = listToExport.map((s) => ({
         'No Referensi': s.nomorReferensi,
-        Tanggal: s.createdAt.split('T')[0],
+        'Tanggal (WIB)': s.createdAt ? formatWibDateShort(s.createdAt) : '-',
+        'Jam (WIB)': s.createdAt ? `${getWibTimeStr(new Date(s.createdAt))} WIB` : '-',
         'Nama Anggota': s.memberNama,
         'No Rekening': s.memberRekening,
         Wilayah: s.memberWilayah,
-        'Jenis Setoran': s.jenis === 'kewajiban' ? `Kewajiban (${s.jumlahHari} hari)` : 'Tabungan Umum',
+        'Jenis Setoran':
+          s.jenis === 'kewajiban'
+            ? `Kewajiban (${s.jumlahHari} hari)`
+            : s.jenis === 'sedekah'
+            ? 'Sedekah / Berbagi'
+            : 'Tabungan Umum',
         Nominal: s.nominal,
         Metode: s.metode,
         Status: s.status,
         'Diverifikasi Oleh': s.verifiedBy || '-',
+        'Waktu Verifikasi (WIB)': s.verifiedAt ? formatWibDateTime(s.verifiedAt) : '-',
       }));
       downloadExcelCsv(rows, `Rekap_Verifikasi_Setoran_${Date.now()}`);
     } else {
@@ -1137,13 +1205,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         .map(
           (s) => `
         <tr style="border-bottom: 1px solid #ddd; font-size: 11px;">
-          <td style="padding: 6px;">${s.createdAt.split('T')[0]}</td>
+          <td style="padding: 6px;">${s.createdAt ? formatWibDateShort(s.createdAt) : '-'}<br/><span style="color:#64748b;font-size:10px;">${s.createdAt ? getWibTimeStr(new Date(s.createdAt)) + ' WIB' : '-'}</span></td>
           <td style="padding: 6px;">${s.nomorReferensi}</td>
           <td style="padding: 6px; font-weight: 700;">${s.memberNama}</td>
           <td style="padding: 6px;">${s.memberRekening}</td>
-          <td style="padding: 6px;">${s.jenis === 'kewajiban' ? `Kewajiban (${s.jumlahHari} hari)` : 'Umum'}</td>
+          <td style="padding: 6px;">${s.jenis === 'kewajiban' ? `Kewajiban (${s.jumlahHari} hari)` : s.jenis === 'sedekah' ? 'Sedekah' : 'Umum'}</td>
           <td style="padding: 6px; text-align: right; font-weight: 700;">${formatRupiah(s.nominal)}</td>
           <td style="padding: 6px; text-transform: uppercase;">${s.status}</td>
+          <td style="padding: 6px;">${s.verifiedBy || '-'}<br/><span style="color:#64748b;font-size:10px;">${s.verifiedAt ? formatWibDateTime(s.verifiedAt) : '-'}</span></td>
         </tr>
       `
         )
@@ -1156,18 +1225,19 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               <h2 style="font-size: 16px; font-weight: 900;">KOPERASI HIMPUNAN WIRAUSAHA SEJAHTERA</h2>
               <div style="font-size: 11px;">Laporan Rekapitulasi Verifikasi Setoran Anggota</div>
             </div>
-            <div style="font-size: 10px; text-align: right;">Dicetak: ${new Date().toLocaleDateString('id-ID')}</div>
+            <div style="font-size: 10px; text-align: right;">Dicetak: ${formatWibDateTime(new Date())}</div>
           </div>
           <table style="width: 100%; border-collapse: collapse; margin-top: 14px;">
             <thead>
               <tr style="background: #f3f4f6; font-size: 11px; text-align: left;">
-                <th style="padding: 6px;">Tanggal</th>
+                <th style="padding: 6px;">Tanggal & Jam</th>
                 <th style="padding: 6px;">No Ref</th>
                 <th style="padding: 6px;">Nama</th>
                 <th style="padding: 6px;">Rekening</th>
                 <th style="padding: 6px;">Jenis</th>
                 <th style="padding: 6px; text-align: right;">Nominal</th>
                 <th style="padding: 6px;">Status</th>
+                <th style="padding: 6px;">Admin & Waktu Verifikasi</th>
               </tr>
             </thead>
             <tbody>${tableRows}</tbody>
@@ -1699,6 +1769,25 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           </div>
         </div>
 
+        {actionBanner && (
+          <div
+            className={`mt-3 px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center justify-between gap-2 border ${
+              actionBanner.type === 'success'
+                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                : 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+            }`}
+          >
+            <span>{actionBanner.text}</span>
+            <button
+              type="button"
+              onClick={() => setActionBanner(null)}
+              className="text-slate-300 hover:text-white shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* Quick Filter Status Tabs */}
         {(() => {
           const baseList = isMember
@@ -1907,9 +1996,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 })
                 .map((dep) => (
                   <tr key={dep.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-3">
-                      <div className="font-mono text-slate-200">{dep.createdAt.split('T')[0]}</div>
-                      <div className="text-[10px] text-slate-500 font-mono">{dep.nomorReferensi}</div>
+                    <td className="py-3 px-3 whitespace-nowrap">
+                      <div className="font-mono font-bold text-slate-200">
+                        {dep.createdAt ? formatWibDateShort(dep.createdAt) : '-'}
+                      </div>
+                      <div className="text-[10px] text-amber-300 font-mono font-bold mt-0.5">
+                        Jam: {dep.createdAt ? `${getWibTimeStr(new Date(dep.createdAt), false)} WIB` : '-'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono mt-0.5">{dep.nomorReferensi}</div>
                     </td>
                     <td className="py-3 px-3">
                       <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
@@ -1981,16 +2075,41 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                         </span>
                       )}
                       {dep.status === 'disetujui' && (
-                        <span className="py-1 px-2.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
-                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                          <span>Terverifikasi Setoran</span>
-                        </span>
+                        <div className="space-y-1">
+                          <span className="py-1 px-2.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>Terverifikasi Setoran</span>
+                          </span>
+                          <div className="text-[10px] text-emerald-300 font-bold leading-tight">
+                            Admin: <span className="text-white">{dep.verifiedBy || 'Admin Koperasi'}</span>
+                          </div>
+                          {dep.verifiedAt && (
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              {formatWibDateTime(dep.verifiedAt)}
+                            </div>
+                          )}
+                        </div>
                       )}
                       {dep.status === 'ditolak' && (
-                        <span className="py-1 px-2.5 bg-red-500/15 text-red-400 border border-red-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
-                          <XCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>Setoran Ditolak</span>
-                        </span>
+                        <div className="space-y-1">
+                          <span className="py-1 px-2.5 bg-red-500/15 text-red-400 border border-red-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                            <XCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>Setoran Ditolak</span>
+                          </span>
+                          <div className="text-[10px] text-rose-300 font-bold leading-tight">
+                            Admin: <span className="text-white">{dep.verifiedBy || 'Admin Koperasi'}</span>
+                          </div>
+                          {dep.verifiedAt && (
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              {formatWibDateTime(dep.verifiedAt)}
+                            </div>
+                          )}
+                          {(dep.alasanTolak || dep.catatanAdmin) && (
+                            <div className="text-[9px] text-rose-300/80 max-w-[180px] leading-snug">
+                              Alasan: {dep.alasanTolak || dep.catatanAdmin}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </td>
                     {!isMember && (
@@ -2187,6 +2306,109 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 >
                   <ArrowRight className="w-4 h-4 rotate-180" />
                   <span>Kembali ke Dashboard Anggota</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL TOLAK SETORAN (NON-BLOCKING) ================= */}
+      {rejectingDeposit && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl">
+            <div className="p-4 bg-[#162035] border-b border-slate-700 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <XCircle className="w-4 h-4 text-rose-400" />
+                <h4 className="text-sm font-extrabold text-white">Tolak Pengajuan Setoran</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRejectingDeposit(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={confirmRejectDeposit} className="p-4 space-y-3 text-xs">
+              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1">
+                <div className="font-bold text-white">{rejectingDeposit.memberNama}</div>
+                <div className="text-slate-400 font-mono">
+                  {rejectingDeposit.nomorReferensi} • {formatRupiah(rejectingDeposit.nominal)}
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                  Alasan Penolakan Setoran
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectReasonInput}
+                  onChange={(e) => setRejectReasonInput(e.target.value)}
+                  placeholder="Contoh: Bukti pembayaran QRIS tidak valid / dana belum masuk"
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-rose-500"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setRejectingDeposit(null)}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-extrabold"
+                >
+                  Konfirmasi Tolak Setoran
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL HAPUS SETORAN (SUPER ADMIN) ================= */}
+      {deletingDeposit && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-rose-500/40 w-full max-w-md rounded-2xl overflow-hidden shadow-2xl">
+            <div className="p-4 bg-[#162035] border-b border-slate-700 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-400" />
+                <h4 className="text-sm font-extrabold text-white">Hapus Riwayat Setoran</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletingDeposit(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4 text-xs">
+              <p className="text-slate-300 leading-relaxed">
+                Anda akan menghapus pengajuan setoran berikut secara permanen dari server dan database realtime:
+              </p>
+              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-1">
+                <div className="font-bold text-white">{deletingDeposit.memberNama}</div>
+                <div className="text-amber-400 font-mono font-bold">{formatRupiah(deletingDeposit.nominal)}</div>
+                <div className="text-slate-400 font-mono text-[11px]">{deletingDeposit.nomorReferensi}</div>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeletingDeposit(null)}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteDeposit}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-extrabold"
+                >
+                  Ya, Hapus Permanen
                 </button>
               </div>
             </div>

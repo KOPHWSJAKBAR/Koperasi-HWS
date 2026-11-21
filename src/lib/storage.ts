@@ -965,6 +965,19 @@ export function commitLocalStatePatch(updater: (prev: AppState) => AppState): Ap
   return globalState;
 }
 
+export function applyAuthoritativeServerState(serverState: AppState, syncToFirestore = true): AppState {
+  if (!serverState || typeof serverState !== 'object') return globalState;
+  hasHydratedRemoteState = true;
+  globalState = mergeStates(globalState, serverState);
+  lastServerStateDigest = '';
+  scheduleLocalStoragePersist();
+  notifyListeners();
+  if (syncToFirestore) {
+    scheduleShardedFirestoreSync(globalState, 150);
+  }
+  return globalState;
+}
+
 export function scheduleDebouncedNotify(delay = 120, pushToServer = false) {
   if (debounceNotifyTimer) {
     clearTimeout(debounceNotifyTimer);
@@ -2515,6 +2528,13 @@ export function applyRealtimeChatMessages(incoming: ChatMessage[]): boolean {
   return true;
 }
 
+async function runFirestoreTasksInChunks(tasks: Array<() => Promise<any>>, chunkSize = 16) {
+  for (let i = 0; i < tasks.length; i += chunkSize) {
+    const batch = tasks.slice(i, i + chunkSize);
+    await Promise.all(batch.map((fn) => fn().catch(() => {})));
+  }
+}
+
 // Sharded Cloud Firestore synchronizer (resolves 1MB document limit, undefined fields, and concurrent write storms)
 export async function syncShardedToFirestore(state: AppState) {
   if (!getIsInternetConnected()) {
@@ -2532,6 +2552,7 @@ export async function syncShardedToFirestore(state: AppState) {
     const { doc, setDoc, deleteDoc } = await import('firebase/firestore');
     const now = new Date().toISOString();
     let hasAnyDocWritten = false;
+    const tasks: Array<() => Promise<any>> = [];
 
     // 1. Sharded settings/general (includes sedekahList & penyaluranList so Sedekah is synced across all devices)
     const generalCore = sanitizeForFirestore({
@@ -2558,12 +2579,14 @@ export async function syncShardedToFirestore(state: AppState) {
     });
     const generalStr = JSON.stringify(generalCore);
     if (hasHydratedRemoteState && lastWrittenMap.get('settings/general') !== generalStr) {
-      await setDoc(
-        doc(db, 'settings', 'general'),
-        { ...generalCore, updatedAt: now, updatedBy: CLIENT_ID },
-        { merge: true }
-      ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'settings/general'));
-      lastWrittenMap.set('settings/general', generalStr);
+      tasks.push(async () => {
+        await setDoc(
+          doc(db, 'settings', 'general'),
+          { ...generalCore, updatedAt: now, updatedBy: CLIENT_ID },
+          { merge: true }
+        ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'settings/general'));
+        lastWrittenMap.set('settings/general', generalStr);
+      });
       hasAnyDocWritten = true;
     }
 
@@ -2575,12 +2598,14 @@ export async function syncShardedToFirestore(state: AppState) {
     });
     const adminsStr = JSON.stringify(adminsCore);
     if (lastWrittenMap.get('settings/admins') !== adminsStr) {
-      await setDoc(
-        doc(db, 'settings', 'admins'),
-        { ...adminsCore, updatedAt: now, updatedBy: CLIENT_ID },
-        { merge: true }
-      ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'settings/admins'));
-      lastWrittenMap.set('settings/admins', adminsStr);
+      tasks.push(async () => {
+        await setDoc(
+          doc(db, 'settings', 'admins'),
+          { ...adminsCore, updatedAt: now, updatedBy: CLIENT_ID },
+          { merge: true }
+        ).catch((e) => handleFirestoreError(e, OperationType.WRITE, 'settings/admins'));
+        lastWrittenMap.set('settings/admins', adminsStr);
+      });
       hasAnyDocWritten = true;
     }
     for (const adm of state.admins || []) {
@@ -2589,8 +2614,10 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanAdm = sanitizeForFirestore({ ...adm });
         const aStr = JSON.stringify(cleanAdm);
         if (lastWrittenMap.get(key) !== aStr) {
-          await setDoc(doc(db, 'admins', adm.id), { ...cleanAdm, updatedAt: now }, { merge: true }).catch(() => {});
-          lastWrittenMap.set(key, aStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'admins', adm.id), { ...cleanAdm, updatedAt: now }, { merge: true }).catch(() => {});
+            lastWrittenMap.set(key, aStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2598,8 +2625,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delAdmId of (state as any).deletedAdminIds || []) {
       const delKey = `deleted_admins/${delAdmId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'admins', delAdmId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -2612,10 +2641,12 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanMember = sanitizeForFirestore({ ...m });
         const mStr = JSON.stringify(cleanMember);
         if (lastWrittenMap.get(key) !== mStr) {
-          await setDoc(doc(db, 'members', m.id), { ...cleanMember, updatedAt: now }, { merge: true }).catch((e) =>
-            handleFirestoreError(e, OperationType.WRITE, key)
-          );
-          lastWrittenMap.set(key, mStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'members', m.id), { ...cleanMember, updatedAt: now }, { merge: true }).catch((e) =>
+              handleFirestoreError(e, OperationType.WRITE, key)
+            );
+            lastWrittenMap.set(key, mStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2623,8 +2654,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delId of state.deletedMemberIds || []) {
       const delKey = `deleted_members/${delId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'members', delId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'members', delId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -2636,10 +2669,12 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanSetoran = sanitizeForFirestore({ ...s });
         const sStr = JSON.stringify(cleanSetoran);
         if (lastWrittenMap.get(key) !== sStr) {
-          await setDoc(doc(db, 'setoran', s.id), { ...cleanSetoran, updatedAt: now }, { merge: true }).catch((e) =>
-            handleFirestoreError(e, OperationType.WRITE, key)
-          );
-          lastWrittenMap.set(key, sStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'setoran', s.id), { ...cleanSetoran, updatedAt: now }, { merge: true }).catch((e) =>
+              handleFirestoreError(e, OperationType.WRITE, key)
+            );
+            lastWrittenMap.set(key, sStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2650,8 +2685,10 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanSdk = sanitizeForFirestore({ ...sdk });
         const sdkStr = JSON.stringify(cleanSdk);
         if (lastWrittenMap.get(key) !== sdkStr) {
-          await setDoc(doc(db, 'sedekah', sdk.id), { ...cleanSdk, updatedAt: now }, { merge: true }).catch(() => {});
-          lastWrittenMap.set(key, sdkStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'sedekah', sdk.id), { ...cleanSdk, updatedAt: now }, { merge: true }).catch(() => {});
+            lastWrittenMap.set(key, sdkStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2659,9 +2696,11 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delSetId of state.deletedSetoranIds || []) {
       const delKey = `deleted_setoran/${delSetId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'setoran', delSetId)).catch(() => {});
-        await deleteDoc(doc(db, 'sedekah', delSetId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'setoran', delSetId)).catch(() => {});
+          await deleteDoc(doc(db, 'sedekah', delSetId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -2673,10 +2712,12 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanKas = sanitizeForFirestore({ ...k });
         const kStr = JSON.stringify(cleanKas);
         if (lastWrittenMap.get(key) !== kStr) {
-          await setDoc(doc(db, 'kas', k.id), { ...cleanKas, updatedAt: now }, { merge: true }).catch((e) =>
-            handleFirestoreError(e, OperationType.WRITE, key)
-          );
-          lastWrittenMap.set(key, kStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'kas', k.id), { ...cleanKas, updatedAt: now }, { merge: true }).catch((e) =>
+              handleFirestoreError(e, OperationType.WRITE, key)
+            );
+            lastWrittenMap.set(key, kStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2684,8 +2725,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delKasId of state.deletedKasIds || []) {
       const delKey = `deleted_kas/${delKasId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'kas', delKasId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'kas', delKasId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -2697,10 +2740,12 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanTx = sanitizeForFirestore({ ...tx });
         const txStr = JSON.stringify(cleanTx);
         if (lastWrittenMap.get(key) !== txStr) {
-          await setDoc(doc(db, 'transactions', tx.id), { ...cleanTx, updatedAt: now }, { merge: true }).catch((e) =>
-            handleFirestoreError(e, OperationType.WRITE, key)
-          );
-          lastWrittenMap.set(key, txStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'transactions', tx.id), { ...cleanTx, updatedAt: now }, { merge: true }).catch((e) =>
+              handleFirestoreError(e, OperationType.WRITE, key)
+            );
+            lastWrittenMap.set(key, txStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2708,8 +2753,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delTxId of state.deletedTransactionIds || []) {
       const delKey = `deleted_tx/${delTxId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'transactions', delTxId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'transactions', delTxId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -2723,10 +2770,12 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanChat = sanitizeForFirestore({ ...c });
         const cStr = JSON.stringify(cleanChat);
         if (lastWrittenMap.get(key) !== cStr) {
-          await setDoc(doc(db, 'chats', c.id), cleanChat, { merge: true }).catch((e) =>
-            handleFirestoreError(e, OperationType.WRITE, key)
-          );
-          lastWrittenMap.set(key, cStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'chats', c.id), cleanChat, { merge: true }).catch((e) =>
+              handleFirestoreError(e, OperationType.WRITE, key)
+            );
+            lastWrittenMap.set(key, cStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2734,8 +2783,10 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delChatId of (state.deletedChatIds || []).slice(-200)) {
       const delKey = `deleted_chats/${delChatId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'chats', delChatId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'chats', delChatId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
     }
@@ -2748,10 +2799,12 @@ export async function syncShardedToFirestore(state: AppState) {
         const cleanSurat = sanitizeForFirestore({ ...sr });
         const srStr = JSON.stringify(cleanSurat);
         if (lastWrittenMap.get(key) !== srStr) {
-          await setDoc(doc(db, 'surat', sr.id), cleanSurat, { merge: true }).catch((e) =>
-            handleFirestoreError(e, OperationType.WRITE, key)
-          );
-          lastWrittenMap.set(key, srStr);
+          tasks.push(async () => {
+            await setDoc(doc(db, 'surat', sr.id), cleanSurat, { merge: true }).catch((e) =>
+              handleFirestoreError(e, OperationType.WRITE, key)
+            );
+            lastWrittenMap.set(key, srStr);
+          });
           hasAnyDocWritten = true;
         }
       }
@@ -2759,10 +2812,16 @@ export async function syncShardedToFirestore(state: AppState) {
     for (const delSuratId of (state.deletedSuratIds || []).slice(-200)) {
       const delKey = `deleted_surat/${delSuratId}`;
       if (!lastWrittenMap.has(delKey)) {
-        await deleteDoc(doc(db, 'surat', delSuratId)).catch(() => {});
-        lastWrittenMap.set(delKey, '1');
+        tasks.push(async () => {
+          await deleteDoc(doc(db, 'surat', delSuratId)).catch(() => {});
+          lastWrittenMap.set(delKey, '1');
+        });
         hasAnyDocWritten = true;
       }
+    }
+
+    if (tasks.length > 0) {
+      await runFirestoreTasksInChunks(tasks, 16);
     }
 
     // 9. Lightweight Metadata Pulse to koperasi_state/main_database ONLY when something actually changed
@@ -2794,7 +2853,7 @@ export async function syncShardedToFirestore(state: AppState) {
     const nextQueued = queuedFirestoreSyncState;
     queuedFirestoreSyncState = null;
     if (nextQueued) {
-      scheduleShardedFirestoreSync(nextQueued, 500);
+      scheduleShardedFirestoreSync(nextQueued, 300);
     }
   }
 }
@@ -3214,6 +3273,7 @@ export function useKoperasiState() {
       window.addEventListener('focus', handleDeviceResume);
       window.addEventListener('pageshow', handleDeviceResume);
       window.addEventListener('hws:network_restored', handleNetworkRestored);
+      window.addEventListener('hws:firestore_stream_recovered', handleDeviceResume);
     }
 
     // Smart conditional polling fallback every 10 seconds (transfers ~100 bytes if digest unchanged) + 45s Firestore keepalive
@@ -3474,42 +3534,106 @@ export function useKoperasiState() {
 
     // 3. Sharded Realtime Cloud Firestore Listeners
     const firestoreUnsubscribers: (() => void)[] = [];
+    const confirmedRemoteIds: Record<string, Set<string>> = {
+      members: new Set(),
+      setoran: new Set(),
+      kas: new Set(),
+      transactions: new Set(),
+      sedekah: new Set(),
+      chats: new Set(),
+      surat: new Set(),
+      admins: new Set(),
+    };
+
+    const getRemovedConfirmedIds = (colKey: string, snapshot: any): string[] => {
+      const confirmed = confirmedRemoteIds[colKey];
+      const removed: string[] = [];
+      if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+        snapshot.docChanges().forEach((change: any) => {
+          if (change.type === 'removed' && confirmed.has(change.doc.id)) {
+            removed.push(change.doc.id);
+          }
+        });
+        const currentIds = new Set<string>(snapshot.docs.map((d: any) => d.id));
+        if (snapshot.empty) {
+          confirmed.forEach((id) => {
+            if (!currentIds.has(id)) removed.push(id);
+          });
+        }
+        removed.forEach((id) => confirmed.delete(id));
+      }
+      snapshot.docs.forEach((d: any) => confirmed.add(d.id));
+      return removed;
+    };
+
     try {
       import('./firebase').then(({ db }) => {
         import('firebase/firestore').then(({ collection, doc, onSnapshot, query, orderBy, limit }) => {
           if (!isMounted) return;
 
-          // A. Members Collection (Debounced UI sync, strictly skip legacy -dup- artifacts)
+          // 0. Master Metadata Pulse Listener (Cross-device instant signal across Web, Android, iOS, PC, AI Studio)
+          let lastMainSyncedPulse = '';
+          const unsubMainPulse = onSnapshot(
+            doc(db, 'koperasi_state', 'main_database'),
+            (snap) => {
+              if (!snap.exists()) return;
+              const d = snap.data() as any;
+              if (d && d.updatedBy && d.updatedBy !== CLIENT_ID && d.lastSynced && d.lastSynced !== lastMainSyncedPulse) {
+                lastMainSyncedPulse = String(d.lastSynced);
+                fetchStateFromServer();
+              }
+            },
+            (err) => handleFirestoreError(err, OperationType.GET, 'koperasi_state/main_database')
+          );
+          firestoreUnsubscribers.push(unsubMainPulse);
+
+          // A. Members Collection (Debounced UI sync, strictly skip legacy -dup- artifacts, propagates remote deletions)
           const unsubMembers = onSnapshot(
             collection(db, 'members'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              const removedIds = getRemovedConfirmedIds('members', snapshot);
+              if (snapshot.empty && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delSet = new Set(globalState.deletedMemberIds || []);
+              const delSet = new Set([...(globalState.deletedMemberIds || []), ...removedIds]);
               const remoteMembers = snapshot.docs
                 .map((d) => d.data() as MemberUser)
                 .filter((m) => m && m.id && !String(m.id).includes('-dup-') && !delSet.has(m.id));
               seedFirestoreSyncedHashesFromServer({ members: remoteMembers }, true);
-              globalState = mergeStates(globalState, { ...globalState, members: remoteMembers });
-              scheduleDebouncedNotify(150, false);
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  members: (globalState.members || []).filter((m) => !delSet.has(m.id)),
+                  deletedMemberIds: Array.from(delSet),
+                },
+                { ...globalState, members: remoteMembers, deletedMemberIds: Array.from(delSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'members')
           );
           firestoreUnsubscribers.push(unsubMembers);
 
-          // B. Setoran Collection
+          // B. Setoran Collection (Propagates remote approvals/rejections/deletions across all Admin & Member devices)
           const unsubSetoran = onSnapshot(
             collection(db, 'setoran'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              const removedIds = getRemovedConfirmedIds('setoran', snapshot);
+              if (snapshot.empty && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delSet = new Set(globalState.deletedSetoranIds || []);
+              const delSet = new Set([...(globalState.deletedSetoranIds || []), ...removedIds]);
               const remoteSetoran = snapshot.docs
                 .map((d) => d.data() as SetoranVerifikasi)
                 .filter((s) => s && s.id && !delSet.has(s.id));
               seedFirestoreSyncedHashesFromServer({ setoranList: remoteSetoran }, true);
-              globalState = mergeStates(globalState, { ...globalState, setoranList: remoteSetoran });
-              scheduleDebouncedNotify();
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  setoranList: (globalState.setoranList || []).filter((s) => !delSet.has(s.id)),
+                  deletedSetoranIds: Array.from(delSet),
+                },
+                { ...globalState, setoranList: remoteSetoran, deletedSetoranIds: Array.from(delSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'setoran')
           );
@@ -3519,15 +3643,23 @@ export function useKoperasiState() {
           const unsubKas = onSnapshot(
             collection(db, 'kas'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              const removedIds = getRemovedConfirmedIds('kas', snapshot);
+              if (snapshot.empty && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delSet = new Set(globalState.deletedKasIds || []);
+              const delSet = new Set([...(globalState.deletedKasIds || []), ...removedIds]);
               const remoteKas = snapshot.docs
                 .map((d) => d.data() as KasEntry)
                 .filter((k) => k && k.id && !delSet.has(k.id));
               seedFirestoreSyncedHashesFromServer({ kasList: remoteKas }, true);
-              globalState = mergeStates(globalState, { ...globalState, kasList: remoteKas });
-              scheduleDebouncedNotify();
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  kasList: (globalState.kasList || []).filter((k) => !delSet.has(k.id)),
+                  deletedKasIds: Array.from(delSet),
+                },
+                { ...globalState, kasList: remoteKas, deletedKasIds: Array.from(delSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'kas')
           );
@@ -3537,15 +3669,23 @@ export function useKoperasiState() {
           const unsubTx = onSnapshot(
             collection(db, 'transactions'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              const removedIds = getRemovedConfirmedIds('transactions', snapshot);
+              if (snapshot.empty && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delSet = new Set(globalState.deletedTransactionIds || []);
+              const delSet = new Set([...(globalState.deletedTransactionIds || []), ...removedIds]);
               const remoteTx = snapshot.docs
                 .map((d) => d.data() as MemberTransaction)
                 .filter((tx) => tx && tx.id && !delSet.has(tx.id));
               seedFirestoreSyncedHashesFromServer({ memberTransactions: remoteTx }, true);
-              globalState = mergeStates(globalState, { ...globalState, memberTransactions: remoteTx });
-              scheduleDebouncedNotify();
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  memberTransactions: (globalState.memberTransactions || []).filter((tx) => !delSet.has(tx.id)),
+                  deletedTransactionIds: Array.from(delSet),
+                },
+                { ...globalState, memberTransactions: remoteTx, deletedTransactionIds: Array.from(delSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'transactions')
           );
@@ -3555,25 +3695,31 @@ export function useKoperasiState() {
           const unsubChats = onSnapshot(
             collection(db, 'chats'),
             (snapshot) => {
-              if (snapshot.empty && snapshot.metadata.fromCache) return;
+              const removedIds = getRemovedConfirmedIds('chats', snapshot);
+              if (snapshot.empty && snapshot.metadata.fromCache && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delChatSet = new Set<string>(globalState.deletedChatIds || []);
+              const delChatSet = new Set<string>([...(globalState.deletedChatIds || []), ...removedIds]);
               const remoteChats = snapshot.docs
                 .map((d) => d.data() as ChatMessage)
                 .filter((c) => !isChatMessageClearedClient(c, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember));
-              const remoteIds = new Set(remoteChats.map((c) => c.id));
-              if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
-                const locallyRemoved = (globalState.chatMessages || []).filter((c) => c && c.id && !remoteIds.has(c.id));
-                if (locallyRemoved.length > 0 && snapshot.empty) {
+              if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites && snapshot.empty) {
+                if ((globalState.chatMessages || []).length > 0) {
                   globalState = { ...globalState, chatMessages: [] };
                   scheduleLocalStoragePersist();
                   notifyListeners();
-                  return;
                 }
+                return;
               }
               seedFirestoreSyncedHashesFromServer({ chatMessages: remoteChats }, true);
-              globalState = mergeStates(globalState, { ...globalState, chatMessages: remoteChats });
-              scheduleDebouncedNotify(100, false);
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  chatMessages: (globalState.chatMessages || []).filter((c) => !delChatSet.has(c.id)),
+                  deletedChatIds: Array.from(delChatSet),
+                },
+                { ...globalState, chatMessages: remoteChats, deletedChatIds: Array.from(delChatSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
           );
@@ -3628,7 +3774,7 @@ export function useKoperasiState() {
                       ...globalState,
                       ...generalSnapshotState,
                     });
-                    scheduleDebouncedNotify();
+                    scheduleDebouncedNotify(80, false);
                   }
                 }
               }
@@ -3656,7 +3802,7 @@ export function useKoperasiState() {
                     ...globalState,
                     ...admSlice,
                   });
-                  scheduleDebouncedNotify();
+                  scheduleDebouncedNotify(80, false);
                 }
               }
             },
@@ -3667,16 +3813,24 @@ export function useKoperasiState() {
           const unsubAdminsCol = onSnapshot(
             collection(db, 'admins'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              const removedIds = getRemovedConfirmedIds('admins', snapshot);
+              if (snapshot.empty && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delAdmSet = new Set((globalState as any).deletedAdminIds || []);
+              const delAdmSet = new Set([...((globalState as any).deletedAdminIds || []), ...removedIds]);
               const remoteAdmins = snapshot.docs
                 .map((d) => d.data() as AdminUser)
                 .filter((a) => a && (a.id || a.username) && !delAdmSet.has(a.id));
-              if (remoteAdmins.length > 0) {
+              if (remoteAdmins.length > 0 || removedIds.length > 0) {
                 seedFirestoreSyncedHashesFromServer({ admins: remoteAdmins }, true);
-                globalState = mergeStates(globalState, { ...globalState, admins: remoteAdmins });
-                scheduleDebouncedNotify();
+                globalState = mergeStates(
+                  {
+                    ...globalState,
+                    admins: (globalState.admins || []).filter((a) => !delAdmSet.has(a.id)),
+                    deletedAdminIds: Array.from(delAdmSet),
+                  } as any,
+                  { ...globalState, admins: remoteAdmins, deletedAdminIds: Array.from(delAdmSet) } as any
+                );
+                scheduleDebouncedNotify(80, false);
               }
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'admins')
@@ -3687,15 +3841,23 @@ export function useKoperasiState() {
           const unsubSedekah = onSnapshot(
             collection(db, 'sedekah'),
             (snapshot) => {
-              if (snapshot.empty) return;
+              const removedIds = getRemovedConfirmedIds('sedekah', snapshot);
+              if (snapshot.empty && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delSet = new Set(globalState.deletedSetoranIds || []);
+              const delSet = new Set([...(globalState.deletedSetoranIds || []), ...removedIds]);
               const remoteSedekah = snapshot.docs
                 .map((d) => d.data() as any)
                 .filter((s) => s && s.id && !delSet.has(s.id));
               seedFirestoreSyncedHashesFromServer({ sedekahList: remoteSedekah }, true);
-              globalState = mergeStates(globalState, { ...globalState, sedekahList: remoteSedekah });
-              scheduleDebouncedNotify();
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  sedekahList: (globalState.sedekahList || []).filter((s) => !delSet.has(s.id)),
+                  deletedSetoranIds: Array.from(delSet),
+                },
+                { ...globalState, sedekahList: remoteSedekah, deletedSetoranIds: Array.from(delSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'sedekah')
           );
@@ -3721,7 +3883,7 @@ export function useKoperasiState() {
                 };
               });
               globalState = mergeStates(globalState, { ...globalState, auditLogs: remoteLogs });
-              scheduleDebouncedNotify();
+              scheduleDebouncedNotify(100, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'logs')
           );
@@ -3731,9 +3893,10 @@ export function useKoperasiState() {
           const unsubSurat = onSnapshot(
             collection(db, 'surat'),
             (snapshot) => {
-              if (snapshot.empty && snapshot.metadata.fromCache) return;
+              const removedIds = getRemovedConfirmedIds('surat', snapshot);
+              if (snapshot.empty && snapshot.metadata.fromCache && removedIds.length === 0) return;
               hasHydratedRemoteState = true;
-              const delSuratSet = new Set<string>(globalState.deletedSuratIds || []);
+              const delSuratSet = new Set<string>([...(globalState.deletedSuratIds || []), ...removedIds]);
               const remoteSurat = snapshot.docs
                 .map((d) => d.data() as SuratResmi)
                 .filter((sr) => !isSuratDeletedClient(sr, delSuratSet, globalState.suratResetAt));
@@ -3746,8 +3909,15 @@ export function useKoperasiState() {
                 return;
               }
               seedFirestoreSyncedHashesFromServer({ suratList: remoteSurat }, true);
-              globalState = mergeStates(globalState, { ...globalState, suratList: remoteSurat });
-              scheduleDebouncedNotify();
+              globalState = mergeStates(
+                {
+                  ...globalState,
+                  suratList: (globalState.suratList || []).filter((sr) => !delSuratSet.has(sr.id)),
+                  deletedSuratIds: Array.from(delSuratSet),
+                },
+                { ...globalState, suratList: remoteSurat, deletedSuratIds: Array.from(delSuratSet) }
+              );
+              scheduleDebouncedNotify(80, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'surat')
           );
@@ -3772,6 +3942,7 @@ export function useKoperasiState() {
         window.removeEventListener('focus', handleDeviceResume);
         window.removeEventListener('pageshow', handleDeviceResume);
         window.removeEventListener('hws:network_restored', handleNetworkRestored);
+        window.removeEventListener('hws:firestore_stream_recovered', handleDeviceResume);
       }
     };
   }, []);

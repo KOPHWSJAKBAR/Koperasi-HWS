@@ -614,8 +614,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   Rp {Number(dep.nominal).toLocaleString('id-ID')}
                                 </span>
                               </div>
-                              <div className="text-slate-400 text-[9px]">
-                                {dep.jenis.toUpperCase()} • {dep.metode}
+                              <div className="text-slate-400 text-[9px] flex items-center justify-between gap-2">
+                                <span>{dep.jenis.toUpperCase()} • {dep.metode}</span>
+                                <span className="font-mono text-amber-300/90">
+                                  {dep.createdAt
+                                    ? new Date(dep.createdAt).toLocaleTimeString('id-ID', {
+                                        timeZone: 'Asia/Jakarta',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        hour12: false,
+                                      }) + ' WIB'
+                                    : '-'}
+                                </span>
                               </div>
                             </div>
                           ))}
