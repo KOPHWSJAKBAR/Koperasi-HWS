@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KategoriTabunganMutasi,
 } from '../types';
-import { formatRupiah } from '../lib/storage';
+import { formatRupiah, resolveMutasiCbgCode } from '../lib/storage';
 import {
   generateMutasiRekeningPdf,
   downloadExcelCsv,
@@ -224,6 +224,9 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
       periodeLabel: getPeriodeLabel(),
       startDate: periodStartDate || undefined,
       endDate: periodEndDate || undefined,
+      setoranList: state.setoranList,
+      kasList: state.kasList,
+      sedekahList: state.sedekahList,
     });
   };
 
@@ -248,7 +251,11 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
         Tanggal: tx.tanggal,
         Jam: tx.jam || '',
         Keterangan: tx.keterangan,
-        Cabang: tx.cbg || '0001',
+        Cabang: resolveMutasiCbgCode(tx, {
+          setoranList: state.setoranList,
+          kasList: state.kasList,
+          sedekahList: state.sedekahList,
+        }),
         Tipe: tx.tipe === 'masuk' ? 'MASUK (CR)' : 'KELUAR (DB)',
         Nominal: tx.nominal,
         Saldo: tx.computedSaldo,
@@ -534,7 +541,13 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
                     </div>
                     <div className="text-[10px] text-slate-500 font-mono">{tx.jam}</div>
                   </td>
-                  <td className="py-2 px-3 text-center font-mono text-slate-600">{tx.cbg || '0001'}</td>
+                  <td className="py-2 px-3 text-center font-mono text-slate-600">
+                    {resolveMutasiCbgCode(tx, {
+                      setoranList: state.setoranList,
+                      kasList: state.kasList,
+                      sedekahList: state.sedekahList,
+                    })}
+                  </td>
                   <td className="py-2 px-3 text-right font-mono font-bold text-red-700">
                     {tx.debit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.debit) : '-'}
                   </td>

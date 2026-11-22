@@ -1,5 +1,5 @@
 import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry, SedekahBerbagiEntry } from '../types';
-import { formatRupiah, sortMembersDesc, formatWibDateShort } from './storage';
+import { formatRupiah, sortMembersDesc, formatWibDateShort, resolveMutasiCbgCode } from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
 export function printDocumentHtml(htmlContent: string, title: string = 'Dokumen Koperasi HWS') {
@@ -167,6 +167,9 @@ export function generateMutasiRekeningPdf(
     periodeLabel: string;
     startDate?: string;
     endDate?: string;
+    setoranList?: any[];
+    kasList?: any[];
+    sedekahList?: any[];
   }
 ) {
   const isSedekahTx = (t: MemberTransaction) =>
@@ -297,7 +300,7 @@ export function generateMutasiRekeningPdf(
               <td style="padding: 6px 8px; vertical-align: top; text-transform: uppercase;">
                 <div style="font-weight: 600;">${tx.keterangan}</div>
               </td>
-              <td style="padding: 6px 8px; vertical-align: top; font-family: 'JetBrains Mono', monospace; font-size: 10px;">${tx.cbg || '0001'}</td>
+              <td style="padding: 6px 8px; vertical-align: top; font-family: 'JetBrains Mono', monospace; font-size: 10px;">${resolveMutasiCbgCode(tx, { setoranList: options.setoranList, kasList: options.kasList, sedekahList: options.sedekahList })}</td>
               <td style="padding: 6px 8px; vertical-align: top; text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 600; color: ${isMasuk ? '#047857' : '#b91c1c'};">
                 ${mutasiStr}
               </td>

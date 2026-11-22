@@ -876,7 +876,12 @@ function mergeServerState(current: any, incoming: any): any {
   });
   (incoming.memberTransactions || []).forEach((tx: any) => {
     if (tx && tx.id && !allDeletedTxIds.has(tx.id)) {
-      txMap.set(tx.id, tx);
+      const existing = txMap.get(tx.id);
+      const keepExistingCbg =
+        existing &&
+        VALID_MUTASI_CBG_CODES_SERVER.has(String(existing.cbg || '').trim()) &&
+        !VALID_MUTASI_CBG_CODES_SERVER.has(String(tx.cbg || '').trim());
+      txMap.set(tx.id, keepExistingCbg ? { ...tx, cbg: existing.cbg } : tx);
     }
   });
   const mergedTxList = Array.from(txMap.values());
@@ -1052,6 +1057,15 @@ function mergeServerState(current: any, incoming: any): any {
     if (sq !== null && sq > maxV2Seq) maxV2Seq = sq;
   });
 
+  const mergedSetoranArr = Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1));
+  const mergedSedekahArr = Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1));
+  const normalizedTxArr = mergedTxList
+    .map((tx: any) => ({
+      ...tx,
+      cbg: resolveMutasiCbgCodeServer(tx, mergedSetoranArr, mergedKasList, mergedSedekahArr),
+    }))
+    .sort((a: any, b: any) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1));
+
   return {
     ...current,
     ...incoming,
@@ -1070,13 +1084,13 @@ function mergeServerState(current: any, incoming: any): any {
     chatClearedBeforeByMember: mergedChatClearedByMember,
     usedAccountNumbers: sanitizedUsedUnified,
     usedMemberNumbers: sanitizedUsedUnified,
-    setoranList: Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
+    setoranList: mergedSetoranArr,
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
-    memberTransactions: mergedTxList.sort((a: any, b: any) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1)),
+    memberTransactions: normalizedTxArr,
     kasList: mergedKasList.sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
-    sedekahList: Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
+    sedekahList: mergedSedekahArr,
     pengaturanBerbagi,
     categoriesKasKoperasi: mergedCategoriesKas,
     maintenanceLock: mergedMaintenanceLock,
@@ -1743,7 +1757,7 @@ function buildStateSyncDigest(st: any): string {
       admins: (st.admins || []).map((a: any) => `${a.id}:${a.nama}:${a.role}:${a.username}:${a.email || ''}:${a.whatsapp || ''}:${a.wilayahKantor || ''}`),
       setoran: (st.setoranList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedBy || ''}:${s.verifiedAt || ''}:${s.alasanTolak || s.catatanAdmin || ''}`),
       kas: (st.kasList || []).map((k: any) => `${k.id}:${k.status || ''}:${k.nominal}:${k.kategori}:${k.tanggal}:${k.keterangan || ''}`),
-      tx: (st.memberTransactions || []).map((t: any) => `${t.id}:${t.nominal}:${t.kategori}:${t.saldoSetelah || 0}:${t.tanggal}:${t.keterangan || ''}`),
+      tx: (st.memberTransactions || []).map((t: any) => `${t.id}:${t.nominal}:${t.kategori}:${t.saldoSetelah || 0}:${t.tanggal}:${t.cbg || ''}:${t.keterangan || ''}`),
       sedekah: (st.sedekahList || []).map((s: any) => `${s.id}:${s.status}:${s.nominal}:${s.verifiedBy || ''}:${s.verifiedAt || ''}`),
       chats: (st.chatMessages || []).map((c: any) => `${c.id}:${Boolean(c.isReadByAdmin)}:${Boolean(c.isReadByMember)}`),
       surat: (st.suratList || []).map((sr: any) => `${sr.id}:${sr.perihal || ''}:${sr.tujuanTipe || ''}:${(sr.readByMemberIds || []).length}:${(sr.readByAdminIds || []).length}`),
@@ -2069,12 +2083,21 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       currentState = mergeServerState(currentState, remoteSlicePayload);
 
       const reconResult = reconcileLegacyMemberNumbers(currentState);
+      let cbgMigrated = false;
+      currentState.memberTransactions = (currentState.memberTransactions || []).map((tx: any) => {
+        const nextCbg = resolveMutasiCbgCodeServer(tx, currentState.setoranList, currentState.kasList, currentState.sedekahList);
+        if (nextCbg !== tx.cbg) {
+          cbgMigrated = true;
+          return { ...tx, cbg: nextCbg };
+        }
+        return tx;
+      });
       const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
 
-      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0) {
-        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount})`);
-        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 });
+      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated) {
+        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount}, CBGUpdated: ${cbgMigrated})`);
+        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 && !cbgMigrated });
         broadcastStatePulse('firestore_sync');
       }
       return { success: true, newMembersCount: Math.max(0, afterCount - beforeCount) };
@@ -2375,6 +2398,103 @@ function reconcileLegacyMemberNumbers(state: any): { state: any; migratedCount: 
   return { state, migratedCount };
 }
 
+const VALID_MUTASI_CBG_CODES_SERVER = new Set([
+  '53732',
+  '53745',
+  '53532',
+  '93907',
+  '93740',
+  '114114',
+  '114117',
+  '114514',
+  '114517',
+]);
+
+function resolveMutasiCbgCodeServer(
+  tx: any,
+  setoranList: any[] = [],
+  kasList: any[] = [],
+  sedekahList: any[] = []
+): string {
+  if (!tx) return '0001';
+  const rawCbg = String(tx.cbg || '').trim();
+  const id = String(tx.id || '');
+  const refId = String(tx.referensiId || '');
+  const ketLower = String(tx.keterangan || '').toLowerCase();
+
+  const depFromSetoran = setoranList.find(
+    (s: any) => (refId && s.id === refId) || id === `tx-dep-${s.id}` || id === `tx-sdk-${s.id}`
+  );
+
+  const isMemberUmumDeposit =
+    !refId.startsWith('KAS-') &&
+    !id.startsWith('tx-sdk-') &&
+    !refId.startsWith('sdk-') &&
+    !id.startsWith('tx-shu-') &&
+    !id.startsWith('tx-adj-') &&
+    !id.startsWith('tx-tf-') &&
+    !id.startsWith('tx-tarik-') &&
+    !refId.startsWith('TF-') &&
+    !refId.startsWith('ADJ-') &&
+    !refId.startsWith('SHU-') &&
+    (depFromSetoran?.jenis === 'umum' ||
+      id.startsWith('tx-umum-') ||
+      (tx.kategori === 'umum' && (id.startsWith('tx-dep-') || refId.startsWith('dep-'))));
+
+  if (VALID_MUTASI_CBG_CODES_SERVER.has(rawCbg)) {
+    if (rawCbg === '53732' && isMemberUmumDeposit) return '53745';
+    return rawCbg;
+  }
+
+  // 6-9: Pembagian Hasil (SHU)
+  if (id.startsWith('tx-shu-') || refId.startsWith('SHU-') || ketLower.startsWith('bagi hasil')) {
+    const kasShu = kasList.find(
+      (k: any) =>
+        (refId && k.referensiId === refId) ||
+        (String(k.id || '').startsWith('kas-shu-') &&
+          k.tanggal === tx.tanggal &&
+          String(k.kategori || '').toLowerCase().includes('bagi hasil'))
+    );
+    const sumberKas = kasShu?.bukuKas === 'anggota' ? 'anggota' : 'koperasi';
+    if (tx.kategori === 'umum') return sumberKas === 'anggota' ? '114114' : '114117';
+    return sumberKas === 'anggota' ? '114514' : '114517';
+  }
+
+  // 4-5: Koreksi Saldo oleh Admin
+  if (
+    id.startsWith('tx-adj-') ||
+    refId.startsWith('ADJ-') ||
+    ketLower.startsWith('koreksi ') ||
+    ketLower.startsWith('penyesuaian ')
+  ) {
+    if (tx.kategori === 'pokok' || ketLower.includes('tabungan pokok')) return '93907';
+    if (tx.kategori === 'umum' || ketLower.includes('saldo umum') || ketLower.includes('tabungan umum')) return '93740';
+  }
+
+  const sdkEntry = sedekahList.find(
+    (s: any) => (refId && s.id === refId) || id === `tx-sdk-${s.id}`
+  );
+
+  // 3: Setoran sedekah oleh anggota dari device anggota
+  const isFromMemberSedekah =
+    (depFromSetoran && (depFromSetoran.jenis === 'sedekah' || String(depFromSetoran.id).startsWith('sdk-'))) ||
+    (sdkEntry && (String(sdkEntry.inputBy || '').startsWith('Anggota') || sdkEntry.sumberDana === 'qris' || sdkEntry.sumberDana === 'tabungan_umum') && !refId.startsWith('KAS-')) ||
+    ((id.startsWith('tx-sdk-') || tx.kategori === 'sedekah' || refId.startsWith('sdk-')) && !refId.startsWith('KAS-'));
+
+  if (isFromMemberSedekah) return '53532';
+
+  // 1-2: Setoran tabungan pokok (53732) / tabungan umum (53745) oleh anggota dari device anggota
+  const isFromMemberSetoran =
+    (depFromSetoran && (depFromSetoran.jenis === 'kewajiban' || depFromSetoran.jenis === 'umum')) ||
+    id.startsWith('tx-dep-') ||
+    refId.startsWith('dep-') ||
+    ((id.startsWith('tx-wajib-') || id.startsWith('tx-umum-')) && !refId.startsWith('KAS-'));
+
+  if (isFromMemberSetoran) return isMemberUmumDeposit ? '53745' : '53732';
+
+  return rawCbg || '0001';
+}
+
 // Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
 function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCount: number; addedKasCount: number; addedTxCount: number } {
   if (!state || typeof state !== 'object') {
@@ -2551,7 +2671,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         tanggal: tgl,
         jam,
         keterangan: ket,
-        cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+        cbg: '53532',
         tipe: isTftu ? 'keluar' : 'masuk',
         nominal: Number(s.nominal) || 0,
         saldoSetelah: 0,
@@ -2567,7 +2687,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         keterangan: s.jenis === 'kewajiban'
           ? `SETORAN KEWAJIBAN ${s.jumlahHari || Math.round(s.nominal / 2000) || 1} HARI (POKOK, ZAKAT, QURBAN)`
           : `Setoran Tunai ${m.nama}`,
-        cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+        cbg: s.jenis === 'kewajiban' ? '53732' : '53745',
         tipe: 'masuk',
         nominal: Number(s.nominal) || 0,
         saldoSetelah: 0,
@@ -2648,6 +2768,12 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
   });
 
   state.members.sort(compareMembersNewestFirstServer);
+
+  const sedekahAll = Array.from(sedekahMap.values());
+  const kasAll = Array.isArray(state.kasList) ? state.kasList : [];
+  nextTxList.forEach((tx: any) => {
+    tx.cbg = resolveMutasiCbgCodeServer(tx, validSetoran, kasAll, sedekahAll);
+  });
 
   state.memberTransactions = nextTxList.sort((a: any, b: any) =>
     `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
@@ -2881,14 +3007,17 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
 }
 
 let currentState = loadDatabase();
+const beforeBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
+const afterBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
+const bootCbgChanged = beforeBootTxCbgDigest !== afterBootTxCbgDigest;
 const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
-if (startupMemRecon.migratedCount > 0) {
-  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members to unified v2 account numbering (KW+DD+HP2+YY+770..).`);
-  saveDatabase(currentState, { skipFirestore: true });
+if (startupMemRecon.migratedCount > 0 || bootCbgChanged) {
+  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG normalized: ${bootCbgChanged}.`);
+  saveDatabase(currentState, { skipFirestore: !bootCbgChanged });
 }
 // Enforce 10-day chat retention on startup
 const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
@@ -3757,7 +3886,7 @@ async function startServer() {
             tanggal: tgl,
             jam,
             keterangan: `SETORAN KEWAJIBAN ${jlhHari} HARI (POKOK, ZAKAT, QURBAN)`,
-            cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            cbg: '53732',
             tipe: 'masuk',
             nominal: dep.nominal,
             saldoSetelah: (targetMember.saldoPokok || 0) + (targetMember.saldoUmum || 0),
@@ -3874,7 +4003,7 @@ async function startServer() {
               tanggal: tgl,
               jam,
               keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
-              cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              cbg: '53532',
               tipe: 'keluar',
               nominal: dep.nominal,
               saldoSetelah: (targetMember.saldoPokok || 0) + targetMember.saldoUmum,
@@ -3889,7 +4018,7 @@ async function startServer() {
               tanggal: tgl,
               jam,
               keterangan: `Sedekah ${jenisLabel} dari ${memberNama} (QRIS)`,
-              cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              cbg: '53532',
               tipe: 'masuk',
               nominal: dep.nominal,
               saldoSetelah: (targetMember.saldoPokok || 0) + (targetMember.saldoUmum || 0),
@@ -3945,7 +4074,7 @@ async function startServer() {
             tanggal: tgl,
             jam,
             keterangan: `Setoran Tunai ${targetMember.nama}`,
-            cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+            cbg: '53745',
             tipe: 'masuk',
             nominal: dep.nominal,
             saldoSetelah: (targetMember.saldoPokok || 0) + targetMember.saldoUmum,
@@ -4208,7 +4337,7 @@ async function startServer() {
         tanggal: tgl,
         jam,
         keterangan: `TFTU Sedekah ${jenisLabel} dari ${member.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
-        cbg: `KCP ${(member.wilayah || 'CENGKARENG').toUpperCase()}`,
+        cbg: '53532',
         tipe: 'keluar',
         nominal: numNominal,
         saldoSetelah: (Number(member.saldoPokok) || 0) + member.saldoUmum,
@@ -5365,7 +5494,7 @@ async function startServer() {
           keterangan: jenisTabungan === 'pokok'
             ? `KOREKSI TABUNGAN POKOK (50% Pokok, 25% Qurban, 25% Zakat): ${keterangan || 'Penyesuaian Saldo'}`
             : `KOREKSI SALDO UMUM: ${keterangan || 'Penyesuaian Saldo'}`,
-          cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+          cbg: jenisTabungan === 'pokok' ? '93907' : '93740',
           tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
           nominal: nominalNum,
           saldoSetelah: p + u,

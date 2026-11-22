@@ -4773,4 +4773,135 @@ export function syncMemberBalancesWithBukuKasAnggota(prev: AppState): AppState {
   };
 }
 
+export const VALID_MUTASI_CBG_CODES = new Set([
+  '53732',
+  '53745',
+  '53532',
+  '93907',
+  '93740',
+  '114114',
+  '114117',
+  '114514',
+  '114517',
+]);
+
+/**
+ * Menentukan kode kolom CBG pada mutasi rekening koran anggota:
+ * - 53732  : Setoran tabungan pokok oleh anggota dari device anggota
+ * - 53745  : Setoran tabungan umum oleh anggota dari device anggota
+ * - 53532  : Setoran sedekah oleh anggota dari device anggota (QRIS / TFTU)
+ * - 93907  : Penyesuaian / koreksi saldo tabungan pokok (+/-) oleh admin
+ * - 93740  : Penyesuaian / koreksi saldo tabungan umum (+/-) oleh admin
+ * - 114114 : Pembagian hasil ke tabungan umum dari buku kas anggota
+ * - 114117 : Pembagian hasil ke tabungan umum dari buku kas koperasi
+ * - 114514 : Pembagian hasil ke tabungan pokok dari buku kas anggota
+ * - 114517 : Pembagian hasil ke tabungan pokok dari buku kas koperasi
+ * (Hanya mengembalikan kode CBG tanpa mengubah keterangan maupun data lainnya.)
+ */
+export function resolveMutasiCbgCode(
+  tx: MemberTransaction,
+  context?: {
+    setoranList?: SetoranVerifikasi[];
+    kasList?: KasEntry[];
+    sedekahList?: SedekahBerbagiEntry[];
+  }
+): string {
+  if (!tx) return '0001';
+  const rawCbg = String(tx.cbg || '').trim();
+  const id = String(tx.id || '');
+  const refId = String(tx.referensiId || '');
+  const ketLower = String(tx.keterangan || '').toLowerCase();
+
+  const setoranList = context?.setoranList || globalState?.setoranList || [];
+  const kasList = context?.kasList || globalState?.kasList || [];
+  const sedekahList = context?.sedekahList || globalState?.sedekahList || [];
+
+  const depFromSetoran = setoranList.find(
+    (s) =>
+      (refId && s.id === refId) ||
+      id === `tx-dep-${s.id}` ||
+      id === `tx-sdk-${s.id}`
+  );
+
+  const isMemberUmumDeposit =
+    !refId.startsWith('KAS-') &&
+    !id.startsWith('tx-sdk-') &&
+    !refId.startsWith('sdk-') &&
+    !id.startsWith('tx-shu-') &&
+    !id.startsWith('tx-adj-') &&
+    !id.startsWith('tx-tf-') &&
+    !id.startsWith('tx-tarik-') &&
+    !refId.startsWith('TF-') &&
+    !refId.startsWith('ADJ-') &&
+    !refId.startsWith('SHU-') &&
+    (depFromSetoran?.jenis === 'umum' ||
+      id.startsWith('tx-umum-') ||
+      (tx.kategori === 'umum' && (id.startsWith('tx-dep-') || refId.startsWith('dep-'))));
+
+  if (VALID_MUTASI_CBG_CODES.has(rawCbg)) {
+    if (rawCbg === '53732' && isMemberUmumDeposit) {
+      return '53745';
+    }
+    return rawCbg;
+  }
+
+  // 6-9: Penyesuaian saldo pembagian hasil (SHU)
+  if (id.startsWith('tx-shu-') || refId.startsWith('SHU-') || ketLower.startsWith('bagi hasil')) {
+    const kasShu = kasList.find(
+      (k) =>
+        (refId && k.referensiId === refId) ||
+        (String(k.id || '').startsWith('kas-shu-') &&
+          k.tanggal === tx.tanggal &&
+          String(k.kategori || '').toLowerCase().includes('bagi hasil'))
+    );
+    const sumberKas = kasShu?.bukuKas === 'anggota' ? 'anggota' : 'koperasi';
+    if (tx.kategori === 'umum') {
+      return sumberKas === 'anggota' ? '114114' : '114117';
+    }
+    return sumberKas === 'anggota' ? '114514' : '114517';
+  }
+
+  // 4-5: Penyesuaian / koreksi saldo tabungan pokok (93907) / umum (93740) oleh admin
+  if (
+    id.startsWith('tx-adj-') ||
+    refId.startsWith('ADJ-') ||
+    ketLower.startsWith('koreksi ') ||
+    ketLower.startsWith('penyesuaian ')
+  ) {
+    if (tx.kategori === 'pokok' || ketLower.includes('tabungan pokok')) {
+      return '93907';
+    }
+    if (tx.kategori === 'umum' || ketLower.includes('saldo umum') || ketLower.includes('tabungan umum')) {
+      return '93740';
+    }
+  }
+
+  const sdkEntry = sedekahList.find(
+    (s) => (refId && s.id === refId) || id === `tx-sdk-${s.id}`
+  );
+
+  // 3: Setoran sedekah oleh anggota dari device anggota
+  const isFromMemberSedekah =
+    (depFromSetoran && (depFromSetoran.jenis === 'sedekah' || String(depFromSetoran.id).startsWith('sdk-'))) ||
+    (sdkEntry && (String(sdkEntry.inputBy || '').startsWith('Anggota') || sdkEntry.sumberDana === 'qris' || sdkEntry.sumberDana === 'tabungan_umum') && !refId.startsWith('KAS-')) ||
+    ((id.startsWith('tx-sdk-') || tx.kategori === 'sedekah' || refId.startsWith('sdk-')) && !refId.startsWith('KAS-'));
+
+  if (isFromMemberSedekah) {
+    return '53532';
+  }
+
+  // 1-2: Setoran tabungan pokok (53732) / tabungan umum (53745) oleh anggota dari device anggota
+  const isFromMemberSetoran =
+    (depFromSetoran && (depFromSetoran.jenis === 'kewajiban' || depFromSetoran.jenis === 'umum')) ||
+    id.startsWith('tx-dep-') ||
+    refId.startsWith('dep-') ||
+    ((id.startsWith('tx-wajib-') || id.startsWith('tx-umum-')) && !refId.startsWith('KAS-'));
+
+  if (isFromMemberSetoran) {
+    return isMemberUmumDeposit ? '53745' : '53732';
+  }
+
+  return rawCbg || '0001';
+}
+
 

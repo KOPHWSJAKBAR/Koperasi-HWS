@@ -519,7 +519,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               tanggal,
               jam,
               keterangan: `TFTU Sedekah ${jenisLabel} dari ${currentMember.nama}${cleanNote ? ` - ${cleanNote}` : ''}`,
-              cbg: `KCP ${(currentMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              cbg: '53532',
               tipe: 'keluar',
               nominal,
               saldoSetelah: newPokok + newUmum,
@@ -747,13 +747,21 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               createdAt: now.toISOString(),
             });
 
+            const cbgSdk =
+              entry.sumberDana === 'qris' ||
+              entry.sumberDana === 'tabungan_umum' ||
+              String(entry.inputBy || '').startsWith('Anggota') ||
+              String(entry.id || '').startsWith('sdk-')
+                ? '53532'
+                : `KCP ${(mem.wilayah || 'CENGKARENG').toUpperCase()}`;
+
             newTxEntries.push({
               id: txId,
               memberId: mem.id,
               tanggal,
               jam,
               keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
-              cbg: `KCP ${(mem.wilayah || 'CENGKARENG').toUpperCase()}`,
+              cbg: cbgSdk,
               tipe: 'keluar',
               nominal: entry.nominal,
               saldoSetelah: newPokok + newUmum,
@@ -761,13 +769,21 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
               referensiId: entry.id,
             });
           } else if (mem) {
+            const cbgSdk =
+              entry.sumberDana === 'qris' ||
+              entry.sumberDana === 'tabungan_umum' ||
+              String(entry.inputBy || '').startsWith('Anggota') ||
+              String(entry.id || '').startsWith('sdk-')
+                ? '53532'
+                : `KCP ${(mem.wilayah || 'CENGKARENG').toUpperCase()}`;
+
             newTxEntries.push({
               id: txId,
               memberId: mem.id,
               tanggal,
               jam,
               keterangan: `Sedekah ${jenisLabel} dari ${memberNama} (QRIS)`,
-              cbg: `KCP ${(mem.wilayah || 'CENGKARENG').toUpperCase()}`,
+              cbg: cbgSdk,
               tipe: 'masuk',
               nominal: entry.nominal,
               saldoSetelah: (Number(mem.saldoPokok) || 0) + (Number(mem.saldoUmum) || 0),

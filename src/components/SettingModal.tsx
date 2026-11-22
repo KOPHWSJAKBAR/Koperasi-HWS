@@ -2166,7 +2166,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         tanggal: tgl,
         jam,
         keterangan: ketEntry,
-        cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+        cbg: adjKategoriTabungan === 'pokok' ? '93907' : '93740',
         tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
         nominal: amount,
         saldoSetelah: saldoAkhir,

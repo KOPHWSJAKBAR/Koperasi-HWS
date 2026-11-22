@@ -267,7 +267,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               keterangan: koreksiJenisTabungan === 'pokok'
                 ? `KOREKSI TABUNGAN POKOK (${hariNum} Hari • 50% Pokok, 25% Qurban, 25% Zakat): ${koreksiKeterangan}`
                 : `KOREKSI SALDO UMUM: ${koreksiKeterangan}`,
-              cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+              cbg: koreksiJenisTabungan === 'pokok' ? '93907' : '93740',
               tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
               nominal: nominalNum,
               saldoSetelah: updatedPokok + updatedUmum,
@@ -483,6 +483,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       const newTransactions: MemberTransaction[] = [];
       let totalBagiHasilTerkredit = 0;
 
+      const shuRefId = `SHU-${Date.now().toString().slice(-6)}`;
+      const bagiHasilCbgCode =
+        bagiHasilTujuanKredit === 'umum'
+          ? (bagiHasilBukuKas === 'anggota' ? '114114' : '114117')
+          : (bagiHasilBukuKas === 'anggota' ? '114514' : '114517');
+
       await updateState((prev) => {
         const updatedMembers = prev.members.map((m) => {
           const isTarget = targetMembersBagiHasil.some((t) => t.id === m.id);
@@ -509,12 +515,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             tanggal: tgl,
             jam,
             keterangan: `BAGI HASIL ${persenNum}% DARI POKOK (${formatRupiah(m.saldoPokok)}): ${bagiHasilKeterangan}`,
-            cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+            cbg: bagiHasilCbgCode,
             tipe: 'masuk',
             nominal: bagianAnggota,
             saldoSetelah: updatedPokok + updatedUmum,
             kategori: bagiHasilTujuanKredit === 'umum' ? 'umum' : 'pokok',
-            referensiId: `SHU-${Date.now().toString().slice(-6)}`,
+            referensiId: shuRefId,
           });
 
           return {
@@ -534,6 +540,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
           kategori: 'Penyaluran Bagi Hasil / SHU',
           keterangan: `Pembagian Hasil ${persenNum}% Tabungan Pokok ke ${targetMembersBagiHasil.length} Anggota: ${bagiHasilKeterangan}`,
           namaPenerima: `Bagi Hasil ${targetMembersBagiHasil.length} Anggota Koperasi`,
+          referensiId: shuRefId,
           tipe: 'keluar',
           nominal: totalBagiHasilTerkredit,
           saldoKasSetelah: 0,
