@@ -1,5 +1,11 @@
 import { MemberUser, MemberTransaction, KategoriTabunganMutasi, KasEntry, SedekahBerbagiEntry } from '../types';
-import { formatRupiah, sortMembersDesc, formatWibDateShort, resolveMutasiCbgCode } from './storage';
+import {
+  formatRupiah,
+  sortMembersDesc,
+  formatWibDateShort,
+  resolveMutasiCbgCode,
+  filterAndDeduplicateMemberTransactions,
+} from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
 export function printDocumentHtml(htmlContent: string, title: string = 'Dokumen Koperasi HWS') {
@@ -178,6 +184,13 @@ export function generateMutasiRekeningPdf(
     String(t.keterangan || '').toLowerCase().includes('tftu sedekah') ||
     String(t.keterangan || '').toLowerCase().includes('sedekah');
 
+  const cleanTransactions = Array.isArray(options.setoranList)
+    ? filterAndDeduplicateMemberTransactions({
+        transactions: transactions || [],
+        setoranList: options.setoranList,
+      }).transactions
+    : (transactions || []);
+
   // 1. Calculate REAL Saldo Awal from days strictly before options.startDate (1 hari sebelumnya)
   let saldoAwal = 0;
   const prevDate = options.startDate ? getOneDayBefore(options.startDate) : '';
@@ -185,7 +198,7 @@ export function generateMutasiRekeningPdf(
   const prevDateIndonesian = prevDate ? formatIndonesianDate(prevDate) : 'Hari Sebelumnya';
 
   if (options.startDate) {
-    const priorTransactions = transactions
+    const priorTransactions = cleanTransactions
       .filter((t) => t.memberId === member.id && (t as any).status !== 'deleted')
       .filter((t) => {
         if (options.kategori === 'sedekah') return isSedekahTx(t);
@@ -204,7 +217,7 @@ export function generateMutasiRekeningPdf(
   if (saldoAwal < 0) saldoAwal = 0;
 
   // 2. Filter transactions in the current period
-  let filtered = [...transactions].filter(
+  let filtered = [...cleanTransactions].filter(
     (t) => t.memberId === member.id && (t as any).status !== 'deleted'
   );
 

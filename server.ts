@@ -1116,7 +1116,7 @@ function mergeServerState(current: any, incoming: any): any {
     }))
     .sort((a: any, b: any) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1));
 
-  return {
+  const mergedStateObj = {
     ...current,
     ...incoming,
     profile,
@@ -1159,6 +1159,8 @@ function mergeServerState(current: any, incoming: any): any {
       permanentStorage: true,
     },
   };
+
+  return reconcileBalancesWithDeposits(mergedStateObj).state;
 }
 
 // SSE (Server-Sent Events) clients for instant cross-device realtime sync (Declared before saveDatabase to prevent ReferenceError)
@@ -2136,6 +2138,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
         true
       );
 
+      const beforeDelTxCount = (currentState.deletedTransactionIds || []).length;
+      const beforeDelKasCount = (currentState.deletedKasIds || []).length;
+
       currentState = mergeServerState(currentState, remoteSlicePayload);
 
       const reconResult = reconcileLegacyMemberNumbers(currentState);
@@ -2150,10 +2155,13 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       });
       const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
+      const dedupPurged =
+        (currentState.deletedTransactionIds || []).length > beforeDelTxCount ||
+        (currentState.deletedKasIds || []).length > beforeDelKasCount;
 
-      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated) {
-        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount}, CBGUpdated: ${cbgMigrated})`);
-        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 && !cbgMigrated });
+      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated || dedupPurged) {
+        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount}, CBGUpdated: ${cbgMigrated}, DedupPurged: ${dedupPurged})`);
+        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 && !cbgMigrated && !dedupPurged });
         broadcastStatePulse('firestore_sync');
       }
       return { success: true, newMembersCount: Math.max(0, afterCount - beforeCount) };
@@ -2551,6 +2559,34 @@ function resolveMutasiCbgCodeServer(
   return rawCbg || '0001';
 }
 
+function extractDepositRefIdServer(tx: any): string {
+  if (!tx) return '';
+  const id = String(tx.id || '').trim();
+  const refId = String(tx.referensiId || '').trim();
+  if (refId.startsWith('dep-') || refId.startsWith('sdk-')) return refId;
+  if (id.startsWith('tx-dep-')) return id.slice('tx-dep-'.length);
+  if (id.startsWith('tx-sdk-sdk-') || id.startsWith('tx-sdk-dep-')) return id.slice('tx-sdk-'.length);
+  return '';
+}
+
+function isDepositSourcedTransactionServer(tx: any): boolean {
+  if (!tx) return false;
+  const id = String(tx.id || '').trim();
+  const refId = String(tx.referensiId || '').trim();
+  if (
+    refId.startsWith('KAS-') ||
+    refId.startsWith('ADJ-') ||
+    refId.startsWith('SHU-') ||
+    refId.startsWith('TF-')
+  ) {
+    return false;
+  }
+  if (refId.startsWith('dep-') || refId.startsWith('sdk-')) return true;
+  if (id.startsWith('tx-dep-') || id.startsWith('tx-sdk-sdk-') || id.startsWith('tx-sdk-dep-')) return true;
+  if ((id.startsWith('tx-wajib-') || id.startsWith('tx-umum-')) && !refId) return true;
+  return false;
+}
+
 // Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
 function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCount: number; addedKasCount: number; addedTxCount: number } {
   if (!state || typeof state !== 'object') {
@@ -2682,30 +2718,100 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     }
   });
 
-  // 4. Filter active memberTransactions strictly against deletedTransactionIds & active members
-  const nextTxList: any[] = (Array.isArray(state.memberTransactions) ? state.memberTransactions : []).filter(
-    (t: any) => t && t.id && !deletedTxSet.has(t.id) && memberMap.has(t.memberId)
-  );
-  const existingTxRefs = new Set<string>();
-  nextTxList.forEach((t: any) => {
-    existingTxRefs.add(t.id);
-    if (t.referensiId) existingTxRefs.add(t.referensiId);
-  });
-
-  // Ensure approved deposits (savings AND sedekah) have a transaction entry in memberTransactions
-  let addedTxCount = 0;
   const approvedAllDeposits = validSetoran.filter(
     (s: any) =>
       (s.status === 'disetujui' || s.status === 'approved') &&
       (s.jenis === 'kewajiban' || s.jenis === 'umum' || s.jenis === 'sedekah')
   );
+  const approvedDepositMap = new Map<string, any>();
+  approvedAllDeposits.forEach((s: any) => approvedDepositMap.set(s.id, s));
 
+  // 4. Strictly filter & deduplicate memberTransactions:
+  // - Deposit-sourced transactions MUST map to a verified (disetujui/approved) setoran and appear AT MOST ONCE
+  // - Non-deposit transactions (ADJ-, KAS-, SHU-, TF-) remain untouched (unless deleted)
+  const removedNumericTokens = new Set<string>();
+  const recordRemovedTx = (txId: string) => {
+    if (!txId) return;
+    deletedTxSet.add(txId);
+    const m = String(txId).match(/^tx-(?:wajib|umum)-(\d{10,})$/);
+    if (m) removedNumericTokens.add(m[1]);
+  };
+
+  const depositClusters = new Map<string, any[]>();
+  const nonDepositTxs: any[] = [];
+  const nonDepositSeenKeys = new Set<string>();
+
+  (Array.isArray(state.memberTransactions) ? state.memberTransactions : []).forEach((t: any) => {
+    if (!t || !t.id || t.status === 'deleted') return;
+    if (deletedTxSet.has(t.id)) return;
+    if (!memberMap.has(t.memberId)) return;
+
+    if (isDepositSourcedTransactionServer(t)) {
+      const depRefId = extractDepositRefIdServer(t);
+      const dep = depRefId ? approvedDepositMap.get(depRefId) : undefined;
+      if (!dep) {
+        recordRemovedTx(t.id);
+        return;
+      }
+      if (dep.memberId && dep.memberId !== 'donatur-umum' && t.memberId !== dep.memberId) {
+        recordRemovedTx(t.id);
+        return;
+      }
+      const isSedekah = dep.jenis === 'sedekah' || depRefId.startsWith('sdk-');
+      const canonicalId = isSedekah ? `tx-sdk-${depRefId}` : `tx-dep-${depRefId}`;
+      if (deletedTxSet.has(canonicalId)) {
+        recordRemovedTx(t.id);
+        return;
+      }
+      if (!depositClusters.has(depRefId)) depositClusters.set(depRefId, []);
+      depositClusters.get(depRefId)!.push(t);
+    } else {
+      if (t.referensiId && deletedSetSet.has(t.referensiId)) return;
+      const refKey = t.referensiId
+        ? `${t.memberId}|${t.referensiId}|${t.kategori}|${t.tipe}`
+        : `id|${t.id}`;
+      if (nonDepositSeenKeys.has(t.id) || (t.referensiId && nonDepositSeenKeys.has(refKey))) {
+        recordRemovedTx(t.id);
+        return;
+      }
+      nonDepositSeenKeys.add(t.id);
+      if (t.referensiId) nonDepositSeenKeys.add(refKey);
+      nonDepositTxs.push({ ...t });
+    }
+  });
+
+  const nextTxList: any[] = [...nonDepositTxs];
+  const existingDepositRefs = new Set<string>();
+  depositClusters.forEach((cluster, depRefId) => {
+    const dep = approvedDepositMap.get(depRefId)!;
+    const isSedekah = dep.jenis === 'sedekah' || depRefId.startsWith('sdk-');
+    const canonicalId = isSedekah ? `tx-sdk-${depRefId}` : `tx-dep-${depRefId}`;
+    const canonicalTx = cluster.find((t: any) => t.id === canonicalId);
+    const survivor = canonicalTx || cluster[0];
+
+    nextTxList.push({
+      ...survivor,
+      id: canonicalId,
+      referensiId: depRefId,
+    });
+    existingDepositRefs.add(depRefId);
+    existingDepositRefs.add(canonicalId);
+
+    cluster.forEach((t: any) => {
+      if (t.id !== canonicalId) {
+        recordRemovedTx(t.id);
+      }
+    });
+  });
+
+  // Ensure approved deposits (savings AND sedekah) have exactly 1 transaction entry in memberTransactions
+  let addedTxCount = 0;
   approvedAllDeposits.forEach((s: any) => {
     const m = memberMap.get(s.memberId);
     if (!m) return;
     const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
     const depTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
-    if (existingTxRefs.has(s.id) || existingTxRefs.has(depTxId) || deletedTxSet.has(depTxId)) return;
+    if (existingDepositRefs.has(s.id) || existingDepositRefs.has(depTxId) || deletedTxSet.has(depTxId)) return;
 
     addedTxCount++;
     const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
@@ -2751,11 +2857,11 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         referensiId: s.id,
       });
     }
-    existingTxRefs.add(s.id);
-    existingTxRefs.add(depTxId);
+    existingDepositRefs.add(s.id);
+    existingDepositRefs.add(depTxId);
   });
 
-  // 5. Calculate member balances strictly from active memberTransactions
+  // 5. Calculate member balances strictly from clean deduplicated active memberTransactions
   let reconciledCount = 0;
   state.members = members.map((m: any) => {
     reconciledCount++;
@@ -2835,189 +2941,219 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
   );
 
-  // 6. Filter & synchronize kasList (Buku Kas Anggota & Koperasi) strictly against deletedKasIds
+  // 6. Filter, deduplicate, & synchronize kasList (Buku Kas Anggota & Koperasi) strictly against deletedKasIds
   let addedKasCount = 0;
-  const nextKasList: any[] = (Array.isArray(state.kasList) ? state.kasList : []).filter(
-    (k: any) => k && k.id && !deletedKasSet.has(k.id)
-  );
-  const existingKasTokens = new Set<string>();
-  nextKasList.forEach((k: any) => {
-    if (k.id) existingKasTokens.add(k.id);
-    if (k.referensiId) existingKasTokens.add(k.referensiId);
-    const tsMatch = String(k.id).match(/(\d{10,})/);
-    if (tsMatch) existingKasTokens.add(tsMatch[1]);
+  const dupKasTokens = new Set<string>(removedNumericTokens);
+  deletedTxSet.forEach((id) => {
+    const m = String(id).match(/^tx-(?:wajib|umum)-(\d{10,})$/);
+    if (m) dupKasTokens.add(m[1]);
   });
 
-  // Ensure approved Sedekah (QRIS & TFTU) are present in Buku Kas Koperasi (and Buku Kas Anggota keluar for TFTU)
-  approvedAllDeposits.forEach((s: any) => {
-    if (s.jenis !== 'sedekah' && !String(s.id).startsWith('sdk-')) return;
-    const sdk = sedekahMap.get(s.id);
-    const m = memberMap.get(s.memberId);
-    const memberNama = m?.nama || s.memberNama || sdk?.donaturNama || 'Anggota Koperasi';
-    const jenisLabel = resolveSedekahCategoryLabel(sdk?.jenis, sdk?.namaBerbagiKustom, s.catatanAnggota);
-    const isTftu = s.metode === 'tabungan_umum' || sdk?.sumberDana === 'tabungan_umum';
-    const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
-    const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
-    const tgl = s.tanggal || sdk?.tanggal || wibTime.toISOString().split('T')[0];
-    const nowIso = s.createdAt || sdk?.createdAt || new Date().toISOString();
-    const nom = Number(s.nominal) || 0;
+  const rawFilteredKas: any[] = (Array.isArray(state.kasList) ? state.kasList : []).filter(
+    (k: any) =>
+      k &&
+      k.id &&
+      !deletedKasSet.has(k.id) &&
+      (!k.referensiId || !deletedSetSet.has(k.referensiId))
+  );
 
-    const kopId = sdk?.kasKoperasiId || `kas-sedekah-${s.id}`;
-    const hasKop = nextKasList.some(
-      (k: any) => k.id === kopId || (k.referensiId === s.id && k.bukuKas === 'koperasi')
-    );
-    if (!hasKop && !deletedKasSet.has(kopId)) {
-      addedKasCount++;
-      nextKasList.push({
-        id: kopId,
-        bukuKas: 'koperasi',
-        tanggal: tgl,
-        kategori: jenisLabel,
-        keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
-        namaPenerima: memberNama,
-        memberId: m?.id || s.memberId,
-        referensiId: s.id,
-        tipe: 'masuk',
-        nominal: nom,
-        saldoKasSetelah: 0,
-        inputBy: s.verifiedBy || sdk?.verifiedBy || 'Admin Koperasi',
-        status: 'approved',
-        createdAt: nowIso,
-      });
-      if (sdk) sdk.kasKoperasiId = kopId;
-    }
-
-    if (isTftu) {
-      const angId = sdk?.kasAnggotaId || `kas-ang-tftu-${s.id}`;
-      const hasAng = nextKasList.some(
-        (k: any) => k.id === angId || (k.referensiId === s.id && k.bukuKas === 'anggota' && k.tipe === 'keluar')
+  const kasWithRefSigs = new Set<string>();
+  rawFilteredKas.forEach((k: any) => {
+    if (k.bukuKas === 'anggota' && k.referensiId) {
+      kasWithRefSigs.add(
+        `${k.tanggal || ''}|${k.kategori || ''}|${String(k.namaPenerima || '').trim().toLowerCase()}|${Number(k.nominal) || 0}|${k.tipe || ''}`
       );
-      if (!hasAng && !deletedKasSet.has(angId)) {
+    }
+  });
+
+  const nextKasList: any[] = rawFilteredKas.filter((k: any) => {
+    if (k.bukuKas === 'anggota' && !k.referensiId) {
+      const m = String(k.id).match(/^kas-ang-(?:pokok|zakat|qurban|umum)-(\d{10,})$/);
+      if (m) {
+        const tsNum = Number(m[1]);
+        const sig = `${k.tanggal || ''}|${k.kategori || ''}|${String(k.namaPenerima || '').trim().toLowerCase()}|${Number(k.nominal) || 0}|${k.tipe || ''}`;
+        const matchesRemovedTx =
+          dupKasTokens.has(m[1]) ||
+          dupKasTokens.has(String(tsNum - 1)) ||
+          dupKasTokens.has(String(tsNum - 2));
+        if (matchesRemovedTx || kasWithRefSigs.has(sig)) {
+          deletedKasSet.add(k.id);
+          return false;
+        }
+      }
+    }
+    return true;
+  });
+
+  const existingKasRefs = new Set<string>();
+  nextKasList.forEach((k: any) => {
+    if (k.id) existingKasRefs.add(k.id);
+    if (k.referensiId) existingKasRefs.add(k.referensiId);
+  });
+
+  // Ensure approved deposits (Sedekah, Kewajiban, Umum) are synced cleanly with deterministic IDs
+  approvedAllDeposits.forEach((s: any) => {
+    if (s.jenis === 'sedekah' || String(s.id).startsWith('sdk-')) {
+      const sdk = sedekahMap.get(s.id);
+      const m = memberMap.get(s.memberId);
+      const memberNama = m?.nama || s.memberNama || sdk?.donaturNama || 'Anggota Koperasi';
+      const jenisLabel = resolveSedekahCategoryLabel(sdk?.jenis, sdk?.namaBerbagiKustom, s.catatanAnggota);
+      const isTftu = s.metode === 'tabungan_umum' || sdk?.sumberDana === 'tabungan_umum';
+      const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
+      const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
+      const tgl = s.tanggal || sdk?.tanggal || wibTime.toISOString().split('T')[0];
+      const nowIso = s.createdAt || sdk?.createdAt || new Date().toISOString();
+      const nom = Number(s.nominal) || 0;
+
+      const kopId = sdk?.kasKoperasiId || `kas-sedekah-${s.id}`;
+      const hasKop = nextKasList.some(
+        (k: any) => k.id === kopId || (k.referensiId === s.id && k.bukuKas === 'koperasi')
+      );
+      if (!hasKop && !deletedKasSet.has(kopId)) {
         addedKasCount++;
         nextKasList.push({
-          id: angId,
-          bukuKas: 'anggota',
+          id: kopId,
+          bukuKas: 'koperasi',
           tanggal: tgl,
-          kategori: 'Tabungan Bebas',
-          keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+          kategori: jenisLabel,
+          keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
           namaPenerima: memberNama,
           memberId: m?.id || s.memberId,
           referensiId: s.id,
-          tipe: 'keluar',
+          tipe: 'masuk',
           nominal: nom,
           saldoKasSetelah: 0,
-          inputBy: s.verifiedBy || sdk?.verifiedBy || memberNama,
+          inputBy: s.verifiedBy || sdk?.verifiedBy || 'Admin Koperasi',
           status: 'approved',
           createdAt: nowIso,
         });
-        if (sdk) sdk.kasAnggotaId = angId;
+        if (sdk) sdk.kasKoperasiId = kopId;
       }
-    }
-  });
 
-  // Check active memberTransactions to see if any approved deposit transaction is missing its Buku Kas Anggota entry
-  nextTxList.forEach((tx: any) => {
-    const m = memberMap.get(tx.memberId);
-    if (!m || tx.tipe !== 'masuk' || tx.kategori === 'sedekah' || String(tx.id).startsWith('tx-sdk-')) return;
-    const tsMatch = String(tx.id).match(/(\d{10,})/);
-    const tsToken = tsMatch ? tsMatch[1] : tx.id;
-    const refToken = tx.referensiId || '';
-
-    if (
-      existingKasTokens.has(tsToken) ||
-      (refToken && existingKasTokens.has(refToken)) ||
-      existingKasTokens.has(`kas-ang-pokok-${tsToken}`) ||
-      existingKasTokens.has(`kas-ang-umum-${tsToken}`)
-    ) {
+      if (isTftu) {
+        const angId = sdk?.kasAnggotaId || `kas-ang-tftu-${s.id}`;
+        const hasAng = nextKasList.some(
+          (k: any) => k.id === angId || (k.referensiId === s.id && k.bukuKas === 'anggota' && k.tipe === 'keluar')
+        );
+        if (!hasAng && !deletedKasSet.has(angId)) {
+          addedKasCount++;
+          nextKasList.push({
+            id: angId,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            kategori: 'Tabungan Bebas',
+            keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+            namaPenerima: memberNama,
+            memberId: m?.id || s.memberId,
+            referensiId: s.id,
+            tipe: 'keluar',
+            nominal: nom,
+            saldoKasSetelah: 0,
+            inputBy: s.verifiedBy || sdk?.verifiedBy || memberNama,
+            status: 'approved',
+            createdAt: nowIso,
+          });
+          if (sdk) sdk.kasAnggotaId = angId;
+        }
+      }
       return;
     }
 
-    const nom = Number(tx.nominal) || 0;
-    const jlhHari = Math.round(nom / 2000) || 1;
-    const nowIso = `${tx.tanggal}T${tx.jam || '09:00'}:00.000Z`;
-    const isKewajibanSplit =
-      tx.kategori === 'pokok' ||
-      String(tx.id).startsWith('tx-wajib-') ||
-      String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN');
+    const m = memberMap.get(s.memberId);
+    if (!m) return;
+    if (deletedTxSet.has(`tx-dep-${s.id}`)) return;
+    if (existingKasRefs.has(s.id)) return;
 
-    if (isKewajibanSplit) {
-      const pId = `kas-ang-pokok-${tsToken}`;
-      const zId = `kas-ang-zakat-${Number(tsToken) ? Number(tsToken) + 1 : tsToken + '-z'}`;
-      const qId = `kas-ang-qurban-${Number(tsToken) ? Number(tsToken) + 2 : tsToken + '-q'}`;
-      if (deletedKasSet.has(pId)) return;
+    const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
+    const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
+    const tgl = s.tanggal || wibTime.toISOString().split('T')[0];
+    const nowIso = s.createdAt || new Date().toISOString();
+    const nom = Number(s.nominal) || 0;
+    const jlhHari = s.jumlahHari || Math.round(nom / 2000) || 1;
 
+    if (s.jenis === 'kewajiban') {
+      const pId = `kas-ang-pokok-${s.id}`;
+      const zId = `kas-ang-zakat-${s.id}`;
+      const qId = `kas-ang-qurban-${s.id}`;
       const pokokNom = Math.floor(nom * 0.5);
       const qurbanNom = Math.floor(nom * 0.25);
       const zakatNom = nom - pokokNom - qurbanNom;
-      addedKasCount += 3;
-      nextKasList.push(
-        {
+      if (!deletedKasSet.has(pId) && !existingKasRefs.has(pId)) {
+        addedKasCount++;
+        nextKasList.push({
           id: pId,
           bukuKas: 'anggota',
-          tanggal: tx.tanggal,
+          tanggal: tgl,
           kategori: 'Tabungan Pokok',
           keterangan: `Setoran Tabungan Pokok ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
           tipe: 'masuk',
           nominal: pokokNom,
           saldoKasSetelah: 0,
-          inputBy: 'Abzqar',
+          inputBy: s.verifiedBy || 'Admin Koperasi',
           status: 'approved',
           createdAt: nowIso,
-          referensiId: refToken || tx.id,
-        },
-        {
+          referensiId: s.id,
+        });
+      }
+      if (!deletedKasSet.has(zId) && !existingKasRefs.has(zId)) {
+        addedKasCount++;
+        nextKasList.push({
           id: zId,
           bukuKas: 'anggota',
-          tanggal: tx.tanggal,
+          tanggal: tgl,
           kategori: 'Tabungan Zakat',
           keterangan: `Setoran Tabungan Zakat ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
           tipe: 'masuk',
           nominal: zakatNom,
           saldoKasSetelah: 0,
-          inputBy: 'Abzqar',
+          inputBy: s.verifiedBy || 'Admin Koperasi',
           status: 'approved',
           createdAt: nowIso,
-          referensiId: refToken || tx.id,
-        },
-        {
+          referensiId: s.id,
+        });
+      }
+      if (!deletedKasSet.has(qId) && !existingKasRefs.has(qId)) {
+        addedKasCount++;
+        nextKasList.push({
           id: qId,
           bukuKas: 'anggota',
-          tanggal: tx.tanggal,
+          tanggal: tgl,
           kategori: 'Tabungan Qurban',
           keterangan: `Setoran Tabungan Qurban ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
           tipe: 'masuk',
           nominal: qurbanNom,
           saldoKasSetelah: 0,
-          inputBy: 'Abzqar',
+          inputBy: s.verifiedBy || 'Admin Koperasi',
           status: 'approved',
           createdAt: nowIso,
-          referensiId: refToken || tx.id,
-        }
-      );
-      existingKasTokens.add(tsToken);
-    } else if (tx.kategori === 'umum' && !String(tx.id).startsWith('tx-tf-')) {
-      const uId = `kas-ang-umum-${tsToken}`;
-      if (deletedKasSet.has(uId)) return;
-      addedKasCount++;
-      nextKasList.push({
-        id: uId,
-        bukuKas: 'anggota',
-        tanggal: tx.tanggal,
-        kategori: 'Tabungan Bebas',
-        keterangan: `Setoran Tunai ${m.nama}`,
-        namaPenerima: m.nama,
-        tipe: 'masuk',
-        nominal: nom,
-        saldoKasSetelah: 0,
-        inputBy: 'Abzqar',
-        status: 'approved',
-        createdAt: nowIso,
-        referensiId: refToken || tx.id,
-      });
-      existingKasTokens.add(tsToken);
+          referensiId: s.id,
+        });
+      }
+      existingKasRefs.add(s.id);
+    } else if (s.jenis === 'umum') {
+      const uId = `kas-ang-umum-${s.id}`;
+      if (!deletedKasSet.has(uId) && !existingKasRefs.has(uId)) {
+        addedKasCount++;
+        nextKasList.push({
+          id: uId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          kategori: 'Tabungan Bebas',
+          keterangan: `Setoran Tunai ${m.nama}`,
+          namaPenerima: m.nama,
+          tipe: 'masuk',
+          nominal: nom,
+          saldoKasSetelah: 0,
+          inputBy: s.verifiedBy || 'Admin Koperasi',
+          status: 'approved',
+          createdAt: nowIso,
+          referensiId: s.id,
+        });
+      }
+      existingKasRefs.add(s.id);
     }
   });
 
@@ -3064,16 +3200,21 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
 
 let currentState = loadDatabase();
 const beforeBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
+const beforeBootTxCount = (currentState.memberTransactions || []).length;
+const beforeBootKasCount = (currentState.kasList || []).length;
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
 const afterBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
 const bootCbgChanged = beforeBootTxCbgDigest !== afterBootTxCbgDigest;
+const bootDedupChanged =
+  (currentState.memberTransactions || []).length !== beforeBootTxCount ||
+  (currentState.kasList || []).length !== beforeBootKasCount;
 const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
-if (startupMemRecon.migratedCount > 0 || bootCbgChanged) {
-  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG normalized: ${bootCbgChanged}.`);
-  saveDatabase(currentState, { skipFirestore: !bootCbgChanged });
+if (startupMemRecon.migratedCount > 0 || bootCbgChanged || bootDedupChanged) {
+  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG normalized: ${bootCbgChanged}, Dedup cleaned: ${bootDedupChanged}.`);
+  saveDatabase(currentState, { skipFirestore: !bootCbgChanged && !bootDedupChanged });
 }
 // Enforce 10-day chat retention on startup
 const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
@@ -3816,6 +3957,15 @@ async function startServer() {
         ? 'QRIS Resmi Kas Berbagi'
         : 'QRIS Resmi Koperasi HWS';
 
+      const existingSetoran = (currentState.setoranList || []).find((s: any) => s.id === deposit.id);
+      if (existingSetoran && (existingSetoran.status === 'disetujui' || existingSetoran.status === 'ditolak')) {
+        return res.json({
+          success: true,
+          message: 'Setoran ini sudah diproses sebelumnya.',
+          deposit: existingSetoran,
+        });
+      }
+
       currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
       if (sedekahEntry && sedekahEntry.id) {
         sedekahEntry.sumberDana = deposit.metode;
@@ -3888,32 +4038,37 @@ async function startServer() {
       const jam = `${wibTimeParts.find((p) => p.type === 'hour')?.value || '00'}:${wibTimeParts.find((p) => p.type === 'minute')?.value || '00'}`;
 
       if (isApproved) {
-        // Cek apakah setoran ini sudah disetujui sebelumnya untuk mencegah double saldo (Req 4)
+        // Cek apakah setoran ini sudah disetujui sebelumnya untuk mencegah double saldo & double mutasi (Req 2)
         if (dep.status === 'disetujui') {
+          currentState = reconcileBalancesWithDeposits(currentState).state;
           return res.json({
             success: true,
-            message: `Setoran a/n ${targetMember.nama} telah disetujui sebelumnya (mencegah duplikasi saldo).`,
+            message: `Setoran a/n ${targetMember?.nama || dep.memberNama} telah disetujui sebelumnya (mencegah duplikasi saldo & mutasi).`,
             deposit: dep,
             member: targetMember,
+            state: currentState,
           });
         }
 
-        // Cek apakah mutasi dengan referensiId yang sama sudah ada di memberTransactions
+        // Cek apakah mutasi dengan referensiId atau ID deterministik sudah ada di memberTransactions
+        const canonicalTxId = dep.jenis === 'sedekah' ? `tx-sdk-${dep.id}` : `tx-dep-${dep.id}`;
         const alreadyHasTx = (currentState.memberTransactions || []).some(
-          (tx: any) => tx.referensiId === dep.id
+          (tx: any) => tx.referensiId === dep.id || tx.id === canonicalTxId
         );
         if (alreadyHasTx) {
           dep.status = 'disetujui';
           dep.verifiedAt = dep.verifiedAt || now.toISOString();
           dep.verifiedBy = dep.verifiedBy || adminName || 'Admin Koperasi';
           currentState.setoranList[depIndex] = dep;
+          currentState = reconcileBalancesWithDeposits(currentState).state;
           saveDatabase(currentState);
           broadcastStatePulse('updated');
           return res.json({
             success: true,
-            message: `Setoran a/n ${targetMember.nama} telah tercatat sebelumnya, status diselaraskan tanpa duplikasi.`,
+            message: `Setoran a/n ${targetMember?.nama || dep.memberNama} telah tercatat sebelumnya, status diselaraskan tanpa duplikasi.`,
             deposit: dep,
             member: targetMember,
+            state: currentState,
           });
         }
 
@@ -3937,7 +4092,7 @@ async function startServer() {
 
           currentState.memberTransactions = currentState.memberTransactions || [];
           currentState.memberTransactions.unshift({
-            id: `tx-wajib-${Date.now()}`,
+            id: `tx-dep-${dep.id}`,
             memberId: targetMember.id,
             tanggal: tgl,
             jam,
@@ -3951,53 +4106,59 @@ async function startServer() {
           });
 
           currentState.kasList = currentState.kasList || [];
-          // 1. Catat Tabungan Pokok di Buku Kas Anggota (Req 6)
-          currentState.kasList.unshift({
-            id: `kas-ang-pokok-${Date.now()}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Pokok',
-            keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: pokokNominal,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Admin Koperasi',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+          const hasKasForDep = currentState.kasList.some((k: any) => k.referensiId === dep.id);
+          if (!hasKasForDep) {
+            // 1. Catat Tabungan Pokok di Buku Kas Anggota (Req 6)
+            currentState.kasList.unshift({
+              id: `kas-ang-pokok-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Pokok',
+              keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
+              namaPenerima: targetMember.nama,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: pokokNominal,
+              saldoKasSetelah: 0,
+              inputBy: adminName || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
 
-          // 2. Catat Tabungan Zakat di Buku Kas Anggota (25%)
-          currentState.kasList.unshift({
-            id: `kas-ang-zakat-${Date.now() + 1}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Zakat',
-            keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: zakatNominal,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Admin Koperasi',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+            // 2. Catat Tabungan Zakat di Buku Kas Anggota (25%)
+            currentState.kasList.unshift({
+              id: `kas-ang-zakat-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Zakat',
+              keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
+              namaPenerima: targetMember.nama,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: zakatNominal,
+              saldoKasSetelah: 0,
+              inputBy: adminName || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
 
-          // 3. Catat Tabungan Qurban di Buku Kas Anggota (25%)
-          currentState.kasList.unshift({
-            id: `kas-ang-qurban-${Date.now() + 2}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Qurban',
-            keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: qurbanNominal,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Admin Koperasi',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+            // 3. Catat Tabungan Qurban di Buku Kas Anggota (25%)
+            currentState.kasList.unshift({
+              id: `kas-ang-qurban-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Qurban',
+              keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
+              namaPenerima: targetMember.nama,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: qurbanNominal,
+              saldoKasSetelah: 0,
+              inputBy: adminName || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+          }
         } else if (dep.jenis === 'sedekah') {
           const linkedSdk = (currentState.sedekahList || []).find((sdk: any) => sdk.id === dep.id);
           const pb = currentState.pengaturanBerbagi || {};
@@ -4034,23 +4195,25 @@ async function startServer() {
               (Number(targetMember.saldoQurban) || 0);
 
             currentState.kasList = currentState.kasList || [];
-            currentState.kasList.unshift({
-              id: kasAngId,
-              bukuKas: 'anggota',
-              tanggal: tgl,
-              jam,
-              kategori: 'Tabungan Bebas',
-              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
-              namaPenerima: memberNama,
-              memberId: targetMember.id,
-              referensiId: dep.id,
-              tipe: 'keluar',
-              nominal: dep.nominal,
-              saldoKasSetelah: 0,
-              inputBy: adminName || 'Admin Koperasi',
-              status: 'approved',
-              createdAt: now.toISOString(),
-            });
+            if (!currentState.kasList.some((k: any) => k.id === kasAngId)) {
+              currentState.kasList.unshift({
+                id: kasAngId,
+                bukuKas: 'anggota',
+                tanggal: tgl,
+                jam,
+                kategori: 'Tabungan Bebas',
+                keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+                namaPenerima: memberNama,
+                memberId: targetMember.id,
+                referensiId: dep.id,
+                tipe: 'keluar',
+                nominal: dep.nominal,
+                saldoKasSetelah: 0,
+                inputBy: adminName || 'Admin Koperasi',
+                status: 'approved',
+                createdAt: now.toISOString(),
+              });
+            }
 
             currentState.memberTransactions = currentState.memberTransactions || [];
             currentState.memberTransactions.unshift({
@@ -4084,23 +4247,25 @@ async function startServer() {
           }
 
           currentState.kasList = currentState.kasList || [];
-          currentState.kasList.unshift({
-            id: kasKopId,
-            bukuKas: 'koperasi',
-            tanggal: tgl,
-            jam,
-            kategori: jenisLabel,
-            keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
-            namaPenerima: memberNama,
-            memberId: targetMember?.id || dep.memberId,
-            referensiId: dep.id,
-            tipe: 'masuk',
-            nominal: dep.nominal,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Admin Koperasi',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+          if (!currentState.kasList.some((k: any) => k.id === kasKopId)) {
+            currentState.kasList.unshift({
+              id: kasKopId,
+              bukuKas: 'koperasi',
+              tanggal: tgl,
+              jam,
+              kategori: jenisLabel,
+              keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
+              namaPenerima: memberNama,
+              memberId: targetMember?.id || dep.memberId,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: adminName || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+          }
 
           currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
             sdk.id === dep.id ||
@@ -4125,7 +4290,7 @@ async function startServer() {
 
           currentState.memberTransactions = currentState.memberTransactions || [];
           currentState.memberTransactions.unshift({
-            id: `tx-umum-${Date.now()}`,
+            id: `tx-dep-${dep.id}`,
             memberId: targetMember.id,
             tanggal: tgl,
             jam,
@@ -4139,20 +4304,23 @@ async function startServer() {
           });
 
           currentState.kasList = currentState.kasList || [];
-          currentState.kasList.unshift({
-            id: `kas-ang-umum-${Date.now()}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Bebas',
-            keterangan: `Setoran Tunai ${targetMember.nama}`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: dep.nominal,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Admin Koperasi',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+          if (!currentState.kasList.some((k: any) => k.referensiId === dep.id)) {
+            currentState.kasList.unshift({
+              id: `kas-ang-umum-${dep.id}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Bebas',
+              keterangan: `Setoran Tunai ${targetMember.nama}`,
+              namaPenerima: targetMember.nama,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: adminName || 'Admin Koperasi',
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+          }
         }
       } else {
         dep.status = 'ditolak';

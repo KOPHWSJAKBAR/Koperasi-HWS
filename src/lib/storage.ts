@@ -1731,6 +1731,151 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
   return reconcileBalancesWithDeposits(mergedState);
 }
 
+export function extractDepositRefId(tx: any): string {
+  if (!tx) return '';
+  const id = String(tx.id || '').trim();
+  const refId = String(tx.referensiId || '').trim();
+  if (refId.startsWith('dep-') || refId.startsWith('sdk-')) return refId;
+  if (id.startsWith('tx-dep-')) return id.slice('tx-dep-'.length);
+  if (id.startsWith('tx-sdk-sdk-') || id.startsWith('tx-sdk-dep-')) return id.slice('tx-sdk-'.length);
+  return '';
+}
+
+export function isDepositSourcedTransaction(tx: any): boolean {
+  if (!tx) return false;
+  const id = String(tx.id || '').trim();
+  const refId = String(tx.referensiId || '').trim();
+  if (
+    refId.startsWith('KAS-') ||
+    refId.startsWith('ADJ-') ||
+    refId.startsWith('SHU-') ||
+    refId.startsWith('TF-')
+  ) {
+    return false;
+  }
+  if (refId.startsWith('dep-') || refId.startsWith('sdk-')) return true;
+  if (id.startsWith('tx-dep-') || id.startsWith('tx-sdk-sdk-') || id.startsWith('tx-sdk-dep-')) return true;
+  if ((id.startsWith('tx-wajib-') || id.startsWith('tx-umum-')) && !refId) return true;
+  return false;
+}
+
+export function filterAndDeduplicateMemberTransactions(params: {
+  transactions: MemberTransaction[];
+  setoranList: SetoranVerifikasi[];
+  deletedTransactionIds?: string[];
+  deletedSetoranIds?: string[];
+  activeMemberIds?: Set<string>;
+  members?: MemberUser[];
+  deletedMemberIds?: string[];
+}): {
+  transactions: MemberTransaction[];
+  removedTxIds: string[];
+  removedNumericTokens: Set<string>;
+} {
+  const delTxSet = new Set<string>(params.deletedTransactionIds || []);
+  const delSetoranSet = new Set<string>(params.deletedSetoranIds || []);
+  const delMemSet = new Set<string>(params.deletedMemberIds || []);
+  const approvedDepositMap = new Map<string, SetoranVerifikasi>();
+
+  (Array.isArray(params.setoranList) ? params.setoranList : []).forEach((s) => {
+    if (!s || !s.id || delSetoranSet.has(s.id)) return;
+    if (s.status !== 'disetujui' && (s as any).status !== 'approved') return;
+    approvedDepositMap.set(s.id, s);
+  });
+
+  const removedTxIds: string[] = [];
+  const removedNumericTokens = new Set<string>();
+  const depositClusters = new Map<string, MemberTransaction[]>();
+  const nonDepositTxs: MemberTransaction[] = [];
+  const nonDepositSeenKeys = new Set<string>();
+
+  const recordRemoved = (txId: string) => {
+    if (!txId) return;
+    if (!delTxSet.has(txId)) {
+      removedTxIds.push(txId);
+      delTxSet.add(txId);
+    }
+    const tsMatch = String(txId).match(/^tx-(?:wajib|umum)-(\d{10,})$/);
+    if (tsMatch) removedNumericTokens.add(tsMatch[1]);
+  };
+
+  (Array.isArray(params.transactions) ? params.transactions : []).forEach((tx) => {
+    if (!tx || !tx.id || (tx as any).status === 'deleted') return;
+    if (delTxSet.has(tx.id)) return;
+    if (params.activeMemberIds && !params.activeMemberIds.has(tx.memberId)) return;
+
+    if (isDepositSourcedTransaction(tx)) {
+      const depRefId = extractDepositRefId(tx);
+      const dep = depRefId ? approvedDepositMap.get(depRefId) : undefined;
+      if (!dep) {
+        // Strict Req 1: mutasi setoran hanya mengikuti daftar setoran yang telah diverifikasi
+        recordRemoved(tx.id);
+        return;
+      }
+
+      const resolvedMember = params.members
+        ? findMemberForDeposit(dep, params.members, delMemSet)
+        : null;
+      const expectedMemberId = resolvedMember?.id || dep.memberId;
+      if (expectedMemberId && expectedMemberId !== 'donatur-umum' && tx.memberId !== expectedMemberId) {
+        recordRemoved(tx.id);
+        return;
+      }
+
+      const isSedekah = dep.jenis === 'sedekah' || depRefId.startsWith('sdk-');
+      const canonicalId = isSedekah ? `tx-sdk-${depRefId}` : `tx-dep-${depRefId}`;
+      if (delTxSet.has(canonicalId)) {
+        recordRemoved(tx.id);
+        return;
+      }
+
+      if (!depositClusters.has(depRefId)) {
+        depositClusters.set(depRefId, []);
+      }
+      depositClusters.get(depRefId)!.push(tx);
+    } else {
+      if (tx.referensiId && delSetoranSet.has(tx.referensiId)) return;
+      const refKey = tx.referensiId
+        ? `${tx.memberId}|${tx.referensiId}|${tx.kategori}|${tx.tipe}`
+        : `id|${tx.id}`;
+      if (nonDepositSeenKeys.has(tx.id) || (tx.referensiId && nonDepositSeenKeys.has(refKey))) {
+        recordRemoved(tx.id);
+        return;
+      }
+      nonDepositSeenKeys.add(tx.id);
+      if (tx.referensiId) nonDepositSeenKeys.add(refKey);
+      nonDepositTxs.push(tx);
+    }
+  });
+
+  const dedupedDepositTxs: MemberTransaction[] = [];
+  depositClusters.forEach((cluster, depRefId) => {
+    const dep = approvedDepositMap.get(depRefId)!;
+    const isSedekah = dep.jenis === 'sedekah' || depRefId.startsWith('sdk-');
+    const canonicalId = isSedekah ? `tx-sdk-${depRefId}` : `tx-dep-${depRefId}`;
+    const canonicalTx = cluster.find((t) => t.id === canonicalId);
+    const survivor = canonicalTx || cluster[0];
+
+    dedupedDepositTxs.push({
+      ...survivor,
+      id: canonicalId,
+      referensiId: depRefId,
+    });
+
+    cluster.forEach((t) => {
+      if (t.id !== canonicalId) {
+        recordRemoved(t.id);
+      }
+    });
+  });
+
+  return {
+    transactions: [...dedupedDepositTxs, ...nonDepositTxs],
+    removedTxIds,
+    removedNumericTokens,
+  };
+}
+
 function cleanStr(str: any): string {
   return String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -1918,23 +2063,62 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
   const setoranList = Array.from(setoranMap.values());
   const sedekahList = Array.from(sedekahMap.values());
 
-  // Filter memberTransactions and kasList against deleted IDs and orphaned memberIds
-  const memberTransactions = (Array.isArray(state.memberTransactions) ? state.memberTransactions : []).filter(
-    (tx) =>
-      tx &&
-      tx.id &&
-      !delTxSet.has(tx.id) &&
-      (!tx.referensiId || !delSetoranSet.has(tx.referensiId)) &&
-      activeMemberIds.has(tx.memberId)
-  );
+  // Strictly filter & deduplicate memberTransactions against verified deposits, deleted IDs, and active members
+  const txClean = filterAndDeduplicateMemberTransactions({
+    transactions: Array.isArray(state.memberTransactions) ? state.memberTransactions : [],
+    setoranList,
+    deletedTransactionIds: Array.from(delTxSet),
+    deletedSetoranIds: Array.from(delSetoranSet),
+    activeMemberIds,
+    members,
+    deletedMemberIds: Array.from(delMemSet),
+  });
+  const memberTransactions = txClean.transactions;
+  txClean.removedTxIds.forEach((id) => delTxSet.add(id));
 
-  const kasList = (Array.isArray(state.kasList) ? state.kasList : []).filter(
+  // Build set of numeric tokens from deleted/deduplicated tx-wajib-/tx-umum- entries to prune companion duplicate kas entries
+  const dupKasTokens = new Set<string>(txClean.removedNumericTokens);
+  delTxSet.forEach((id) => {
+    const m = String(id).match(/^tx-(?:wajib|umum)-(\d{10,})$/);
+    if (m) dupKasTokens.add(m[1]);
+  });
+
+  const rawFilteredKas = (Array.isArray(state.kasList) ? state.kasList : []).filter(
     (k) =>
       k &&
       k.id &&
       !delKasSet.has(k.id) &&
       (!k.referensiId || !delSetoranSet.has(k.referensiId))
   );
+
+  // Deduplicate legacy no-ref kas-ang-*-<ts> entries that duplicate canonical deposit kas entries
+  const kasWithRefSigs = new Set<string>();
+  rawFilteredKas.forEach((k) => {
+    if (k.bukuKas === 'anggota' && k.referensiId) {
+      kasWithRefSigs.add(
+        `${k.tanggal || ''}|${k.kategori || ''}|${String(k.namaPenerima || '').trim().toLowerCase()}|${Number(k.nominal) || 0}|${k.tipe || ''}`
+      );
+    }
+  });
+
+  const kasList = rawFilteredKas.filter((k) => {
+    if (k.bukuKas === 'anggota' && !k.referensiId) {
+      const m = String(k.id).match(/^kas-ang-(?:pokok|zakat|qurban|umum)-(\d{10,})$/);
+      if (m) {
+        const tsNum = Number(m[1]);
+        const sig = `${k.tanggal || ''}|${k.kategori || ''}|${String(k.namaPenerima || '').trim().toLowerCase()}|${Number(k.nominal) || 0}|${k.tipe || ''}`;
+        const matchesRemovedTx =
+          dupKasTokens.has(m[1]) ||
+          dupKasTokens.has(String(tsNum - 1)) ||
+          dupKasTokens.has(String(tsNum - 2));
+        if (matchesRemovedTx || kasWithRefSigs.has(sig)) {
+          delKasSet.add(k.id);
+          return false;
+        }
+      }
+    }
+    return true;
+  });
 
   const approvedDeposits = setoranList.filter(
     (s) => s && (s.status === 'disetujui' || (s as any).status === 'approved')
@@ -1953,7 +2137,8 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     }
   });
 
-  // Accumulate approved deposits for active members
+  // Accumulate approved deposits for active members (skip any deposit whose canonical mutasi tx was explicitly deleted)
+  const countedDepositIds = new Set<string>();
   approvedDeposits.forEach((s) => {
     const m = findMemberForDeposit(s, members, delMemSet);
     if (!m) return;
@@ -1962,6 +2147,12 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     s.memberNama = m.nama;
     s.memberRekening = m.nomorRekening;
     s.memberNomorAnggota = m.nomorAnggota;
+
+    const isSedekah = s.jenis === 'sedekah';
+    const canonicalTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
+    if (delTxSet.has(canonicalTxId)) return;
+    if (countedDepositIds.has(s.id)) return;
+    countedDepositIds.add(s.id);
 
     const acc = memberAccum.get(m.id);
     if (!acc) return;
@@ -1983,16 +2174,11 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     }
   });
 
-  // Factor in non-deposit member transactions (manual adjustments, withdrawals, etc.)
-  const depositRefIds = new Set(approvedDeposits.map((s) => s.id));
+  // Factor ONLY non-deposit member transactions (manual adjustments, withdrawals, SHU, transfers)
   memberTransactions.forEach((tx) => {
-    if (!tx || !tx.memberId || depositRefIds.has(tx.referensiId || '')) return;
+    if (!tx || !tx.memberId) return;
+    if (isDepositSourcedTransaction(tx)) return;
     if (tx.kategori === 'sedekah') return; // Mutasi Sedekah QRIS tidak mengubah saldo tabungan
-    // Also skip if tx.id is tx-dep-<setoranId> that was already counted
-    if (String(tx.id).startsWith('tx-dep-') || String(tx.id).startsWith('tx-sdk-')) {
-      const depId = String(tx.id).replace(/^tx-(dep|sdk)-/, '');
-      if (depositRefIds.has(depId)) return;
-    }
     const acc = memberAccum.get(tx.memberId);
     if (!acc) return;
 
@@ -2056,12 +2242,15 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     };
   });
 
-  // Synchronize memberTransactions for approved deposits (tabungan & sedekah)
+  // Synchronize memberTransactions for approved deposits (tabungan & sedekah), strictly 1 entry per verified deposit
   const nextTxList = [...memberTransactions];
-  const existingTxRefs = new Set<string>();
+  const existingDepositRefs = new Set<string>();
   nextTxList.forEach((t) => {
-    if (t.id) existingTxRefs.add(t.id);
-    if (t.referensiId) existingTxRefs.add(t.referensiId);
+    if (isDepositSourcedTransaction(t)) {
+      const depRef = extractDepositRefId(t);
+      if (depRef) existingDepositRefs.add(depRef);
+    }
+    if (t.id) existingDepositRefs.add(t.id);
   });
 
   const resolveSedekahCat = (s: any, sdk?: any) => {
@@ -2084,9 +2273,9 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     if (delTxSet.has(txId)) return;
 
     const isPresent =
-      existingTxRefs.has(s.id) ||
-      existingTxRefs.has(txId) ||
-      nextTxList.some((t) => t.memberId === m.id && t.referensiId === s.id);
+      existingDepositRefs.has(s.id) ||
+      existingDepositRefs.has(txId) ||
+      nextTxList.some((t) => t.referensiId === s.id || t.id === txId);
 
     if (!isPresent) {
       const tgl = (s as any).tanggal || (s.createdAt ? s.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
@@ -2103,7 +2292,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           keterangan: isTftu
             ? `TFTU Sedekah ${jenisLabel} dari ${m.nama}`
             : `Sedekah ${jenisLabel} dari ${m.nama} (QRIS)`,
-          cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+          cbg: '53532',
           tipe: isTftu ? 'keluar' : 'masuk',
           nominal: s.nominal,
           saldoSetelah: 0,
@@ -2118,8 +2307,8 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           jam,
           keterangan: s.jenis === 'kewajiban'
             ? `SETORAN KEWAJIBAN ${s.jumlahHari || Math.round(s.nominal / 2000) || 1} HARI (POKOK, ZAKAT, QURBAN)`
-            : `SETORAN TUNAI TABUNGAN UMUM`,
-          cbg: `KCP ${(m.wilayah || 'CENGKARENG').toUpperCase()}`,
+            : `Setoran Tunai ${m.nama}`,
+          cbg: s.jenis === 'kewajiban' ? '53732' : '53745',
           tipe: 'masuk',
           nominal: s.nominal,
           saldoSetelah: 0,
@@ -2127,8 +2316,8 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           referensiId: s.id,
         });
       }
-      existingTxRefs.add(s.id);
-      existingTxRefs.add(txId);
+      existingDepositRefs.add(s.id);
+      existingDepositRefs.add(txId);
     }
   });
 
@@ -2148,12 +2337,10 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
 
   // Synchronize kasList (Buku Kas Anggota & Buku Kas Koperasi) for approved deposits without duplicating existing kas entries
   const nextKasList = [...kasList];
-  const existingKasTokens = new Set<string>();
+  const existingKasRefs = new Set<string>();
   nextKasList.forEach((k) => {
-    if (k.id) existingKasTokens.add(k.id);
-    if (k.referensiId) existingKasTokens.add(k.referensiId);
-    const numMatch = String(k.id).match(/(\d{10,})/);
-    if (numMatch) existingKasTokens.add(numMatch[1]);
+    if (k.id) existingKasRefs.add(k.id);
+    if (k.referensiId) existingKasRefs.add(k.referensiId);
   });
 
   approvedDeposits.forEach((s) => {
@@ -2215,9 +2402,8 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     const m = findMemberForDeposit(s, updatedMembers, delMemSet);
     if (!m) return;
 
-    const numMatch = String(s.id).match(/(\d{10,})/);
-    const numToken = numMatch ? numMatch[1] : '';
-    if (existingKasTokens.has(s.id) || (numToken && existingKasTokens.has(numToken))) return;
+    if (delTxSet.has(`tx-dep-${s.id}`)) return;
+    if (existingKasRefs.has(s.id)) return;
 
     const tgl = (s as any).tanggal || (s.createdAt ? s.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
     const nowIso = s.createdAt || new Date().toISOString();
@@ -2230,7 +2416,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
       const idP = `kas-ang-pokok-${s.id}`;
       const idZ = `kas-ang-zakat-${s.id}`;
       const idQ = `kas-ang-qurban-${s.id}`;
-      if (!delKasSet.has(idP)) {
+      if (!delKasSet.has(idP) && !existingKasRefs.has(idP)) {
         nextKasList.push({
           id: idP,
           bukuKas: 'anggota',
@@ -2247,7 +2433,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           referensiId: s.id,
         });
       }
-      if (!delKasSet.has(idZ)) {
+      if (!delKasSet.has(idZ) && !existingKasRefs.has(idZ)) {
         nextKasList.push({
           id: idZ,
           bukuKas: 'anggota',
@@ -2264,7 +2450,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           referensiId: s.id,
         });
       }
-      if (!delKasSet.has(idQ)) {
+      if (!delKasSet.has(idQ) && !existingKasRefs.has(idQ)) {
         nextKasList.push({
           id: idQ,
           bukuKas: 'anggota',
@@ -2281,9 +2467,10 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           referensiId: s.id,
         });
       }
+      existingKasRefs.add(s.id);
     } else if (s.jenis === 'umum') {
       const idU = `kas-ang-umum-${s.id}`;
-      if (!delKasSet.has(idU)) {
+      if (!delKasSet.has(idU) && !existingKasRefs.has(idU)) {
         nextKasList.push({
           id: idU,
           bukuKas: 'anggota',
@@ -2300,6 +2487,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           referensiId: s.id,
         });
       }
+      existingKasRefs.add(s.id);
     }
   });
 
@@ -2340,6 +2528,8 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
       `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
     ),
     kasList: updatedKasList,
+    deletedTransactionIds: Array.from(delTxSet),
+    deletedKasIds: Array.from(delKasSet),
   };
 }
 

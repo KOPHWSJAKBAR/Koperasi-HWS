@@ -729,9 +729,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     // 2. Hanya jika server offline, lakukan pembaruan lokal satu kali (mencegah double)
     if (!verifySuccess) {
       await updateState((prev) => {
-        // Cek jika sudah disetujui
+        // Cek jika sudah disetujui atau mutasi untuk setoran ini sudah ada (mencegah double mutasi)
         const existingDep = prev.setoranList.find((s) => s.id === dep.id);
         if (existingDep && existingDep.status === 'disetujui') return prev;
+        const alreadyHasTx = (prev.memberTransactions || []).some(
+          (t) => t.referensiId === dep.id || t.id === `tx-dep-${dep.id}` || t.id === `tx-sdk-${dep.id}`
+        );
+        if (alreadyHasTx) return prev;
 
         const targetMember = prev.members.find((m) => {
           if (dep.memberId && m.id === dep.memberId) return true;
@@ -744,6 +748,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
         const newTxs: MemberTransaction[] = [];
         const newKasList: KasEntry[] = [];
+        const existingKasSet = new Set((prev.kasList || []).map((k) => k.id));
 
         let updatedSaldoPokok = Number(targetMember.saldoPokok) || 0;
         let updatedSaldoZakat = Number(targetMember.saldoZakatFitrah) || 0;
@@ -761,7 +766,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           updatedSaldoQurban += qurbanNominal;
 
           newTxs.push({
-            id: `tx-wajib-${Date.now()}`,
+            id: `tx-dep-${dep.id}`,
             memberId: targetMember.id,
             tanggal: tgl,
             jam,
@@ -774,53 +779,68 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             referensiId: dep.id,
           });
 
-          // 1. Catat Tabungan Pokok di Buku Kas Anggota (Req 6)
-          newKasList.push({
-            id: `kas-ang-pokok-${Date.now()}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Pokok',
-            keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: pokokNominal,
-            saldoKasSetelah: 0,
-            inputBy: currentAdmin.nama,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+          const hasKasForDep = (prev.kasList || []).some((k) => k.referensiId === dep.id);
+          if (!hasKasForDep) {
+            const idP = `kas-ang-pokok-${dep.id}`;
+            const idZ = `kas-ang-zakat-${dep.id}`;
+            const idQ = `kas-ang-qurban-${dep.id}`;
+            // 1. Catat Tabungan Pokok di Buku Kas Anggota (Req 6)
+            if (!existingKasSet.has(idP)) {
+              newKasList.push({
+                id: idP,
+                bukuKas: 'anggota',
+                tanggal: tgl,
+                kategori: 'Tabungan Pokok',
+                keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
+                namaPenerima: targetMember.nama,
+                referensiId: dep.id,
+                tipe: 'masuk',
+                nominal: pokokNominal,
+                saldoKasSetelah: 0,
+                inputBy: currentAdmin.nama,
+                status: 'approved',
+                createdAt: now.toISOString(),
+              });
+            }
 
-          // 2. Catat Tabungan Zakat di Buku Kas Anggota
-          newKasList.push({
-            id: `kas-ang-zakat-${Date.now() + 1}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Zakat',
-            keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: zakatNominal,
-            saldoKasSetelah: 0,
-            inputBy: currentAdmin.nama,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+            // 2. Catat Tabungan Zakat di Buku Kas Anggota
+            if (!existingKasSet.has(idZ)) {
+              newKasList.push({
+                id: idZ,
+                bukuKas: 'anggota',
+                tanggal: tgl,
+                kategori: 'Tabungan Zakat',
+                keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
+                namaPenerima: targetMember.nama,
+                referensiId: dep.id,
+                tipe: 'masuk',
+                nominal: zakatNominal,
+                saldoKasSetelah: 0,
+                inputBy: currentAdmin.nama,
+                status: 'approved',
+                createdAt: now.toISOString(),
+              });
+            }
 
-          // 3. Catat Tabungan Qurban di Buku Kas Anggota
-          newKasList.push({
-            id: `kas-ang-qurban-${Date.now() + 2}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Qurban',
-            keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: qurbanNominal,
-            saldoKasSetelah: 0,
-            inputBy: currentAdmin.nama,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+            // 3. Catat Tabungan Qurban di Buku Kas Anggota
+            if (!existingKasSet.has(idQ)) {
+              newKasList.push({
+                id: idQ,
+                bukuKas: 'anggota',
+                tanggal: tgl,
+                kategori: 'Tabungan Qurban',
+                keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
+                namaPenerima: targetMember.nama,
+                referensiId: dep.id,
+                tipe: 'masuk',
+                nominal: qurbanNominal,
+                saldoKasSetelah: 0,
+                inputBy: currentAdmin.nama,
+                status: 'approved',
+                createdAt: now.toISOString(),
+              });
+            }
+          }
         } else if (dep.jenis === 'sedekah') {
           const linkedSdk = (prev.sedekahList || []).find((sdk) => sdk.id === dep.id);
           const pb = prev.pengaturanBerbagi;
@@ -844,23 +864,25 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
           if (isTftu && targetMember) {
             updatedSaldoUmum = Math.max(0, updatedSaldoUmum - dep.nominal);
-            newKasList.push({
-              id: kasAngId,
-              bukuKas: 'anggota',
-              tanggal: tgl,
-              jam,
-              kategori: 'Tabungan Bebas',
-              keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
-              namaPenerima: memberNama,
-              memberId: targetMember.id,
-              referensiId: dep.id,
-              tipe: 'keluar',
-              nominal: dep.nominal,
-              saldoKasSetelah: 0,
-              inputBy: currentAdmin.nama,
-              status: 'approved',
-              createdAt: now.toISOString(),
-            });
+            if (!existingKasSet.has(kasAngId)) {
+              newKasList.push({
+                id: kasAngId,
+                bukuKas: 'anggota',
+                tanggal: tgl,
+                jam,
+                kategori: 'Tabungan Bebas',
+                keterangan: `TFTU Sedekah ${jenisLabel} dari ${memberNama}`,
+                namaPenerima: memberNama,
+                memberId: targetMember.id,
+                referensiId: dep.id,
+                tipe: 'keluar',
+                nominal: dep.nominal,
+                saldoKasSetelah: 0,
+                inputBy: currentAdmin.nama,
+                status: 'approved',
+                createdAt: now.toISOString(),
+              });
+            }
             newTxs.push({
               id: txId,
               memberId: targetMember.id,
@@ -890,28 +912,30 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             });
           }
 
-          newKasList.push({
-            id: kasKopId,
-            bukuKas: 'koperasi',
-            tanggal: tgl,
-            jam,
-            kategori: jenisLabel,
-            keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
-            namaPenerima: memberNama,
-            memberId: targetMember?.id || dep.memberId,
-            referensiId: dep.id,
-            tipe: 'masuk',
-            nominal: dep.nominal,
-            saldoKasSetelah: 0,
-            inputBy: currentAdmin.nama,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+          if (!existingKasSet.has(kasKopId)) {
+            newKasList.push({
+              id: kasKopId,
+              bukuKas: 'koperasi',
+              tanggal: tgl,
+              jam,
+              kategori: jenisLabel,
+              keterangan: isTftu ? `TFTU Sedekah dari ${memberNama}` : `Sedekah dari ${memberNama}`,
+              namaPenerima: memberNama,
+              memberId: targetMember?.id || dep.memberId,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+          }
         } else if (targetMember) {
           updatedSaldoUmum += dep.nominal;
 
           newTxs.push({
-            id: `tx-umum-${Date.now()}`,
+            id: `tx-dep-${dep.id}`,
             memberId: targetMember.id,
             tanggal: tgl,
             jam,
@@ -924,20 +948,25 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             referensiId: dep.id,
           });
 
-          newKasList.push({
-            id: `kas-ang-umum-${Date.now()}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Bebas',
-            keterangan: `Setoran Tunai ${targetMember.nama}`,
-            namaPenerima: targetMember.nama,
-            tipe: 'masuk',
-            nominal: dep.nominal,
-            saldoKasSetelah: 0,
-            inputBy: currentAdmin.nama,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          });
+          const idU = `kas-ang-umum-${dep.id}`;
+          const hasKasForDep = (prev.kasList || []).some((k) => k.referensiId === dep.id);
+          if (!hasKasForDep && !existingKasSet.has(idU)) {
+            newKasList.push({
+              id: idU,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              kategori: 'Tabungan Bebas',
+              keterangan: `Setoran Tunai ${targetMember.nama}`,
+              namaPenerima: targetMember.nama,
+              referensiId: dep.id,
+              tipe: 'masuk',
+              nominal: dep.nominal,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin.nama,
+              status: 'approved',
+              createdAt: now.toISOString(),
+            });
+          }
         }
 
         const updatedMembers = targetMember

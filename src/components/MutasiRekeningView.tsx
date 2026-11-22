@@ -5,7 +5,11 @@ import {
   MemberTransaction,
   KategoriTabunganMutasi,
 } from '../types';
-import { formatRupiah, resolveMutasiCbgCode } from '../lib/storage';
+import {
+  formatRupiah,
+  resolveMutasiCbgCode,
+  filterAndDeduplicateMemberTransactions,
+} from '../lib/storage';
 import {
   generateMutasiRekeningPdf,
   downloadExcelCsv,
@@ -102,11 +106,16 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
     prevDay = getOneDayBefore(startDate);
   }
 
-  // Transactions for this member (exclude deleted transactions)
-  const deletedTxSet = new Set(state.deletedTransactionIds || []);
-  const allMemberTxs = (state.memberTransactions || []).filter(
-    (tx) => tx.memberId === member.id && !deletedTxSet.has(tx.id) && (tx as any).status !== 'deleted'
-  );
+  // Transactions for this member (strictly aligned with verified deposits & deduplicated)
+  const { transactions: cleanAllTxs } = filterAndDeduplicateMemberTransactions({
+    transactions: state.memberTransactions || [],
+    setoranList: state.setoranList || [],
+    deletedTransactionIds: state.deletedTransactionIds || [],
+    deletedSetoranIds: state.deletedSetoranIds || [],
+    members: state.members || [],
+    deletedMemberIds: state.deletedMemberIds || [],
+  });
+  const allMemberTxs = cleanAllTxs.filter((tx) => tx.memberId === member.id);
 
   const isSedekahTx = (tx: MemberTransaction) =>
     tx.kategori === 'sedekah' ||
@@ -219,7 +228,7 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   };
 
   const handlePrintPdf = () => {
-    generateMutasiRekeningPdf(member, state.memberTransactions, {
+    generateMutasiRekeningPdf(member, allMemberTxs, {
       kategori: kategoriTabungan,
       periodeLabel: getPeriodeLabel(),
       startDate: periodStartDate || undefined,
