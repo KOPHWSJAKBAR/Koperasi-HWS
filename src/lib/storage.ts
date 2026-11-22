@@ -1759,6 +1759,30 @@ export function isDepositSourcedTransaction(tx: any): boolean {
   return false;
 }
 
+export function extractTxSequenceTs(tx: any): number {
+  if (!tx) return 0;
+  const refMatch = String(tx.referensiId || '').match(/(\d{10,})/);
+  if (refMatch) return Number(refMatch[1]) || 0;
+  const idMatch = String(tx.id || '').match(/(\d{10,})/);
+  if (idMatch) return Number(idMatch[1]) || 0;
+  return 0;
+}
+
+export function compareMemberTransactionsChrono(a: any, b: any): number {
+  const da = `${a?.tanggal || ''} ${a?.jam || '00:00'}`;
+  const db = `${b?.tanggal || ''} ${b?.jam || '00:00'}`;
+  const cmp = da.localeCompare(db);
+  if (cmp !== 0) return cmp;
+  const tsA = extractTxSequenceTs(a);
+  const tsB = extractTxSequenceTs(b);
+  if (tsA !== tsB) return tsA - tsB;
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+export function compareMemberTransactionsDesc(a: any, b: any): number {
+  return compareMemberTransactionsChrono(b, a);
+}
+
 export function filterAndDeduplicateMemberTransactions(params: {
   transactions: MemberTransaction[];
   setoranList: SetoranVerifikasi[];
@@ -1830,7 +1854,10 @@ export function filterAndDeduplicateMemberTransactions(params: {
       }
       depositClusters.get(depRefId)!.push(tx);
     } else {
-      if (tx.referensiId && delSetoranSet.has(tx.referensiId)) return;
+      if (tx.referensiId && delSetoranSet.has(tx.referensiId)) {
+        recordRemoved(tx.id);
+        return;
+      }
       const refKey = tx.referensiId
         ? `${tx.memberId}|${tx.referensiId}|${tx.kategori}|${tx.tipe}`
         : `id|${tx.id}`;
@@ -2087,13 +2114,15 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     if (m) dupKasTokens.add(m[1]);
   });
 
-  const rawFilteredKas = (Array.isArray(state.kasList) ? state.kasList : []).filter(
-    (k) =>
-      k &&
-      k.id &&
-      !delKasSet.has(k.id) &&
-      (!k.referensiId || !delSetoranSet.has(k.referensiId))
-  );
+  const rawFilteredKas = (Array.isArray(state.kasList) ? state.kasList : []).filter((k) => {
+    if (!k || !k.id) return false;
+    if (delKasSet.has(k.id)) return false;
+    if (k.referensiId && delSetoranSet.has(k.referensiId)) {
+      delKasSet.add(k.id);
+      return false;
+    }
+    return true;
+  });
 
   // Deduplicate legacy no-ref kas-ang-*-<ts> entries that duplicate canonical deposit kas entries
   const kasWithRefSigs = new Set<string>();
@@ -2103,6 +2132,11 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
         `${k.tanggal || ''}|${k.kategori || ''}|${String(k.namaPenerima || '').trim().toLowerCase()}|${Number(k.nominal) || 0}|${k.tipe || ''}`
       );
     }
+  });
+
+  const activeTxRefsSet = new Set<string>();
+  memberTransactions.forEach((t) => {
+    if (t && t.referensiId) activeTxRefsSet.add(t.referensiId);
   });
 
   const kasList = rawFilteredKas.filter((k) => {
@@ -2120,6 +2154,16 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           return false;
         }
       }
+    }
+    if (
+      k.status === 'approved' &&
+      k.referensiId &&
+      !activeTxRefsSet.has(k.referensiId) &&
+      (String(k.id).startsWith('kas-adj-') ||
+        (k.bukuKas === 'anggota' && k.memberId && !activeMemberIds.has(k.memberId)))
+    ) {
+      delKasSet.add(k.id);
+      return false;
     }
     return true;
   });
@@ -2324,7 +2368,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
   updatedMembers.forEach((m) => {
     const mTransactions = nextTxList
       .filter((t) => t.memberId === m.id)
-      .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+      .sort(compareMemberTransactionsChrono);
 
     let running = 0;
     mTransactions.forEach((t) => {
@@ -2337,6 +2381,59 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
 
   // Synchronize kasList (Buku Kas Anggota & Buku Kas Koperasi) for approved deposits without duplicating existing kas entries
   const nextKasList = [...kasList];
+  const approvedDepositById = new Map<string, SetoranVerifikasi>();
+  approvedDeposits.forEach((s) => approvedDepositById.set(s.id, s));
+  const txByRef = new Map<string, MemberTransaction>();
+  nextTxList.forEach((t) => {
+    if (t.referensiId && t.kategori !== 'sedekah') txByRef.set(t.referensiId, t);
+  });
+
+  const resolveDepositJam = (s: any, matchingTx?: MemberTransaction): string => {
+    if (matchingTx?.jam) return matchingTx.jam;
+    if (s?.jam) return s.jam;
+    if (s?.createdAt && String(s.createdAt).includes('T')) return String(s.createdAt).split('T')[1].slice(0, 5);
+    if (s?.verifiedAt && String(s.verifiedAt).includes('T')) return String(s.verifiedAt).split('T')[1].slice(0, 5);
+    return '09:00';
+  };
+
+  // Backfill missing memberId and jam on existing kas entries linked to deposits or members
+  nextKasList.forEach((k, idx) => {
+    if (!k) return;
+    const refDep = k.referensiId ? approvedDepositById.get(k.referensiId) : undefined;
+    const refTx = k.referensiId ? txByRef.get(k.referensiId) : undefined;
+    let patched = false;
+    const nextK = { ...k };
+
+    if (!nextK.memberId && (k.bukuKas === 'anggota' || refDep)) {
+      const matchedM =
+        (refDep && findMemberForDeposit(refDep, updatedMembers, delMemSet)) ||
+        (refTx && updatedMembers.find((m) => m.id === refTx.memberId)) ||
+        (nextK.namaPenerima &&
+          updatedMembers.find(
+            (m) => m.nama.trim().toLowerCase() === String(nextK.namaPenerima).trim().toLowerCase()
+          ));
+      if (matchedM) {
+        nextK.memberId = matchedM.id;
+        patched = true;
+      }
+    }
+
+    if (!nextK.jam && (k.bukuKas === 'anggota' || refDep)) {
+      const resolvedJam =
+        refTx?.jam ||
+        (refDep && resolveDepositJam(refDep, refTx)) ||
+        (nextK.createdAt && String(nextK.createdAt).includes('T')
+          ? String(nextK.createdAt).split('T')[1].slice(0, 5)
+          : undefined);
+      if (resolvedJam) {
+        nextK.jam = resolvedJam;
+        patched = true;
+      }
+    }
+
+    if (patched) nextKasList[idx] = nextK;
+  });
+
   const existingKasRefs = new Set<string>();
   nextKasList.forEach((k) => {
     if (k.id) existingKasRefs.add(k.id);
@@ -2406,6 +2503,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     if (existingKasRefs.has(s.id)) return;
 
     const tgl = (s as any).tanggal || (s.createdAt ? s.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
+    const jam = resolveDepositJam(s, txByRef.get(s.id));
     const nowIso = s.createdAt || new Date().toISOString();
     const jlhHari = s.jumlahHari || Math.round(s.nominal / 2000) || 1;
 
@@ -2421,9 +2519,11 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           id: idP,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Pokok',
           keterangan: `Setoran Tabungan Pokok ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: pokokNom,
           saldoKasSetelah: 0,
@@ -2438,9 +2538,11 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           id: idZ,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Zakat',
           keterangan: `Setoran Tabungan Zakat ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: zakatNom,
           saldoKasSetelah: 0,
@@ -2455,9 +2557,11 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           id: idQ,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Qurban',
           keterangan: `Setoran Tabungan Qurban ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: qurbanNom,
           saldoKasSetelah: 0,
@@ -2475,9 +2579,11 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           id: idU,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Bebas',
           keterangan: `Setoran Tunai ${m.nama}`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: s.nominal,
           saldoKasSetelah: 0,
@@ -2524,9 +2630,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     members: updatedMembers,
     setoranList: setoranList.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
     sedekahList: sedekahList.sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
-    memberTransactions: nextTxList.sort((a, b) =>
-      `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
-    ),
+    memberTransactions: nextTxList.sort(compareMemberTransactionsDesc),
     kasList: updatedKasList,
     deletedTransactionIds: Array.from(delTxSet),
     deletedKasIds: Array.from(delKasSet),

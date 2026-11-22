@@ -8,7 +8,7 @@ import {
   MemberTransaction,
   PendingMutasiActionRequest,
 } from '../types';
-import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc, getWibDateStr, formatWibDateShort, formatWibDate, canApproveByRole, getRequiredApproverLabel } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc, getWibDateStr, formatWibDateShort, formatWibDate, canApproveByRole, getRequiredApproverLabel, filterAndDeduplicateMemberTransactions, compareMemberTransactionsDesc } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
@@ -2467,22 +2467,26 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               </div>
 
               {/* Riwayat Mutasi & Hapus Mutasi Transaksi Anggota (Super Admin, Admin Approval, Admin Write) */}
-              {canViewMutasi && (
+              {canViewMutasi && (() => {
+                const { transactions: cleanAllMemberTxs } = filterAndDeduplicateMemberTransactions({
+                  transactions: state.memberTransactions || [],
+                  setoranList: state.setoranList || [],
+                  deletedTransactionIds: state.deletedTransactionIds || [],
+                  deletedSetoranIds: state.deletedSetoranIds || [],
+                  members: state.members || [],
+                  deletedMemberIds: state.deletedMemberIds || [],
+                });
+                const viewingMemberTxs = cleanAllMemberTxs
+                  .filter((t) => t.memberId === viewingMemberProfile.id)
+                  .sort(compareMemberTransactionsDesc);
+
+                return (
               <div className="p-3 bg-slate-800/60 rounded-2xl border border-slate-700/80 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-bold text-white text-xs flex items-center gap-2">
                     <FileText className="w-4 h-4 text-amber-400" />
                     <span>
-                      Riwayat Mutasi Transaksi (
-                      {
-                        state.memberTransactions.filter(
-                          (t) =>
-                            t.memberId === viewingMemberProfile.id &&
-                            !(state.deletedTransactionIds || []).includes(t.id) &&
-                            (t as any).status !== 'deleted'
-                        ).length
-                      }
-                      )
+                      Riwayat Mutasi Transaksi ({viewingMemberTxs.length})
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -2519,24 +2523,12 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </div>
 
                 <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
-                  {state.memberTransactions.filter(
-                    (t) =>
-                      t.memberId === viewingMemberProfile.id &&
-                      !(state.deletedTransactionIds || []).includes(t.id) &&
-                      (t as any).status !== 'deleted'
-                  ).length === 0 ? (
+                  {viewingMemberTxs.length === 0 ? (
                     <div className="text-center py-4 text-slate-400 text-xs italic">
                       Belum ada catatan mutasi transaksi untuk anggota ini.
                     </div>
                   ) : (
-                    state.memberTransactions
-                      .filter(
-                        (t) =>
-                          t.memberId === viewingMemberProfile.id &&
-                          !(state.deletedTransactionIds || []).includes(t.id) &&
-                          (t as any).status !== 'deleted'
-                      )
-                      .map((tx) => (
+                    viewingMemberTxs.map((tx) => (
                         <div
                           key={tx.id}
                           className="p-2 bg-slate-900/80 border border-slate-700/70 rounded-xl flex items-center justify-between text-xs hover:border-slate-600 transition-all"
@@ -2594,7 +2586,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   )}
                 </div>
               </div>
-              )}
+                );
+              })()}
 
               {/* Actions from within View Profile Modal */}
               <div className="flex gap-2 pt-2">

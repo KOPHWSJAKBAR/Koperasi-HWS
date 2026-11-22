@@ -13,6 +13,7 @@ import {
   canApproveByRole,
   getRequiredApproverLabel,
   isApprovalRole,
+  compareMemberTransactionsChrono,
 } from '../lib/storage';
 import {
   downloadExcelCsv,
@@ -161,15 +162,16 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   // 1. Calculate Running Saldo Buku Kas Anggota = total transaksi dari setoran anggota yang telah diverifikasi
   const runningSaldoMap = new Map<string, number>();
 
+  const compareKasChrono = (a: KasEntry, b: KasEntry) => {
+    const keyCmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+    if (keyCmp !== 0) return keyCmp;
+    return a.id.localeCompare(b.id);
+  };
+
   let saldoKasAnggota = 0;
   const kasAnggotaList = activeKasList
     .filter((k) => k.bukuKas === 'anggota' && k.status === 'approved')
-    .sort((a, b) => {
-      const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
-      const timeB = new Date(b.createdAt || b.tanggal).getTime() || 0;
-      if (timeA !== timeB) return timeA - timeB;
-      return a.id.localeCompare(b.id);
-    });
+    .sort(compareKasChrono);
 
   kasAnggotaList.forEach((k) => {
     if (k.tipe === 'masuk') saldoKasAnggota += k.nominal;
@@ -181,12 +183,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   let saldoKasKoperasi = 0;
   const kasKoperasiList = activeKasList
     .filter((k) => k.bukuKas === 'koperasi' && k.status === 'approved')
-    .sort((a, b) => {
-      const timeA = new Date(a.createdAt || a.tanggal).getTime() || 0;
-      const timeB = new Date(b.createdAt || b.tanggal).getTime() || 0;
-      if (timeA !== timeB) return timeA - timeB;
-      return a.id.localeCompare(b.id);
-    });
+    .sort(compareKasChrono);
 
   kasKoperasiList.forEach((k) => {
     if (k.tipe === 'masuk') saldoKasKoperasi += k.nominal;
@@ -964,7 +961,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
       const mTxs = updatedTransactions
         .filter((t) => t.memberId === m.id)
-        .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+        .sort(compareMemberTransactionsChrono);
       let runSaldo = 0;
       mTxs.forEach((t) => {
         runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);

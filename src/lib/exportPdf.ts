@@ -5,6 +5,7 @@ import {
   formatWibDateShort,
   resolveMutasiCbgCode,
   filterAndDeduplicateMemberTransactions,
+  compareMemberTransactionsChrono,
 } from './storage';
 
 // Helper to open a clean print window with accurate styling and triggers browser PDF printing
@@ -235,11 +236,7 @@ export function generateMutasiRekeningPdf(
   }
 
   // Sort chronological: requirement "urutannya dari awal ada di atas serta selanjutnya ke bawah"
-  filtered.sort((a, b) => {
-    const da = `${a.tanggal} ${a.jam || '00:00'}`;
-    const db = `${b.tanggal} ${b.jam || '00:00'}`;
-    return da.localeCompare(db);
-  });
+  filtered.sort(compareMemberTransactionsChrono);
 
   // Calculate totals and compute exact running balance starting from saldoAwal
   let totalMasuk = 0;

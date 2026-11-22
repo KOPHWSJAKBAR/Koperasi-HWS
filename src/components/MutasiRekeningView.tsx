@@ -9,6 +9,7 @@ import {
   formatRupiah,
   resolveMutasiCbgCode,
   filterAndDeduplicateMemberTransactions,
+  compareMemberTransactionsChrono,
 } from '../lib/storage';
 import {
   generateMutasiRekeningPdf,
@@ -137,11 +138,7 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   });
 
   // Sort chronological: requirement "urutannya dari awal ada di atas serta selanjutnya ke bawah"
-  filtered.sort((a, b) => {
-    const da = `${a.tanggal} ${a.jam || '00:00'}`;
-    const db = `${b.tanggal} ${b.jam || '00:00'}`;
-    return da.localeCompare(db);
-  });
+  filtered.sort(compareMemberTransactionsChrono);
 
   // Saldo Awal calculation per User Request:
   // Saldo awal = akumulasi saldo pada 1 hari sebelumnya (sebelum periodStartDate)

@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete } from '../lib/storage';
+import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete, filterAndDeduplicateMemberTransactions } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { initFCM } from '../lib/fcm';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -492,6 +492,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
     const ket = `Tarikan ${labelTabungan} ${currentMember.nama}${tarikCatatan ? ' - ' + tarikCatatan : ''}`;
 
+    const refTarikId = `TRK-${Date.now().toString().slice(-6)}`;
+
     const newTx: MemberTransaction = {
       id: `tx-tarik-${Date.now()}`,
       memberId: currentMember.id,
@@ -503,14 +505,19 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       nominal: amount,
       saldoSetelah: availableBalance - amount,
       kategori: tarikJenisTabungan === 'pokok' ? 'pokok' : 'umum',
+      referensiId: refTarikId,
     };
 
     const newKas: KasEntry = {
       id: `kas-tarik-${Date.now()}`,
       bukuKas: 'anggota',
       tanggal: tgl,
+      jam,
       kategori: `Penarikan ${labelTabungan}`,
       keterangan: ket,
+      namaPenerima: currentMember.nama,
+      memberId: currentMember.id,
+      referensiId: refTarikId,
       tipe: 'keluar',
       nominal: amount,
       saldoKasSetelah: 0,
@@ -566,7 +573,15 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     }> = [];
 
     const now = new Date();
-    const memberTxs = (state.memberTransactions || []).filter((tx) => tx.memberId === currentMember.id);
+    const { transactions: cleanTxs } = filterAndDeduplicateMemberTransactions({
+      transactions: state.memberTransactions || [],
+      setoranList: state.setoranList || [],
+      deletedTransactionIds: state.deletedTransactionIds || [],
+      deletedSetoranIds: state.deletedSetoranIds || [],
+      members: state.members || [],
+      deletedMemberIds: state.deletedMemberIds || [],
+    });
+    const memberTxs = cleanTxs.filter((tx) => tx.memberId === currentMember.id);
     const currentTotal = (currentMember.saldoPokok || 0) + (currentMember.saldoZakatFitrah || 0) + (currentMember.saldoQurban || 0) + (currentMember.saldoUmum || 0);
 
     for (let i = 29; i >= 0; i--) {

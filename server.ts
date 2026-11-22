@@ -2102,14 +2102,64 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       Promise.all(staleRemoteSurat.map((sr) => deleteDoc(doc(db, 'surat', sr.id)).catch(() => {}))).catch(() => {});
     }
 
+    const effDelTx = new Set<string>([
+      ...(currentState.deletedTransactionIds || []),
+      ...(remoteSettingsPatch.deletedTransactionIds || []),
+    ]);
+    const effDelKas = new Set<string>([
+      ...(currentState.deletedKasIds || []),
+      ...(remoteSettingsPatch.deletedKasIds || []),
+    ]);
+    const effDelSet = new Set<string>([
+      ...(currentState.deletedSetoranIds || []),
+      ...(remoteSettingsPatch.deletedSetoranIds || []),
+    ]);
+
+    const isStaleRemoteKas = (k: any) =>
+      !k || !k.id || effDelKas.has(k.id) || (k.referensiId && effDelSet.has(k.referensiId));
+    const filteredRemoteKas = remoteKas.filter((k) => !isStaleRemoteKas(k));
+    const staleRemoteKas = remoteKas.filter((k) => k && k.id && isStaleRemoteKas(k));
+    if (staleRemoteKas.length > 0) {
+      Promise.all(
+        staleRemoteKas.map(async (k) => {
+          await deleteDoc(doc(db, 'kas', k.id)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_kas/${k.id}`, '1');
+        })
+      ).catch(() => {});
+    }
+
+    const isStaleRemoteTx = (t: any) =>
+      !t || !t.id || effDelTx.has(t.id) || (t.referensiId && effDelSet.has(t.referensiId));
+    const filteredRemoteTx = remoteTx.filter((t) => !isStaleRemoteTx(t));
+    const staleRemoteTx = remoteTx.filter((t) => t && t.id && isStaleRemoteTx(t));
+    if (staleRemoteTx.length > 0) {
+      Promise.all(
+        staleRemoteTx.map(async (t) => {
+          await deleteDoc(doc(db, 'transactions', t.id)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_tx/${t.id}`, '1');
+        })
+      ).catch(() => {});
+    }
+
+    const filteredRemoteSetoran = remoteSetoran.filter((s) => s && s.id && !effDelSet.has(s.id));
+    const staleRemoteSetoran = remoteSetoran.filter((s) => s && s.id && effDelSet.has(s.id));
+    if (staleRemoteSetoran.length > 0) {
+      Promise.all(
+        staleRemoteSetoran.map(async (s) => {
+          await deleteDoc(doc(db, 'setoran', s.id)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_setoran/${s.id}`, '1');
+        })
+      ).catch(() => {});
+    }
+
     const remoteSlicePayload = {
       ...remoteSettingsPatch,
       members: remoteMembers,
       admins: remoteAdmins,
       deletedAdminIds: remoteDeletedAdminIds,
-      memberTransactions: remoteTx,
-      setoranList: remoteSetoran,
-      kasList: remoteKas,
+      memberTransactions: filteredRemoteTx,
+      setoranList: filteredRemoteSetoran,
+      kasList: filteredRemoteKas,
       sedekahList: remoteSedekah,
       chatMessages: filteredRemoteChats,
       suratList: filteredRemoteSurat,
@@ -2119,9 +2169,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
     const hasRemotePayload =
       remoteMembers.length > 0 ||
       remoteAdmins.length > 0 ||
-      remoteTx.length > 0 ||
-      remoteSetoran.length > 0 ||
-      remoteKas.length > 0 ||
+      filteredRemoteTx.length > 0 ||
+      filteredRemoteSetoran.length > 0 ||
+      filteredRemoteKas.length > 0 ||
       remoteSedekah.length > 0 ||
       filteredRemoteChats.length > 0 ||
       filteredRemoteSurat.length > 0 ||
@@ -2153,15 +2203,49 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
         }
         return tx;
       });
+
+      // Ensure any locally-healed or deleted docs differing from pulled remote snapshots are pushed back cleanly
+      let healedRemoteDiff = false;
+      const remoteKasMap = new Map(filteredRemoteKas.map((k: any) => [k.id, k]));
+      (currentState.kasList || []).forEach((k: any) => {
+        if (!k || !k.id) return;
+        const rk = remoteKasMap.get(k.id);
+        if (!rk || JSON.stringify(sanitizeServerDocForFirestore({ ...rk })) !== JSON.stringify(sanitizeServerDocForFirestore({ ...k }))) {
+          serverFirestoreHashMap.delete(`kas/${k.id}`);
+          healedRemoteDiff = true;
+        }
+      });
+      const remoteTxMap = new Map(filteredRemoteTx.map((t: any) => [t.id, t]));
+      (currentState.memberTransactions || []).forEach((tx: any) => {
+        if (!tx || !tx.id) return;
+        const rt = remoteTxMap.get(tx.id);
+        if (!rt || JSON.stringify(sanitizeServerDocForFirestore({ ...rt })) !== JSON.stringify(sanitizeServerDocForFirestore({ ...tx }))) {
+          serverFirestoreHashMap.delete(`transactions/${tx.id}`);
+          healedRemoteDiff = true;
+        }
+      });
+      (currentState.deletedKasIds || []).forEach((delId: string) => {
+        if (remoteKasMap.has(delId)) {
+          serverFirestoreHashMap.delete(`deleted_kas/${delId}`);
+          healedRemoteDiff = true;
+        }
+      });
+      (currentState.deletedTransactionIds || []).forEach((delId: string) => {
+        if (remoteTxMap.has(delId)) {
+          serverFirestoreHashMap.delete(`deleted_tx/${delId}`);
+          healedRemoteDiff = true;
+        }
+      });
+
       const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
       const dedupPurged =
         (currentState.deletedTransactionIds || []).length !== beforeDelTxCount ||
         (currentState.deletedKasIds || []).length > beforeDelKasCount;
 
-      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated || dedupPurged) {
-        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount}, CBGUpdated: ${cbgMigrated}, DedupPurged: ${dedupPurged})`);
-        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 && !cbgMigrated && !dedupPurged });
+      if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated || dedupPurged || healedRemoteDiff) {
+        console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount}, CBGUpdated: ${cbgMigrated}, DedupPurged: ${dedupPurged}, HealedDiff: ${healedRemoteDiff})`);
+        saveDatabase(currentState, { skipFirestore: reconResult.migratedCount === 0 && !cbgMigrated && !dedupPurged && !healedRemoteDiff });
         broadcastStatePulse('firestore_sync');
       }
       return { success: true, newMembersCount: Math.max(0, afterCount - beforeCount) };
@@ -2587,6 +2671,30 @@ function isDepositSourcedTransactionServer(tx: any): boolean {
   return false;
 }
 
+function extractTxSequenceTsServer(tx: any): number {
+  if (!tx) return 0;
+  const refMatch = String(tx.referensiId || '').match(/(\d{10,})/);
+  if (refMatch) return Number(refMatch[1]) || 0;
+  const idMatch = String(tx.id || '').match(/(\d{10,})/);
+  if (idMatch) return Number(idMatch[1]) || 0;
+  return 0;
+}
+
+function compareMemberTransactionsChronoServer(a: any, b: any): number {
+  const da = `${a?.tanggal || ''} ${a?.jam || '00:00'}`;
+  const db = `${b?.tanggal || ''} ${b?.jam || '00:00'}`;
+  const cmp = da.localeCompare(db);
+  if (cmp !== 0) return cmp;
+  const tsA = extractTxSequenceTsServer(a);
+  const tsB = extractTxSequenceTsServer(b);
+  if (tsA !== tsB) return tsA - tsB;
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
+function compareMemberTransactionsDescServer(a: any, b: any): number {
+  return compareMemberTransactionsChronoServer(b, a);
+}
+
 // Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
 function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCount: number; addedKasCount: number; addedTxCount: number } {
   if (!state || typeof state !== 'object') {
@@ -2765,7 +2873,10 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
       if (!depositClusters.has(depRefId)) depositClusters.set(depRefId, []);
       depositClusters.get(depRefId)!.push(t);
     } else {
-      if (t.referensiId && deletedSetSet.has(t.referensiId)) return;
+      if (t.referensiId && deletedSetSet.has(t.referensiId)) {
+        recordRemovedTx(t.id);
+        return;
+      }
       const refKey = t.referensiId
         ? `${t.memberId}|${t.referensiId}|${t.kategori}|${t.tipe}`
         : `id|${t.id}`;
@@ -2866,7 +2977,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     reconciledCount++;
     const mTxs = nextTxList
       .filter((t: any) => t.memberId === m.id)
-      .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+      .sort(compareMemberTransactionsChronoServer);
 
     let p = 0, u = 0, z = 0, q = 0;
     mTxs.forEach((tx: any) => {
@@ -2936,9 +3047,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     tx.cbg = resolveMutasiCbgCodeServer(tx, validSetoran, kasAll, sedekahAll);
   });
 
-  state.memberTransactions = nextTxList.sort((a: any, b: any) =>
-    `${b.tanggal} ${b.jam || '00:00'}`.localeCompare(`${a.tanggal} ${a.jam || '00:00'}`)
-  );
+  state.memberTransactions = nextTxList.sort(compareMemberTransactionsDescServer);
 
   // 6. Filter, deduplicate, & synchronize kasList (Buku Kas Anggota & Koperasi) strictly against deletedKasIds
   let addedKasCount = 0;
@@ -2948,13 +3057,15 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     if (m) dupKasTokens.add(m[1]);
   });
 
-  const rawFilteredKas: any[] = (Array.isArray(state.kasList) ? state.kasList : []).filter(
-    (k: any) =>
-      k &&
-      k.id &&
-      !deletedKasSet.has(k.id) &&
-      (!k.referensiId || !deletedSetSet.has(k.referensiId))
-  );
+  const rawFilteredKas: any[] = (Array.isArray(state.kasList) ? state.kasList : []).filter((k: any) => {
+    if (!k || !k.id) return false;
+    if (deletedKasSet.has(k.id)) return false;
+    if (k.referensiId && deletedSetSet.has(k.referensiId)) {
+      deletedKasSet.add(k.id);
+      return false;
+    }
+    return true;
+  });
 
   const kasWithRefSigs = new Set<string>();
   rawFilteredKas.forEach((k: any) => {
@@ -2963,6 +3074,11 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         `${k.tanggal || ''}|${k.kategori || ''}|${String(k.namaPenerima || '').trim().toLowerCase()}|${Number(k.nominal) || 0}|${k.tipe || ''}`
       );
     }
+  });
+
+  const activeTxRefsSet = new Set<string>();
+  nextTxList.forEach((t: any) => {
+    if (t && t.referensiId) activeTxRefsSet.add(t.referensiId);
   });
 
   const nextKasList: any[] = rawFilteredKas.filter((k: any) => {
@@ -2981,7 +3097,67 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         }
       }
     }
+    if (
+      k.status === 'approved' &&
+      k.referensiId &&
+      !activeTxRefsSet.has(k.referensiId) &&
+      (String(k.id).startsWith('kas-adj-') ||
+        (k.bukuKas === 'anggota' && k.memberId && !memberMap.has(k.memberId)))
+    ) {
+      deletedKasSet.add(k.id);
+      return false;
+    }
     return true;
+  });
+
+  const txByRef = new Map<string, any>();
+  nextTxList.forEach((t: any) => {
+    if (t && t.referensiId && t.kategori !== 'sedekah') txByRef.set(t.referensiId, t);
+  });
+  const resolveDepositJamServer = (s: any, matchingTx?: any): string => {
+    if (matchingTx?.jam) return matchingTx.jam;
+    if (s?.jam) return s.jam;
+    if (s?.createdAt && String(s.createdAt).includes('T')) return String(s.createdAt).split('T')[1].slice(0, 5);
+    if (s?.verifiedAt && String(s.verifiedAt).includes('T')) return String(s.verifiedAt).split('T')[1].slice(0, 5);
+    return '09:00';
+  };
+
+  // Backfill missing memberId and jam on existing kas entries linked to deposits or members
+  nextKasList.forEach((k: any, idx: number) => {
+    if (!k) return;
+    const refDep = k.referensiId ? approvedDepositMap.get(k.referensiId) : undefined;
+    const refTx = k.referensiId ? txByRef.get(k.referensiId) : undefined;
+    let patched = false;
+    const nextK = { ...k };
+
+    if (!nextK.memberId && (k.bukuKas === 'anggota' || refDep)) {
+      const matchedM =
+        (refDep && memberMap.get(refDep.memberId)) ||
+        (refTx && memberMap.get(refTx.memberId)) ||
+        (nextK.namaPenerima &&
+          members.find(
+            (m: any) => String(m.nama || '').trim().toLowerCase() === String(nextK.namaPenerima).trim().toLowerCase()
+          ));
+      if (matchedM) {
+        nextK.memberId = matchedM.id;
+        patched = true;
+      }
+    }
+
+    if (!nextK.jam && (k.bukuKas === 'anggota' || refDep)) {
+      const resolvedJam =
+        refTx?.jam ||
+        (refDep && resolveDepositJamServer(refDep, refTx)) ||
+        (nextK.createdAt && String(nextK.createdAt).includes('T')
+          ? String(nextK.createdAt).split('T')[1].slice(0, 5)
+          : undefined);
+      if (resolvedJam) {
+        nextK.jam = resolvedJam;
+        patched = true;
+      }
+    }
+
+    if (patched) nextKasList[idx] = nextK;
   });
 
   const existingKasRefs = new Set<string>();
@@ -3066,6 +3242,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
     const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
     const tgl = s.tanggal || wibTime.toISOString().split('T')[0];
+    const jam = resolveDepositJamServer(s, txByRef.get(s.id));
     const nowIso = s.createdAt || new Date().toISOString();
     const nom = Number(s.nominal) || 0;
     const jlhHari = s.jumlahHari || Math.round(nom / 2000) || 1;
@@ -3083,9 +3260,11 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
           id: pId,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Pokok',
           keterangan: `Setoran Tabungan Pokok ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: pokokNom,
           saldoKasSetelah: 0,
@@ -3101,9 +3280,11 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
           id: zId,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Zakat',
           keterangan: `Setoran Tabungan Zakat ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: zakatNom,
           saldoKasSetelah: 0,
@@ -3119,9 +3300,11 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
           id: qId,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Qurban',
           keterangan: `Setoran Tabungan Qurban ${m.nama} (${jlhHari} Hari)`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: qurbanNom,
           saldoKasSetelah: 0,
@@ -3140,9 +3323,11 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
           id: uId,
           bukuKas: 'anggota',
           tanggal: tgl,
+          jam,
           kategori: 'Tabungan Bebas',
           keterangan: `Setoran Tunai ${m.nama}`,
           namaPenerima: m.nama,
+          memberId: m.id,
           tipe: 'masuk',
           nominal: nom,
           saldoKasSetelah: 0,
@@ -3198,24 +3383,30 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
 }
 
 let currentState = loadDatabase();
-const beforeBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
+const beforeBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}:${t.saldoSetelah || 0}`).join('|');
+const beforeBootKasMetaDigest = (currentState.kasList || []).map((k: any) => `${k.id}:${k.memberId || ''}:${k.jam || ''}:${k.saldoKasSetelah || 0}`).join('|');
 const beforeBootTxCount = (currentState.memberTransactions || []).length;
 const beforeBootKasCount = (currentState.kasList || []).length;
 const beforeBootDelTxCount = (currentState.deletedTransactionIds || []).length;
+const beforeBootDelKasCount = (currentState.deletedKasIds || []).length;
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
-const afterBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
+const afterBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}:${t.saldoSetelah || 0}`).join('|');
+const afterBootKasMetaDigest = (currentState.kasList || []).map((k: any) => `${k.id}:${k.memberId || ''}:${k.jam || ''}:${k.saldoKasSetelah || 0}`).join('|');
 const bootCbgChanged = beforeBootTxCbgDigest !== afterBootTxCbgDigest;
+const bootKasChanged = beforeBootKasMetaDigest !== afterBootKasMetaDigest;
 const bootDedupChanged =
   (currentState.memberTransactions || []).length !== beforeBootTxCount ||
   (currentState.kasList || []).length !== beforeBootKasCount ||
   (currentState.deletedTransactionIds || []).length !== beforeBootDelTxCount ||
-  startupRecon.addedTxCount > 0;
+  (currentState.deletedKasIds || []).length !== beforeBootDelKasCount ||
+  startupRecon.addedTxCount > 0 ||
+  bootKasChanged;
 const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
 if (startupMemRecon.migratedCount > 0 || bootCbgChanged || bootDedupChanged) {
-  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG normalized: ${bootCbgChanged}, Dedup/Setoran healed: ${bootDedupChanged} (addedTx: ${startupRecon.addedTxCount}).`);
+  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG/Saldo normalized: ${bootCbgChanged}, Dedup/Kas healed: ${bootDedupChanged} (addedTx: ${startupRecon.addedTxCount}).`);
   saveDatabase(currentState, { skipFirestore: !bootCbgChanged && !bootDedupChanged });
 }
 // Enforce 10-day chat retention on startup
@@ -4952,7 +5143,7 @@ async function startServer() {
 
         const mTxs = (currentState.memberTransactions || [])
           .filter((t: any) => t.memberId === m.id)
-          .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+          .sort(compareMemberTransactionsChronoServer);
         let runSaldo = 0;
         mTxs.forEach((t: any) => {
           runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);
