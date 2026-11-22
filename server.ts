@@ -27,6 +27,26 @@ if (!fs.existsSync(BACKUPS_DIR)) {
   fs.mkdirSync(BACKUPS_DIR, { recursive: true });
 }
 
+const isApprovalRoleServer = (role?: string | null): boolean =>
+  role === 'admin_approval' || role === 'admin_kelola' || role === 'admin_pembukuan';
+
+const isWriterRoleServer = (role?: string | null): boolean => role === 'admin_write';
+
+const isDirectExecutionRoleServer = (role?: string | null): boolean => role === 'super_admin';
+
+const canApproveByRoleServer = (requestedByRole?: string | null, approverRole?: string | null): boolean => {
+  if (!approverRole) return false;
+  if (approverRole === 'super_admin') return true;
+  if (isApprovalRoleServer(approverRole)) {
+    const reqRole = requestedByRole || 'admin_write';
+    return isWriterRoleServer(reqRole);
+  }
+  return false;
+};
+
+const getRequiredApproverLabelServer = (requestedByRole?: string | null): string =>
+  isApprovalRoleServer(requestedByRole) ? 'Super Admin' : 'Admin Approval atau Super Admin';
+
 // Default clean initial database state
 const getInitialState = () => ({
   profile: {
@@ -123,6 +143,7 @@ const getInitialState = () => ({
   kasList: [],
   penyaluranList: [],
   sedekahList: [],
+  pendingMutasiRequests: [],
   chatMessages: [],
   suratList: [],
   auditLogs: [],
@@ -1059,6 +1080,35 @@ function mergeServerState(current: any, incoming: any): any {
 
   const mergedSetoranArr = Array.from(setoranMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1));
   const mergedSedekahArr = Array.from(sedekahMap.values()).sort((a: any, b: any) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1));
+
+  // Pending Mutasi Requests (Penghapusan Mutasi, Koreksi Saldo, Bagi Hasil) with terminal status guard
+  const mutasiReqMap = new Map<string, any>();
+  (current.pendingMutasiRequests || []).forEach((r: any) => {
+    if (r && r.id) mutasiReqMap.set(r.id, { ...r });
+  });
+  (incoming.pendingMutasiRequests || []).forEach((r: any) => {
+    if (!r || !r.id) return;
+    const existing = mutasiReqMap.get(r.id);
+    if (!existing) {
+      mutasiReqMap.set(r.id, { ...r });
+    } else {
+      const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
+      const finalStatus = isTerminal ? existing.status : (r.status || existing.status);
+      mutasiReqMap.set(r.id, {
+        ...existing,
+        ...r,
+        status: finalStatus,
+        approvedBy: existing.approvedBy || r.approvedBy,
+        approvedByRole: existing.approvedByRole || r.approvedByRole,
+        approvedAt: existing.approvedAt || r.approvedAt,
+        rejectionReason: existing.rejectionReason || r.rejectionReason,
+      });
+    }
+  });
+  const mergedPendingMutasi = Array.from(mutasiReqMap.values()).sort((a: any, b: any) =>
+    String(b.requestedAt || '').localeCompare(String(a.requestedAt || ''))
+  );
+
   const normalizedTxArr = mergedTxList
     .map((tx: any) => ({
       ...tx,
@@ -1091,6 +1141,7 @@ function mergeServerState(current: any, incoming: any): any {
     kasList: mergedKasList.sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: mergedSedekahArr,
+    pendingMutasiRequests: mergedPendingMutasi,
     pengaturanBerbagi,
     categoriesKasKoperasi: mergedCategoriesKas,
     maintenanceLock: mergedMaintenanceLock,
@@ -1273,6 +1324,7 @@ function buildGeneralCorePayloadServer(state: any) {
     pengaturanBerbagi: state.pengaturanBerbagi || {},
     sedekahList: state.sedekahList || [],
     penyaluranList: state.penyaluranList || [],
+    pendingMutasiRequests: state.pendingMutasiRequests || [],
     maintenanceLock: state.maintenanceLock || { isLocked: false },
     accountNumberSchemaVersion: state.accountNumberSchemaVersion || 2,
     lastRunningNumber: state.lastRunningNumber || 769,
@@ -1767,6 +1819,7 @@ function buildStateSyncDigest(st: any): string {
       categoriesKasKoperasi: st.categoriesKasKoperasi || {},
       maintenanceLock: st.maintenanceLock || {},
       penyaluranList: st.penyaluranList || [],
+      pendingMutasiRequests: (st.pendingMutasiRequests || []).map((r: any) => `${r.id}:${r.status}:${r.approvedBy || ''}:${r.approvedAt || ''}`),
       usedAccountNumbers: st.usedAccountNumbers || [],
       usedMemberNumbers: st.usedMemberNumbers || [],
       deletedAdminIds: st.deletedAdminIds || [],
@@ -1969,6 +2022,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
           }
           if (Array.isArray(genData.penyaluranList)) {
             remoteSettingsPatch.penyaluranList = genData.penyaluranList;
+          }
+          if (Array.isArray(genData.pendingMutasiRequests)) {
+            remoteSettingsPatch.pendingMutasiRequests = genData.pendingMutasiRequests;
           }
           if (Array.isArray(genData.sedekahList)) {
             genData.sedekahList.forEach((s: any) => {
@@ -4536,35 +4592,88 @@ async function startServer() {
     }
   });
 
-  // Endpoints Buku Kas: Edit & Hapus (Dapat diajukan admin write, disetujui admin approval / super admin)
+  // Endpoints Buku Kas: Edit & Hapus (Berjenjang: Admin Write -> Admin Approval/Super Admin; Admin Approval -> Super Admin)
   app.post('/api/kas/update', (req: Request, res: Response) => {
     try {
-      const { entry, adminName } = req.body;
+      const { entry, adminName, adminRole } = req.body;
       if (!entry || !entry.id) return res.status(400).json({ error: 'Data entry kas tidak valid' });
+
+      const effectiveRole = adminRole || entry.requestedByRole || (entry.status === 'approved' ? 'super_admin' : 'admin_write');
+      if (!isDirectExecutionRoleServer(effectiveRole) && !isApprovalRoleServer(effectiveRole) && !isWriterRoleServer(effectiveRole)) {
+        return res.status(403).json({ error: 'Akses Ditolak: Anda tidak memiliki hak mengubah transaksi Buku Kas.' });
+      }
 
       const idx = (currentState.kasList || []).findIndex((k: any) => k.id === entry.id);
       if (idx === -1) return res.status(404).json({ error: 'Transaksi buku kas tidak ditemukan' });
 
-      currentState.kasList[idx] = { ...currentState.kasList[idx], ...entry };
+      const canDirect = isDirectExecutionRoleServer(effectiveRole);
+      const nextEntry = canDirect
+        ? {
+            ...currentState.kasList[idx],
+            ...entry,
+            status: 'approved',
+            pendingAction: undefined,
+            approvedBy: adminName || 'Super Admin',
+          }
+        : {
+            ...currentState.kasList[idx],
+            ...entry,
+            status: 'pending_approval',
+            pendingAction: 'update',
+            requestedBy: entry.requestedBy || adminName || 'Admin',
+            requestedByRole: effectiveRole,
+          };
+
+      currentState.kasList[idx] = nextEntry;
+      if (canDirect) {
+        recomputeKasRunningBalancesServer();
+      }
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-kas-edit-${Date.now()}`,
         timestamp: new Date().toISOString(),
         adminId: 'admin',
         adminNama: adminName || 'Admin Koperasi',
-        adminRole: entry.status === 'approved' ? 'super_admin' : 'admin_write',
-        action: entry.status === 'approved' ? 'Edit Transaksi Buku Kas' : 'Pengajuan Edit Buku Kas',
-        detail: `Mengedit transaksi kas [${entry.bukuKas}] ${entry.keterangan} (${entry.nominal}) - Status: ${entry.status}`,
+        adminRole: effectiveRole,
+        action: canDirect ? 'Edit Transaksi Buku Kas' : 'Pengajuan Edit Buku Kas',
+        detail: `${canDirect ? 'Mengedit' : 'Mengajukan edit'} transaksi kas [${nextEntry.bukuKas}] ${nextEntry.keterangan} (${nextEntry.nominal}) - Status: ${nextEntry.status}`,
         targetId: entry.id,
       });
 
       saveDatabase(currentState);
       broadcastStatePulse('updated');
-      res.json({ success: true, message: 'Transaksi kas berhasil diperbarui', entry: currentState.kasList[idx] });
+      res.json({ success: true, message: 'Transaksi kas berhasil diperbarui', entry: currentState.kasList[idx], state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal mengedit transaksi kas: ' + err.message });
     }
   });
+
+  function recomputeKasRunningBalancesServer() {
+    const recomputeType = (type: string) => {
+      const items = (currentState.kasList || [])
+        .filter((k: any) => k.bukuKas === type && !(currentState.deletedKasIds || []).includes(k.id))
+        .slice()
+        .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+      let run = 0;
+      const map = new Map<string, number>();
+      items.forEach((it: any) => {
+        if (it.status === 'approved') {
+          run = it.tipe === 'masuk' ? run + (Number(it.nominal) || 0) : Math.max(0, run - (Number(it.nominal) || 0));
+        }
+        map.set(it.id, run);
+      });
+      return map;
+    };
+    const mapAnggota = recomputeType('anggota');
+    const mapKoperasi = recomputeType('koperasi');
+    currentState.kasList = (currentState.kasList || []).map((k: any) => ({
+      ...k,
+      saldoKasSetelah:
+        k.bukuKas === 'anggota'
+          ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+          : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+    }));
+  }
 
   // Helper: Sinkronisasi penghapusan buku kas anggota terhadap mutasi, saldo simpanan anggota, dan saldo buku kas
   const syncMemberAndKasOnKasDelete = (deletedEntry: any) => {
@@ -4720,23 +4829,31 @@ async function startServer() {
 
   app.post('/api/kas/delete', (req: Request, res: Response) => {
     try {
-      const { id, adminName, isDirectDelete } = req.body;
+      const { id, adminName, adminRole, isDirectDelete } = req.body;
       if (!id) return res.status(400).json({ error: 'ID entry kas diperlukan' });
+
+      const effectiveRole = adminRole || (isDirectDelete ? 'super_admin' : 'admin_write');
+      if (!isDirectExecutionRoleServer(effectiveRole) && !isApprovalRoleServer(effectiveRole) && !isWriterRoleServer(effectiveRole)) {
+        return res.status(403).json({ error: 'Akses Ditolak: Anda tidak memiliki wewenang menghapus transaksi Buku Kas.' });
+      }
 
       const targetIdx = (currentState.kasList || []).findIndex((k: any) => k.id === id);
       if (targetIdx === -1) return res.status(404).json({ error: 'Transaksi kas tidak ditemukan' });
 
       const deletedEntry = currentState.kasList[targetIdx];
+      const canDirect = isDirectExecutionRoleServer(effectiveRole) && isDirectDelete !== false;
 
-      if (isDirectDelete) {
+      if (canDirect) {
         currentState.kasList.splice(targetIdx, 1);
         syncMemberAndKasOnKasDelete(deletedEntry);
       } else {
-        // Admin Write propose deletion
+        // Admin Write / Admin Approval wajib melalui antrean persetujuan berjenjang
         currentState.kasList[targetIdx] = {
           ...deletedEntry,
           status: 'pending_approval',
           pendingAction: 'delete',
+          requestedBy: adminName || 'Admin',
+          requestedByRole: effectiveRole,
         };
       }
 
@@ -4746,9 +4863,9 @@ async function startServer() {
         timestamp: new Date().toISOString(),
         adminId: 'admin',
         adminNama: adminName || 'Admin Koperasi',
-        adminRole: isDirectDelete ? 'super_admin' : 'admin_write',
-        action: isDirectDelete ? 'Hapus Transaksi Buku Kas & Koreksi Saldo' : 'Pengajuan Hapus Buku Kas',
-        detail: `${isDirectDelete ? 'Menghapus' : 'Mengajukan hapus'} transaksi kas [${deletedEntry?.bukuKas}] ${deletedEntry?.keterangan || id}`,
+        adminRole: effectiveRole,
+        action: canDirect ? 'Hapus Transaksi Buku Kas & Koreksi Saldo' : 'Pengajuan Hapus Buku Kas',
+        detail: `${canDirect ? 'Menghapus' : `Mengajukan hapus (${effectiveRole})`} transaksi kas [${deletedEntry?.bukuKas}] ${deletedEntry?.keterangan || id}`,
         targetId: id,
       });
 
@@ -4756,7 +4873,9 @@ async function startServer() {
       broadcastStatePulse('updated');
       res.json({
         success: true,
-        message: isDirectDelete ? 'Transaksi kas berhasil dihapus dan saldo dikoreksi' : 'Pengajuan hapus transaksi berhasil dikirim',
+        message: canDirect
+          ? 'Transaksi kas berhasil dihapus dan saldo dikoreksi'
+          : `Pengajuan hapus transaksi kas dikirim ke ${getRequiredApproverLabelServer(effectiveRole)}`,
         state: currentState,
       });
     } catch (err: any) {
@@ -4764,16 +4883,27 @@ async function startServer() {
     }
   });
 
-  // Endpoint: Pengesahan (Approval) Transaksi Kas oleh Admin Approval / Super Admin
+  // Endpoint: Pengesahan (Approval) Transaksi Kas Berjenjang
+  // Admin Write -> Admin Approval atau Super Admin
+  // Admin Approval -> Wajib Super Admin
   app.post('/api/kas/approve', (req: Request, res: Response) => {
     try {
-      const { id, isApproved, adminName } = req.body;
+      const { id, isApproved, adminName, adminRole } = req.body;
       if (!id) return res.status(400).json({ error: 'ID entry kas diperlukan' });
 
       const idx = (currentState.kasList || []).findIndex((k: any) => k.id === id);
       if (idx === -1) return res.status(404).json({ error: 'Transaksi kas tidak ditemukan' });
 
       const entry = currentState.kasList[idx];
+      const reqRole = entry.requestedByRole || 'admin_write';
+      const approverRole = adminRole || 'admin_approval';
+
+      if (!canApproveByRoleServer(reqRole, approverRole)) {
+        return res.status(403).json({
+          error: `Akses Ditolak: Pengajuan dari ${isApprovalRoleServer(reqRole) ? 'Admin Approval' : 'Admin'} wajib disetujui oleh ${getRequiredApproverLabelServer(reqRole)}.`,
+        });
+      }
+
       const prevAction = entry.pendingAction;
 
       if (isApproved) {
@@ -4781,12 +4911,140 @@ async function startServer() {
           currentState.kasList.splice(idx, 1);
           syncMemberAndKasOnKasDelete(entry);
         } else {
-          currentState.kasList[idx] = {
-            ...entry,
-            status: 'approved',
-            pendingAction: undefined,
-            approvedBy: adminName || 'Admin Approval',
-          };
+          const isGroupAnggotaCreate =
+            prevAction === 'create' &&
+            entry.referensiId &&
+            String(entry.referensiId).startsWith('KAS-ANG-');
+
+          const targetEntries = isGroupAnggotaCreate
+            ? (currentState.kasList || []).filter((k: any) => k.referensiId === entry.referensiId && k.status === 'pending_approval')
+            : [entry];
+          const approvedIds = new Set(targetEntries.map((t: any) => t.id));
+
+          currentState.kasList = (currentState.kasList || []).map((k: any) =>
+            approvedIds.has(k.id)
+              ? {
+                  ...k,
+                  status: 'approved',
+                  pendingAction: undefined,
+                  pendingAnggotaMeta: undefined,
+                  originalData: undefined,
+                  approvedBy: adminName || 'Admin Approval',
+                }
+              : k
+          );
+
+          // Terapkan metadata anggota yang tertunda saat persetujuan pengajuan input Buku Kas Anggota
+          const meta = entry.pendingAnggotaMeta;
+          if (prevAction === 'create' && meta?.memberId) {
+            const memIdx = (currentState.members || []).findIndex((m: any) => m.id === meta.memberId);
+            if (memIdx !== -1) {
+              const targetMember = currentState.members[memIdx];
+              const nowIso = new Date().toISOString();
+              const jamNow = entry.jam || new Date().toTimeString().slice(0, 5);
+              currentState.memberTransactions = currentState.memberTransactions || [];
+              currentState.sedekahList = currentState.sedekahList || [];
+
+              if (meta.subKategori === 'pokok') {
+                const pNom = Number(meta.nominalPokok) || 0;
+                const qNom = Number(meta.nominalQurban) || 0;
+                const zNom = Number(meta.nominalZakat) || 0;
+                const totalNom = pNom + qNom + zNom || Number(entry.nominal) || 0;
+                const jlhHari = meta.jumlahHari || Math.max(1, Math.round(totalNom / 2000));
+                const sign = entry.tipe === 'masuk' ? 1 : -1;
+                const upP = Math.max(0, (Number(targetMember.saldoPokok) || 0) + sign * pNom);
+                const upQ = Math.max(0, (Number(targetMember.saldoQurban) || 0) + sign * qNom);
+                const upZ = Math.max(0, (Number(targetMember.saldoZakatFitrah) || 0) + sign * zNom);
+                const upU = Number(targetMember.saldoUmum) || 0;
+                currentState.members[memIdx] = {
+                  ...targetMember,
+                  saldoPokok: upP,
+                  saldoQurban: upQ,
+                  saldoZakatFitrah: upZ,
+                  totalSimpanan: upP + upU + upQ + upZ,
+                  jumlahHariPokok: Math.floor(upP / (currentState.profile?.pembagianPokokHarian || 1000)),
+                };
+                if (!currentState.memberTransactions.some((t: any) => t.referensiId === entry.referensiId)) {
+                  currentState.memberTransactions.unshift({
+                    id: `tx-wajib-${Date.now()}`,
+                    memberId: targetMember.id,
+                    tanggal: entry.tanggal,
+                    jam: jamNow,
+                    keterangan: `${entry.tipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TABUNGAN POKOK (${jlhHari} HARI • 50% POKOK, 25% QURBAN, 25% ZAKAT)`,
+                    cbg: '93907',
+                    tipe: entry.tipe,
+                    nominal: totalNom,
+                    saldoSetelah: upP + upU,
+                    kategori: 'pokok',
+                    referensiId: entry.referensiId,
+                    jumlahHari: jlhHari,
+                  });
+                }
+              } else if (meta.subKategori === 'umum') {
+                const sign = entry.tipe === 'masuk' ? 1 : -1;
+                const upU = Math.max(0, (Number(targetMember.saldoUmum) || 0) + sign * (Number(entry.nominal) || 0));
+                const upP = Number(targetMember.saldoPokok) || 0;
+                const upQ = Number(targetMember.saldoQurban) || 0;
+                const upZ = Number(targetMember.saldoZakatFitrah) || 0;
+                currentState.members[memIdx] = {
+                  ...targetMember,
+                  saldoUmum: upU,
+                  totalSimpanan: upP + upU + upQ + upZ,
+                };
+                if (!currentState.memberTransactions.some((t: any) => t.referensiId === entry.referensiId)) {
+                  currentState.memberTransactions.unshift({
+                    id: `tx-umum-${Date.now()}`,
+                    memberId: targetMember.id,
+                    tanggal: entry.tanggal,
+                    jam: jamNow,
+                    keterangan: `${entry.tipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TUNAI TABUNGAN BEBAS`,
+                    cbg: '93740',
+                    tipe: entry.tipe,
+                    nominal: Number(entry.nominal) || 0,
+                    saldoSetelah: upP + upU,
+                    kategori: 'umum',
+                    referensiId: entry.referensiId,
+                  });
+                }
+              } else if (meta.kategori === 'sedekah') {
+                if (!currentState.memberTransactions.some((t: any) => t.referensiId === entry.referensiId)) {
+                  currentState.memberTransactions.unshift({
+                    id: `tx-sdk-${Date.now()}`,
+                    memberId: targetMember.id,
+                    tanggal: entry.tanggal,
+                    jam: jamNow,
+                    keterangan: entry.keterangan,
+                    cbg: '53532',
+                    tipe: entry.tipe,
+                    nominal: Number(entry.nominal) || 0,
+                    saldoSetelah: (Number(targetMember.saldoPokok) || 0) + (Number(targetMember.saldoUmum) || 0),
+                    kategori: 'sedekah',
+                    referensiId: entry.referensiId,
+                  });
+                }
+                if (entry.referensiId && !currentState.sedekahList.some((s: any) => s.id === entry.referensiId)) {
+                  currentState.sedekahList.unshift({
+                    id: entry.referensiId,
+                    tanggal: entry.tanggal,
+                    jam: jamNow,
+                    nominal: Number(entry.nominal) || 0,
+                    tipe: entry.tipe === 'masuk' ? 'penerimaan' : 'penyaluran',
+                    jenis: 'sedekah_umum',
+                    donaturMemberId: targetMember.id,
+                    donaturNama: targetMember.nama,
+                    keterangan: entry.keterangan || 'Sedekah Anggota via Buku Kas',
+                    status: 'approved',
+                    inputBy: entry.inputBy,
+                    requestedByRole: entry.requestedByRole,
+                    verifiedAt: nowIso,
+                    verifiedBy: adminName || 'Admin',
+                    createdAt: nowIso,
+                  });
+                }
+              }
+            }
+          }
+          recomputeKasRunningBalancesServer();
         }
       } else {
         if (prevAction === 'delete') {
@@ -4794,6 +5052,8 @@ async function startServer() {
             ...entry,
             status: 'approved',
             pendingAction: undefined,
+            requestedBy: undefined,
+            requestedByRole: undefined,
           };
         } else if (prevAction === 'update' && entry.originalData) {
           currentState.kasList[idx] = {
@@ -4802,23 +5062,42 @@ async function startServer() {
             status: 'approved',
             pendingAction: undefined,
             originalData: undefined,
+            requestedBy: undefined,
+            requestedByRole: undefined,
           };
         } else {
-          currentState.kasList[idx] = {
-            ...entry,
-            status: 'rejected',
-            pendingAction: undefined,
-          };
+          const isGroupAnggotaCreate =
+            prevAction === 'create' &&
+            entry.referensiId &&
+            String(entry.referensiId).startsWith('KAS-ANG-');
+          const rejectIds = new Set(
+            isGroupAnggotaCreate
+              ? (currentState.kasList || [])
+                  .filter((k: any) => k.referensiId === entry.referensiId && k.status === 'pending_approval')
+                  .map((k: any) => k.id)
+              : [entry.id]
+          );
+          currentState.kasList = (currentState.kasList || []).map((k: any) =>
+            rejectIds.has(k.id)
+              ? {
+                  ...k,
+                  status: 'rejected',
+                  pendingAction: undefined,
+                  pendingAnggotaMeta: undefined,
+                }
+              : k
+          );
         }
+        recomputeKasRunningBalancesServer();
       }
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-kas-app-${Date.now()}`,
         timestamp: new Date().toISOString(),
-        adminId: 'admin_approval',
+        adminId: approverRole,
         adminNama: adminName || 'Admin Approval',
-        adminRole: 'admin_approval',
+        adminRole: approverRole,
         action: isApproved ? 'Pengesahan Transaksi Kas' : 'Penolakan Transaksi Kas',
         detail: `${isApproved ? 'Mengesahkan' : 'Menolak'} ${prevAction === 'delete' ? 'penghapusan' : prevAction === 'update' ? 'perubahan' : 'input'} transaksi kas ${entry.keterangan}`,
         targetId: id,
@@ -5422,191 +5701,537 @@ async function startServer() {
     }
   });
 
-  // Dedicated Koreksi Saldo / Balance Adjustment Endpoint (Admin Write submits, Admin Approval / Super Admin approves)
+  // Helper: Rekalkulasi saldo simpanan & running history mutasi anggota
+  const syncMemberBalancesAndRunningHistoryServer = (affectedMemberIds: string[], forceZero: boolean) => {
+    affectedMemberIds.forEach((mId) => {
+      const mem = (currentState.members || []).find((m: any) => m.id === mId);
+      if (!mem) return;
+
+      if (forceZero) {
+        mem.saldoPokok = 0;
+        mem.saldoZakatFitrah = 0;
+        mem.saldoQurban = 0;
+        mem.saldoUmum = 0;
+        mem.totalSimpanan = 0;
+      } else {
+        const mTx = (currentState.memberTransactions || [])
+          .filter((tx: any) => tx.memberId === mId)
+          .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+        let p = 0, u = 0, z = 0, q = 0;
+        mTx.forEach((tx: any) => {
+          const nom = Number(tx.nominal) || 0;
+          const isKewajibanSplit =
+            tx.kategori === 'pokok' ||
+            String(tx.id).startsWith('tx-wajib-') ||
+            String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+            String(tx.keterangan || '').includes('50% Pokok');
+
+          if (tx.tipe === 'masuk') {
+            if (isKewajibanSplit) {
+              const pPart = Math.floor(nom * 0.5);
+              const qPart = Math.floor(nom * 0.25);
+              const zPart = nom - pPart - qPart;
+              p += pPart;
+              q += qPart;
+              z += zPart;
+            } else if (tx.kategori === 'qurban') {
+              q += nom;
+            } else if (tx.kategori === 'zakat') {
+              z += nom;
+            } else {
+              u += nom;
+            }
+          } else {
+            if (isKewajibanSplit) {
+              const pPart = Math.floor(nom * 0.5);
+              const qPart = Math.floor(nom * 0.25);
+              const zPart = nom - pPart - qPart;
+              p = Math.max(0, p - pPart);
+              q = Math.max(0, q - qPart);
+              z = Math.max(0, z - zPart);
+            } else if (tx.kategori === 'qurban') {
+              q = Math.max(0, q - nom);
+            } else if (tx.kategori === 'zakat') {
+              z = Math.max(0, z - nom);
+            } else {
+              u = Math.max(0, u - nom);
+            }
+          }
+          tx.saldoSetelah = p + u;
+        });
+
+        mem.saldoPokok = p;
+        mem.saldoUmum = u;
+        mem.saldoZakatFitrah = z;
+        mem.saldoQurban = q;
+        mem.totalSimpanan = p + u + z + q;
+        mem.jumlahHariPokok = Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000));
+      }
+    });
+  };
+
+  // Helper: Eksekusi Koreksi Saldo Anggota + Buku Kas Anggota
+  const executeBalanceAdjustmentServer = (params: {
+    targetIds: string[];
+    nominalNum: number;
+    tipe: string;
+    jenisTabungan: string;
+    jumlahHari?: number;
+    keterangan: string;
+    inputBy: string;
+    approvedBy: string;
+  }) => {
+    const { targetIds, nominalNum, tipe, jenisTabungan, jumlahHari, keterangan, inputBy, approvedBy } = params;
+    const now = new Date();
+    const tgl = now.toISOString().split('T')[0];
+    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const targetIdSet = new Set(targetIds);
+    const newTransactions: any[] = [];
+    let totalDana = 0;
+    const hari = jumlahHari || Math.max(1, Math.round(nominalNum / (currentState.profile?.biayaWajibHarian || 2000)));
+    const tipeVal = tipe === 'masuk' ? 'masuk' : 'keluar';
+
+    currentState.members = (currentState.members || []).map((m: any) => {
+      if (!targetIdSet.has(m.id)) return m;
+
+      let p = Number(m.saldoPokok) || 0;
+      let u = Number(m.saldoUmum) || 0;
+      let z = Number(m.saldoZakatFitrah) || 0;
+      let q = Number(m.saldoQurban) || 0;
+
+      const pNom = Math.floor(nominalNum * 0.5);
+      const qNom = Math.floor(nominalNum * 0.25);
+      const zNom = nominalNum - pNom - qNom;
+
+      if (jenisTabungan === 'pokok') {
+        if (tipeVal === 'masuk') {
+          p += pNom;
+          q += qNom;
+          z += zNom;
+        } else {
+          p = Math.max(0, p - pNom);
+          q = Math.max(0, q - qNom);
+          z = Math.max(0, z - zNom);
+        }
+      } else {
+        if (tipeVal === 'masuk') u += nominalNum;
+        else u = Math.max(0, u - nominalNum);
+      }
+
+      totalDana += nominalNum;
+      const totalSimpanan = p + u + z + q;
+      const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
+      const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
+
+      newTransactions.push({
+        id: txId,
+        memberId: m.id,
+        tanggal: tgl,
+        jam,
+        keterangan:
+          jenisTabungan === 'pokok'
+            ? `KOREKSI TABUNGAN POKOK (${hari} Hari • 50% Pokok, 25% Qurban, 25% Zakat): ${keterangan || 'Penyesuaian Saldo'}`
+            : `KOREKSI SALDO UMUM: ${keterangan || 'Penyesuaian Saldo'}`,
+        cbg: jenisTabungan === 'pokok' ? '93907' : '93740',
+        tipe: tipeVal,
+        nominal: nominalNum,
+        saldoSetelah: p + u,
+        kategori: jenisTabungan === 'pokok' ? 'pokok' : 'umum',
+        referensiId: refId,
+        jumlahHari: jenisTabungan === 'pokok' ? hari : undefined,
+      });
+
+      return {
+        ...m,
+        saldoPokok: p,
+        saldoUmum: u,
+        saldoZakatFitrah: z,
+        saldoQurban: q,
+        totalSimpanan,
+        jumlahHariPokok: Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000)),
+      };
+    });
+
+    currentState.memberTransactions = [...newTransactions, ...(currentState.memberTransactions || [])];
+
+    const kasId = `kas-adj-${Date.now()}`;
+    currentState.kasList = currentState.kasList || [];
+    const singleMember = targetIds.length === 1 ? (currentState.members || []).find((m: any) => m.id === targetIds[0]) : null;
+    const targetLabel = singleMember ? singleMember.nama : `Koreksi Saldo Massal (${targetIds.length} Anggota)`;
+    const ketPrefix = singleMember ? `a/n ${singleMember.nama}` : `(${targetIds.length} Anggota)`;
+
+    if (jenisTabungan === 'pokok') {
+      const totalPokokKas = Math.floor(totalDana * 0.5);
+      const totalQurbanKas = Math.floor(totalDana * 0.25);
+      const totalZakatKas = totalDana - totalPokokKas - totalQurbanKas;
+
+      currentState.kasList.unshift(
+        {
+          id: `${kasId}-p`,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Pokok',
+          keterangan: `Koreksi Tabungan Pokok 50% ${ketPrefix}: ${keterangan || ''}`,
+          namaPenerima: targetLabel,
+          memberId: singleMember?.id,
+          tipe: tipeVal,
+          nominal: totalPokokKas,
+          saldoKasSetelah: 0,
+          inputBy,
+          approvedBy,
+          status: 'approved',
+          createdAt: now.toISOString(),
+        },
+        {
+          id: `${kasId}-q`,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Qurban',
+          keterangan: `Koreksi Tabungan Qurban 25% ${ketPrefix}: ${keterangan || ''}`,
+          namaPenerima: targetLabel,
+          memberId: singleMember?.id,
+          tipe: tipeVal,
+          nominal: totalQurbanKas,
+          saldoKasSetelah: 0,
+          inputBy,
+          approvedBy,
+          status: 'approved',
+          createdAt: now.toISOString(),
+        },
+        {
+          id: `${kasId}-z`,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Zakat',
+          keterangan: `Koreksi Tabungan Zakat 25% ${ketPrefix}: ${keterangan || ''}`,
+          namaPenerima: targetLabel,
+          memberId: singleMember?.id,
+          tipe: tipeVal,
+          nominal: totalZakatKas,
+          saldoKasSetelah: 0,
+          inputBy,
+          approvedBy,
+          status: 'approved',
+          createdAt: now.toISOString(),
+        }
+      );
+    } else {
+      currentState.kasList.unshift({
+        id: kasId,
+        bukuKas: 'anggota',
+        tanggal: tgl,
+        jam,
+        kategori: 'Tabungan Bebas',
+        keterangan: `Koreksi Saldo ${tipeVal === 'masuk' ? 'Masuk' : 'Keluar'} ${ketPrefix}: ${keterangan || ''}`,
+        namaPenerima: targetLabel,
+        memberId: singleMember?.id,
+        tipe: tipeVal,
+        nominal: totalDana,
+        saldoKasSetelah: 0,
+        inputBy,
+        approvedBy,
+        status: 'approved',
+        createdAt: now.toISOString(),
+      });
+    }
+
+    recomputeKasRunningBalancesServer();
+    return { kasId, totalDana, count: newTransactions.length };
+  };
+
+  // Helper: Eksekusi Bagi Hasil Usaha (SHU)
+  const executeBagiHasilServer = (params: {
+    targetIds: string[];
+    persen: number;
+    bukuKasSumber: 'anggota' | 'koperasi';
+    tujuanKredit: 'umum' | 'pokok';
+    keterangan: string;
+    inputBy: string;
+    approvedBy: string;
+  }) => {
+    const { targetIds, persen, bukuKasSumber, tujuanKredit, keterangan, inputBy, approvedBy } = params;
+    const now = new Date();
+    const tgl = now.toISOString().split('T')[0];
+    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const targetSet = new Set(targetIds);
+    const sumber = bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi';
+    const tujuan = tujuanKredit === 'pokok' ? 'pokok' : 'umum';
+    const shuRefId = `SHU-${Date.now().toString().slice(-6)}`;
+    const cbgCode =
+      tujuan === 'umum'
+        ? (sumber === 'anggota' ? '114114' : '114117')
+        : (sumber === 'anggota' ? '114514' : '114517');
+
+    const newTxs: any[] = [];
+    let totalBagi = 0;
+
+    currentState.members = (currentState.members || []).map((m: any) => {
+      if (!targetSet.has(m.id) || (Number(m.saldoPokok) || 0) <= 0) return m;
+      const part = Math.round((Number(m.saldoPokok) || 0) * (persen / 100));
+      if (part <= 0) return m;
+      totalBagi += part;
+      const upP = tujuan === 'pokok' ? (Number(m.saldoPokok) || 0) + part : (Number(m.saldoPokok) || 0);
+      const upU = tujuan === 'umum' ? (Number(m.saldoUmum) || 0) + part : (Number(m.saldoUmum) || 0);
+      newTxs.push({
+        id: `tx-shu-${Date.now()}-${m.id.slice(-4)}`,
+        memberId: m.id,
+        tanggal: tgl,
+        jam,
+        keterangan: `BAGI HASIL ${persen}% DARI POKOK (Rp ${Number(m.saldoPokok).toLocaleString('id-ID')}): ${keterangan}`,
+        cbg: cbgCode,
+        tipe: 'masuk',
+        nominal: part,
+        saldoSetelah: upP + upU,
+        kategori: tujuan,
+        referensiId: shuRefId,
+      });
+      return {
+        ...m,
+        saldoPokok: upP,
+        saldoUmum: upU,
+        totalSimpanan: upP + upU + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0),
+        jumlahHariPokok: Math.floor(upP / (currentState.profile?.pembagianPokokHarian || 1000)),
+      };
+    });
+
+    if (totalBagi > 0) {
+      currentState.memberTransactions = [...newTxs, ...(currentState.memberTransactions || [])];
+      currentState.kasList = [
+        {
+          id: `kas-shu-${Date.now()}`,
+          bukuKas: sumber,
+          tanggal: tgl,
+          jam,
+          kategori: 'Penyaluran Bagi Hasil / SHU',
+          keterangan: `Pembagian Hasil ${persen}% Tabungan Pokok ke ${newTxs.length} Anggota: ${keterangan}`,
+          namaPenerima: `Bagi Hasil ${newTxs.length} Anggota Koperasi`,
+          referensiId: shuRefId,
+          tipe: 'keluar',
+          nominal: totalBagi,
+          saldoKasSetelah: 0,
+          inputBy,
+          approvedBy,
+          status: 'approved',
+          createdAt: now.toISOString(),
+        },
+        ...(currentState.kasList || []),
+      ];
+      recomputeKasRunningBalancesServer();
+    }
+    return { count: newTxs.length, totalBagi };
+  };
+
+  // Helper: Eksekusi Penghapusan Mutasi Selektif + Sinkronisasi Saldo & Buku Kas
+  const executeSelectiveDeleteServer = (params: {
+    wilayah?: string;
+    memberId?: string;
+    transactionIds?: string[];
+    resetBalance?: boolean;
+  }) => {
+    const { wilayah, memberId, transactionIds, resetBalance } = params;
+    let removedCount = 0;
+    const affectedMemberIdSet = new Set<string>();
+    currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
+    currentState.deletedKasIds = currentState.deletedKasIds || [];
+    currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
+    const newlyDeletedIds: string[] = [];
+    const deletedTxs: any[] = [];
+
+    if (Array.isArray(transactionIds) && transactionIds.length > 0) {
+      const idSet = new Set(transactionIds);
+      currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
+        if (idSet.has(tx.id)) {
+          removedCount++;
+          deletedTxs.push(tx);
+          newlyDeletedIds.push(tx.id);
+          if (tx.memberId) affectedMemberIdSet.add(tx.memberId);
+          return false;
+        }
+        return true;
+      });
+    } else if (memberId && memberId !== 'semua') {
+      affectedMemberIdSet.add(memberId);
+      currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
+        if (tx.memberId === memberId) {
+          removedCount++;
+          deletedTxs.push(tx);
+          newlyDeletedIds.push(tx.id);
+          return false;
+        }
+        return true;
+      });
+    } else if (wilayah && wilayah !== 'semua') {
+      const memberIdsInWilayah = new Set(
+        (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id)
+      );
+      memberIdsInWilayah.forEach((id) => affectedMemberIdSet.add(String(id)));
+      currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
+        if (memberIdsInWilayah.has(tx.memberId)) {
+          removedCount++;
+          deletedTxs.push(tx);
+          newlyDeletedIds.push(tx.id);
+          return false;
+        }
+        return true;
+      });
+    } else {
+      removedCount = (currentState.memberTransactions || []).length;
+      deletedTxs.push(...(currentState.memberTransactions || []));
+      (currentState.memberTransactions || []).forEach((tx: any) => newlyDeletedIds.push(tx.id));
+      (currentState.members || []).forEach((m: any) => affectedMemberIdSet.add(m.id));
+      currentState.memberTransactions = [];
+    }
+
+    newlyDeletedIds.forEach((id) => {
+      if (!currentState.deletedTransactionIds.includes(id)) {
+        currentState.deletedTransactionIds.push(id);
+      }
+    });
+
+    const deletedRefIds = new Set<string>();
+    const deletedTxIdSet = new Set<string>(newlyDeletedIds);
+    const deletedTsTokens = new Set<string>();
+
+    deletedTxs.forEach((tx: any) => {
+      if (tx.referensiId) {
+        deletedRefIds.add(tx.referensiId);
+        if (!currentState.deletedSetoranIds.includes(tx.referensiId)) {
+          currentState.deletedSetoranIds.push(tx.referensiId);
+        }
+        const depTxId = `tx-dep-${tx.referensiId}`;
+        if (!currentState.deletedTransactionIds.includes(depTxId)) {
+          currentState.deletedTransactionIds.push(depTxId);
+        }
+      }
+      const tsMatch = String(tx.id).match(/(\d{10,})/);
+      if (tsMatch) deletedTsTokens.add(tsMatch[1]);
+    });
+
+    if (deletedRefIds.size > 0 || deletedTxIdSet.size > 0) {
+      currentState.setoranList = (currentState.setoranList || []).filter((s: any) => {
+        if (deletedRefIds.has(s.id) || deletedTxIdSet.has(s.id)) {
+          if (!currentState.deletedSetoranIds.includes(s.id)) {
+            currentState.deletedSetoranIds.push(s.id);
+          }
+          return false;
+        }
+        return true;
+      });
+    }
+
+    currentState.sedekahList = (currentState.sedekahList || []).filter(
+      (sdk: any) => !(deletedRefIds.has(sdk.id) || deletedTxIdSet.has(sdk.id))
+    );
+
+    const newlyDeletedKasIds: string[] = [];
+    currentState.kasList = (currentState.kasList || []).filter((k: any) => {
+      if (deletedTxIdSet.has(k.id)) {
+        newlyDeletedKasIds.push(k.id);
+        return false;
+      }
+      if (k.referensiId && (deletedRefIds.has(k.referensiId) || deletedTxIdSet.has(k.referensiId))) {
+        newlyDeletedKasIds.push(k.id);
+        return false;
+      }
+      const kTsMatch = String(k.id).match(/(\d{10,})/);
+      if (kTsMatch && deletedTsTokens.has(kTsMatch[1])) {
+        newlyDeletedKasIds.push(k.id);
+        return false;
+      }
+      return true;
+    });
+
+    newlyDeletedKasIds.forEach((id) => {
+      if (!currentState.deletedKasIds.includes(id)) {
+        currentState.deletedKasIds.push(id);
+      }
+    });
+
+    recomputeKasRunningBalancesServer();
+
+    let affectedIds: string[] = Array.from(affectedMemberIdSet);
+    if (affectedIds.length === 0) {
+      if (memberId && memberId !== 'semua') {
+        affectedIds = [memberId];
+      } else if (wilayah && wilayah !== 'semua') {
+        affectedIds = (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id);
+      } else {
+        affectedIds = (currentState.members || []).map((m: any) => m.id);
+      }
+    }
+
+    syncMemberBalancesAndRunningHistoryServer(affectedIds, !!resetBalance);
+    return { removedCount, newlyDeletedIds, affectedIds };
+  };
+
+  // Dedicated Koreksi Saldo / Balance Adjustment Endpoint (Eksekusi langsung hanya Super Admin)
   app.post('/api/balance/adjust', (req: Request, res: Response) => {
     try {
-      const { targetIds, nominal, tipe, jenisTabungan, keterangan, adminName, password, isDirectApproval = true } = req.body;
+      const { targetIds, nominal, tipe, jenisTabungan, jumlahHari, keterangan, adminName, adminRole, password, isDirectApproval = true } = req.body;
       const nominalNum = Number(nominal);
       if (!Array.isArray(targetIds) || targetIds.length === 0 || !nominalNum || nominalNum <= 0) {
         return res.status(400).json({ error: 'Parameter koreksi saldo tidak lengkap atau nominal tidak valid' });
       }
 
-      // Validasi password super admin jika disertakan
+      if (adminRole && !isDirectExecutionRoleServer(adminRole)) {
+        return res.status(403).json({
+          error: 'Akses Ditolak: Penyesuaian saldo oleh Admin Write / Admin Approval harus diajukan melalui antrean persetujuan.',
+        });
+      }
+      if (!isDirectApproval) {
+        return res.status(403).json({
+          error: 'Akses Ditolak: Gunakan alur pengajuan persetujuan untuk koreksi saldo non-langsung.',
+        });
+      }
+
       if (password) {
         const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
-        const validPasswords = new Set([
-          ...superAdmins.map((a: any) => a.password),
-          ...currentState.admins.map((a: any) => a.password),
-          'Abieza88',
-          'ciganea',
-          'admin123',
-          'superadmin',
-        ].filter(Boolean));
+        const validPasswords = new Set(
+          [
+            ...superAdmins.map((a: any) => a.password),
+            ...currentState.admins.map((a: any) => a.password),
+            'Abieza88',
+            'ciganea',
+            'admin123',
+            'superadmin',
+          ].filter(Boolean)
+        );
 
         if (!validPasswords.has(password.trim())) {
           return res.status(403).json({ error: 'Password Super Admin salah!' });
         }
       }
 
-      const now = new Date();
-      const tgl = now.toISOString().split('T')[0];
-      const jam = now.toTimeString().split(' ')[0].slice(0, 5);
-      const targetIdSet = new Set(targetIds);
-      const newTransactions: any[] = [];
-      let totalDana = 0;
-
-      currentState.members = (currentState.members || []).map((m: any) => {
-        if (!targetIdSet.has(m.id)) return m;
-
-        let p = Number(m.saldoPokok) || 0;
-        let u = Number(m.saldoUmum) || 0;
-        let z = Number(m.saldoZakatFitrah) || 0;
-        let q = Number(m.saldoQurban) || 0;
-
-        const pNom = Math.floor(nominalNum * 0.5);
-        const qNom = Math.floor(nominalNum * 0.25);
-        const zNom = nominalNum - pNom - qNom;
-
-        if (jenisTabungan === 'pokok') {
-          if (tipe === 'masuk') {
-            p += pNom;
-            q += qNom;
-            z += zNom;
-          } else {
-            p = Math.max(0, p - pNom);
-            q = Math.max(0, q - qNom);
-            z = Math.max(0, z - zNom);
-          }
-        } else {
-          if (tipe === 'masuk') u += nominalNum;
-          else u = Math.max(0, u - nominalNum);
-        }
-
-        totalDana += nominalNum;
-        const totalSimpanan = p + u + z + q;
-        const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
-
-        newTransactions.push({
-          id: txId,
-          memberId: m.id,
-          tanggal: tgl,
-          jam,
-          keterangan: jenisTabungan === 'pokok'
-            ? `KOREKSI TABUNGAN POKOK (50% Pokok, 25% Qurban, 25% Zakat): ${keterangan || 'Penyesuaian Saldo'}`
-            : `KOREKSI SALDO UMUM: ${keterangan || 'Penyesuaian Saldo'}`,
-          cbg: jenisTabungan === 'pokok' ? '93907' : '93740',
-          tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
-          nominal: nominalNum,
-          saldoSetelah: p + u,
-          kategori: jenisTabungan === 'pokok' ? 'pokok' : 'umum',
-          referensiId: `ADJ-${Date.now().toString().slice(-6)}`,
-        });
-
-        return {
-          ...m,
-          saldoPokok: p,
-          saldoUmum: u,
-          saldoZakatFitrah: z,
-          saldoQurban: q,
-          totalSimpanan,
-          jumlahHariPokok: Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000)),
-        };
+      const result = executeBalanceAdjustmentServer({
+        targetIds,
+        nominalNum,
+        tipe,
+        jenisTabungan,
+        jumlahHari,
+        keterangan,
+        inputBy: adminName || 'Super Admin',
+        approvedBy: adminName || 'Super Admin',
       });
-
-      currentState.memberTransactions = [...newTransactions, ...(currentState.memberTransactions || [])];
-
-      // Entri penyeimbang di Buku Kas Anggota
-      const kasId = `kas-adj-${Date.now()}`;
-      currentState.kasList = currentState.kasList || [];
-      const singleMember = targetIds.length === 1 ? (currentState.members || []).find((m: any) => m.id === targetIds[0]) : null;
-      const targetLabel = singleMember ? singleMember.nama : `Koreksi Saldo Massal (${targetIds.length} Anggota)`;
-      const ketPrefix = singleMember ? `a/n ${singleMember.nama}` : `(${targetIds.length} Anggota)`;
-
-      if (jenisTabungan === 'pokok') {
-        const totalPokokKas = Math.floor(totalDana * 0.5);
-        const totalQurbanKas = Math.floor(totalDana * 0.25);
-        const totalZakatKas = totalDana - totalPokokKas - totalQurbanKas;
-
-        currentState.kasList.unshift(
-          {
-            id: `${kasId}-p`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Pokok',
-            keterangan: `Koreksi Tabungan Pokok 50% ${ketPrefix}: ${keterangan || ''}`,
-            namaPenerima: targetLabel,
-            memberId: singleMember?.id,
-            tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
-            nominal: totalPokokKas,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Super Admin',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          },
-          {
-            id: `${kasId}-q`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Qurban',
-            keterangan: `Koreksi Tabungan Qurban 25% ${ketPrefix}: ${keterangan || ''}`,
-            namaPenerima: targetLabel,
-            memberId: singleMember?.id,
-            tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
-            nominal: totalQurbanKas,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Super Admin',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          },
-          {
-            id: `${kasId}-z`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Zakat',
-            keterangan: `Koreksi Tabungan Zakat 25% ${ketPrefix}: ${keterangan || ''}`,
-            namaPenerima: targetLabel,
-            memberId: singleMember?.id,
-            tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
-            nominal: totalZakatKas,
-            saldoKasSetelah: 0,
-            inputBy: adminName || 'Super Admin',
-            status: 'approved',
-            createdAt: now.toISOString(),
-          }
-        );
-      } else {
-        currentState.kasList.unshift({
-          id: kasId,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          kategori: 'Tabungan Bebas',
-          keterangan: `Koreksi Saldo ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} ${ketPrefix}: ${keterangan || ''}`,
-          namaPenerima: targetLabel,
-          memberId: singleMember?.id,
-          tipe: tipe === 'masuk' ? 'masuk' : 'keluar',
-          nominal: totalDana,
-          saldoKasSetelah: 0,
-          inputBy: adminName || 'Super Admin',
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
-      }
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-adj-${Date.now()}`,
-        timestamp: now.toISOString(),
-        adminId: isDirectApproval ? 'super_admin' : 'admin_write',
-        adminNama: adminName || (isDirectApproval ? 'Super Admin' : 'Admin Write'),
-        adminRole: (isDirectApproval ? 'super_admin' : 'admin_write') as any,
-        action: isDirectApproval ? 'Koreksi Saldo Anggota' : 'Pengajuan Koreksi Saldo (Admin Write)',
-        detail: `${isDirectApproval ? 'Koreksi' : 'Pengajuan koreksi'} saldo ${tipe} (${jenisTabungan}) senilai Rp ${nominalNum.toLocaleString('id-ID')} ke ${targetIds.length} anggota. Ket: "${keterangan}"`,
-        targetId: kasId,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Koreksi Saldo Anggota',
+        detail: `Koreksi saldo ${tipe} (${jenisTabungan}) senilai Rp ${nominalNum.toLocaleString('id-ID')} ke ${targetIds.length} anggota. Ket: "${keterangan}"`,
+        targetId: result.kasId,
       });
 
       saveDatabase(currentState);
       broadcastStatePulse('updated');
-      res.json({ success: true, count: targetIds.length, totalDana, state: currentState });
+      res.json({ success: true, count: targetIds.length, totalDana: result.totalDana, state: currentState });
     } catch (err: any) {
       console.error('Error in /api/balance/adjust:', err);
       res.status(500).json({ error: 'Gagal memproses koreksi saldo: ' + (err.message || 'Server error') });
@@ -5738,266 +6363,40 @@ async function startServer() {
     }
   });
 
-  // Endpoint: Hapus Transaksi Anggota Selektif (Hanya Super Admin, Pilih Wilayah/Anggota, Masukan Alasan & Password)
+  // Endpoint: Hapus Transaksi Anggota Selektif (Eksekusi langsung hanya Super Admin)
   app.post('/api/transactions/delete-selective', (req: Request, res: Response) => {
     try {
-      const { adminName, wilayah, memberId, transactionIds, resetBalance, password, alasan } = req.body;
+      const { adminName, adminRole, wilayah, memberId, transactionIds, resetBalance, password, alasan } = req.body;
 
-      // Verification: Super Admin password
+      if (adminRole && !isDirectExecutionRoleServer(adminRole)) {
+        return res.status(403).json({
+          error: 'Akses Ditolak: Penghapusan mutasi anggota oleh Admin Write / Admin Approval harus melalui antrean persetujuan.',
+        });
+      }
+
       const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
-      const validPasswords = new Set([
-        ...superAdmins.map((a: any) => a.password),
-        ...(currentState.admins || []).map((a: any) => a.password),
-        'Abieza88',
-        'ciganea',
-        'admin123',
-        'superadmin',
-        'admin',
-      ].filter(Boolean).map((p: any) => String(p).trim()));
+      const validPasswords = new Set(
+        [
+          ...superAdmins.map((a: any) => a.password),
+          ...(currentState.admins || []).map((a: any) => a.password),
+          'Abieza88',
+          'ciganea',
+          'admin123',
+          'superadmin',
+          'admin',
+        ].filter(Boolean).map((p: any) => String(p).trim())
+      );
 
       if (password && !validPasswords.has(String(password).trim())) {
         return res.status(403).json({ error: 'Password Super Admin salah atau tidak sesuai!' });
       }
 
-      let removedCount = 0;
-      const affectedMemberIdSet = new Set<string>();
-      currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
-      currentState.deletedKasIds = currentState.deletedKasIds || [];
-      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
-      const newlyDeletedIds: string[] = [];
-      const deletedTxs: any[] = [];
-
-      if (Array.isArray(transactionIds) && transactionIds.length > 0) {
-        const idSet = new Set(transactionIds);
-        currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
-          if (idSet.has(tx.id)) {
-            removedCount++;
-            deletedTxs.push(tx);
-            newlyDeletedIds.push(tx.id);
-            if (tx.memberId) affectedMemberIdSet.add(tx.memberId);
-            return false;
-          }
-          return true;
-        });
-      } else if (memberId && memberId !== 'semua') {
-        affectedMemberIdSet.add(memberId);
-        currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
-          if (tx.memberId === memberId) {
-            removedCount++;
-            deletedTxs.push(tx);
-            newlyDeletedIds.push(tx.id);
-            return false;
-          }
-          return true;
-        });
-      } else if (wilayah && wilayah !== 'semua') {
-        const memberIdsInWilayah = new Set(
-          (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id)
-        );
-        memberIdsInWilayah.forEach((id) => affectedMemberIdSet.add(String(id)));
-        currentState.memberTransactions = (currentState.memberTransactions || []).filter((tx: any) => {
-          if (memberIdsInWilayah.has(tx.memberId)) {
-            removedCount++;
-            deletedTxs.push(tx);
-            newlyDeletedIds.push(tx.id);
-            return false;
-          }
-          return true;
-        });
-      } else {
-        removedCount = (currentState.memberTransactions || []).length;
-        deletedTxs.push(...(currentState.memberTransactions || []));
-        (currentState.memberTransactions || []).forEach((tx: any) => newlyDeletedIds.push(tx.id));
-        (currentState.members || []).forEach((m: any) => affectedMemberIdSet.add(m.id));
-        currentState.memberTransactions = [];
-      }
-
-      newlyDeletedIds.forEach((id) => {
-        if (!currentState.deletedTransactionIds.includes(id)) {
-          currentState.deletedTransactionIds.push(id);
-        }
+      const { removedCount, newlyDeletedIds, affectedIds } = executeSelectiveDeleteServer({
+        wilayah,
+        memberId,
+        transactionIds,
+        resetBalance,
       });
-
-      // 1. SINKRONISASI BUKU KAS & SETORAN PADA PENGHAPUSAN TRANSAKSI
-      const deletedRefIds = new Set<string>();
-      const deletedTxIdSet = new Set<string>(newlyDeletedIds);
-      const deletedTsTokens = new Set<string>();
-
-      deletedTxs.forEach((tx: any) => {
-        if (tx.referensiId) {
-          deletedRefIds.add(tx.referensiId);
-          if (!currentState.deletedSetoranIds.includes(tx.referensiId)) {
-            currentState.deletedSetoranIds.push(tx.referensiId);
-          }
-          const depTxId = `tx-dep-${tx.referensiId}`;
-          if (!currentState.deletedTransactionIds.includes(depTxId)) {
-            currentState.deletedTransactionIds.push(depTxId);
-          }
-        }
-        const tsMatch = String(tx.id).match(/(\d{10,})/);
-        if (tsMatch) {
-          deletedTsTokens.add(tsMatch[1]);
-        }
-      });
-
-      // Hapus setoran terkait agar tidak membangkitkan transaksi kembali
-      if (deletedRefIds.size > 0 || deletedTxIdSet.size > 0) {
-        currentState.setoranList = (currentState.setoranList || []).filter((s: any) => {
-          if (deletedRefIds.has(s.id) || deletedTxIdSet.has(s.id)) {
-            if (!currentState.deletedSetoranIds.includes(s.id)) {
-              currentState.deletedSetoranIds.push(s.id);
-            }
-            return false;
-          }
-          return true;
-        });
-      }
-
-      // Hapus sedekah terkait jika ada
-      currentState.sedekahList = (currentState.sedekahList || []).filter((sdk: any) => {
-        if (deletedRefIds.has(sdk.id) || deletedTxIdSet.has(sdk.id)) {
-          return false;
-        }
-        return true;
-      });
-
-      // Hapus transaksi pada Buku Kas Anggota dan Buku Kas Koperasi yang berkorespondensi
-      const newlyDeletedKasIds: string[] = [];
-      currentState.kasList = (currentState.kasList || []).filter((k: any) => {
-        if (deletedTxIdSet.has(k.id)) {
-          newlyDeletedKasIds.push(k.id);
-          return false;
-        }
-        if (k.referensiId && (deletedRefIds.has(k.referensiId) || deletedTxIdSet.has(k.referensiId))) {
-          newlyDeletedKasIds.push(k.id);
-          return false;
-        }
-        const kTsMatch = String(k.id).match(/(\d{10,})/);
-        if (kTsMatch && deletedTsTokens.has(kTsMatch[1])) {
-          newlyDeletedKasIds.push(k.id);
-          return false;
-        }
-        return true;
-      });
-
-      newlyDeletedKasIds.forEach((id) => {
-        if (!currentState.deletedKasIds.includes(id)) {
-          currentState.deletedKasIds.push(id);
-        }
-      });
-
-      // Recompute running saldoKasSetelah pada buku kas anggota & koperasi
-      const recomputeKas = (type: string) => {
-        const items = (currentState.kasList || [])
-          .filter((k: any) => k.bukuKas === type && !currentState.deletedKasIds.includes(k.id))
-          .slice()
-          .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
-        let run = 0;
-        const map = new Map<string, number>();
-        items.forEach((it: any) => {
-          if (it.status === 'approved') {
-            run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
-          }
-          map.set(it.id, run);
-        });
-        return map;
-      };
-      const mapAng = recomputeKas('anggota');
-      const mapKop = recomputeKas('koperasi');
-      currentState.kasList = (currentState.kasList || []).map((k: any) => ({
-        ...k,
-        saldoKasSetelah:
-          k.bukuKas === 'anggota'
-            ? (mapAng.get(k.id) ?? k.saldoKasSetelah)
-            : (mapKop.get(k.id) ?? k.saldoKasSetelah),
-      }));
-
-      // Helper untuk rekalkulasi saldo dan running balance mutasi anggota
-      const syncMemberBalancesAndRunningHistory = (affectedMemberIds: string[], forceZero: boolean) => {
-        affectedMemberIds.forEach((mId) => {
-          const mem = (currentState.members || []).find((m: any) => m.id === mId);
-          if (!mem) return;
-
-          if (forceZero) {
-            mem.saldoPokok = 0;
-            mem.saldoZakatFitrah = 0;
-            mem.saldoQurban = 0;
-            mem.saldoUmum = 0;
-            mem.totalSimpanan = 0;
-          } else {
-            // Hitung akumulasi dari transaksi yang tersisa
-            const mTx = (currentState.memberTransactions || [])
-              .filter((tx: any) => tx.memberId === mId)
-              .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
-
-            let p = 0, u = 0, z = 0, q = 0, run = 0;
-            mTx.forEach((tx: any) => {
-              const nom = tx.nominal || 0;
-              const isKewajibanSplit =
-                tx.kategori === 'pokok' ||
-                String(tx.id).startsWith('tx-wajib-') ||
-                String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
-                String(tx.keterangan || '').includes('50% Pokok');
-
-              if (tx.tipe === 'masuk') {
-                if (isKewajibanSplit) {
-                  const pPart = Math.floor(nom * 0.5);
-                  const qPart = Math.floor(nom * 0.25);
-                  const zPart = nom - pPart - qPart;
-                  p += pPart;
-                  q += qPart;
-                  z += zPart;
-                } else if (tx.kategori === 'qurban') {
-                  q += nom;
-                } else if (tx.kategori === 'zakat') {
-                  z += nom;
-                } else {
-                  u += nom;
-                }
-                run += nom;
-              } else {
-                if (isKewajibanSplit) {
-                  const pPart = Math.floor(nom * 0.5);
-                  const qPart = Math.floor(nom * 0.25);
-                  const zPart = nom - pPart - qPart;
-                  p = Math.max(0, p - pPart);
-                  q = Math.max(0, q - qPart);
-                  z = Math.max(0, z - zPart);
-                } else if (tx.kategori === 'qurban') {
-                  q = Math.max(0, q - nom);
-                } else if (tx.kategori === 'zakat') {
-                  z = Math.max(0, z - nom);
-                } else {
-                  u = Math.max(0, u - nom);
-                }
-                run = Math.max(0, run - nom);
-              }
-              tx.saldoSetelah = p + u;
-            });
-
-            mem.saldoPokok = p;
-            mem.saldoUmum = u;
-            mem.saldoZakatFitrah = z;
-            mem.saldoQurban = q;
-            mem.totalSimpanan = p + u + z + q;
-            mem.jumlahHariPokok = Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000));
-          }
-        });
-      };
-
-      // Tentukan anggota yang terkena dampak
-      let affectedIds: string[] = Array.from(affectedMemberIdSet);
-      if (affectedIds.length === 0) {
-        if (memberId && memberId !== 'semua') {
-          affectedIds = [memberId];
-        } else if (wilayah && wilayah !== 'semua') {
-          affectedIds = (currentState.members || []).filter((m: any) => m.wilayah === wilayah).map((m: any) => m.id);
-        } else {
-          affectedIds = (currentState.members || []).map((m: any) => m.id);
-        }
-      }
-
-      syncMemberBalancesAndRunningHistory(affectedIds, !!resetBalance);
 
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
@@ -6021,166 +6420,48 @@ async function startServer() {
 
   // Alias endpoint for member transactions delete
   app.post('/api/member-transactions/delete', (req: Request, res: Response) => {
-    // Forward request payload directly
     (req.app as any)._router.handle({ ...req, url: '/api/transactions/delete-selective', originalUrl: '/api/transactions/delete-selective' }, res);
   });
 
   // Endpoint: Hapus 1 Mutasi / Transaksi Anggota Secara Satuan (Khusus Super Admin)
   app.post('/api/transactions/delete-single', (req: Request, res: Response) => {
     try {
-      const { transactionId, adminName, password } = req.body;
+      const { transactionId, adminName, adminRole, password } = req.body;
+      if (adminRole && !isDirectExecutionRoleServer(adminRole)) {
+        return res.status(403).json({
+          error: 'Akses Ditolak: Penghapusan mutasi anggota oleh Admin Write / Admin Approval wajib diajukan untuk persetujuan.',
+        });
+      }
+
       const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
-      const validPasswords = new Set([
-        ...superAdmins.map((a: any) => a.password),
-        ...(currentState.admins || []).map((a: any) => a.password),
-        'Abieza88',
-        'ciganea',
-        'admin123',
-        'superadmin',
-        'admin',
-      ].filter(Boolean).map((p: any) => String(p).trim()));
+      const validPasswords = new Set(
+        [
+          ...superAdmins.map((a: any) => a.password),
+          ...(currentState.admins || []).map((a: any) => a.password),
+          'Abieza88',
+          'ciganea',
+          'admin123',
+          'superadmin',
+          'admin',
+        ].filter(Boolean).map((p: any) => String(p).trim())
+      );
 
       if (password && !validPasswords.has(String(password).trim())) {
         return res.status(403).json({ error: 'Password Super Admin salah atau tidak sesuai!' });
       }
 
-      const txIndex = (currentState.memberTransactions || []).findIndex((t: any) => t.id === transactionId);
-      if (txIndex === -1) {
+      const deletedTx = (currentState.memberTransactions || []).find((t: any) => t.id === transactionId);
+      if (!deletedTx) {
         return res.status(404).json({ error: 'Data mutasi transaksi tidak ditemukan.' });
       }
 
-      const deletedTx = currentState.memberTransactions[txIndex];
-      const targetMemberId = deletedTx.memberId;
-      currentState.memberTransactions.splice(txIndex, 1);
-
-      // Record in deletedTransactionIds so deleted mutation never resurrects on sync
-      currentState.deletedTransactionIds = currentState.deletedTransactionIds || [];
-      if (!currentState.deletedTransactionIds.includes(deletedTx.id)) {
-        currentState.deletedTransactionIds.push(deletedTx.id);
-      }
-
-      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
-      currentState.deletedKasIds = currentState.deletedKasIds || [];
-
-      // If tx had referensiId, also remove deposit and any derived tx id
-      if (deletedTx.referensiId) {
-        if (!currentState.deletedSetoranIds.includes(deletedTx.referensiId)) {
-          currentState.deletedSetoranIds.push(deletedTx.referensiId);
-        }
-        currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== deletedTx.referensiId);
-        currentState.sedekahList = (currentState.sedekahList || []).filter((sdk: any) => sdk.id !== deletedTx.referensiId);
-        const depTxId = `tx-dep-${deletedTx.referensiId}`;
-        if (!currentState.deletedTransactionIds.includes(depTxId)) {
-          currentState.deletedTransactionIds.push(depTxId);
-        }
-      }
-
-      // Remove corresponding Buku Kas entry
-      const tsMatch = String(deletedTx.id).match(/(\d{10,})/);
-      const tsToken = tsMatch ? tsMatch[1] : '';
-
-      currentState.kasList = (currentState.kasList || []).filter((k: any) => {
-        if (k.id === deletedTx.id) {
-          if (!currentState.deletedKasIds.includes(k.id)) currentState.deletedKasIds.push(k.id);
-          return false;
-        }
-        if (deletedTx.referensiId && (k.referensiId === deletedTx.referensiId || k.id === deletedTx.referensiId)) {
-          if (!currentState.deletedKasIds.includes(k.id)) currentState.deletedKasIds.push(k.id);
-          return false;
-        }
-        if (tsToken && String(k.id).includes(tsToken)) {
-          if (!currentState.deletedKasIds.includes(k.id)) currentState.deletedKasIds.push(k.id);
-          return false;
-        }
-        return true;
+      executeSelectiveDeleteServer({
+        transactionIds: [transactionId],
+        memberId: deletedTx.memberId,
+        resetBalance: false,
       });
 
-      // Recompute running saldoKasSetelah pada buku kas
-      const recomputeKas = (type: string) => {
-        const items = (currentState.kasList || [])
-          .filter((k: any) => k.bukuKas === type && !currentState.deletedKasIds.includes(k.id))
-          .slice()
-          .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
-        let run = 0;
-        const map = new Map<string, number>();
-        items.forEach((it: any) => {
-          if (it.status === 'approved') {
-            run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
-          }
-          map.set(it.id, run);
-        });
-        return map;
-      };
-      const mapAng = recomputeKas('anggota');
-      const mapKop = recomputeKas('koperasi');
-      currentState.kasList = (currentState.kasList || []).map((k: any) => ({
-        ...k,
-        saldoKasSetelah:
-          k.bukuKas === 'anggota'
-            ? (mapAng.get(k.id) ?? k.saldoKasSetelah)
-            : (mapKop.get(k.id) ?? k.saldoKasSetelah),
-      }));
-
-      // Hitung dan sesuaikan kembali saldo simpanan & running history anggota terkait
-      const member = (currentState.members || []).find((m: any) => m.id === targetMemberId);
-      if (member) {
-        const mTx = (currentState.memberTransactions || [])
-          .filter((tx: any) => tx.memberId === targetMemberId)
-          .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
-
-        let p = 0, u = 0, z = 0, q = 0, run = 0;
-        mTx.forEach((tx: any) => {
-          const nom = tx.nominal || 0;
-          const isKewajibanSplit =
-            tx.kategori === 'pokok' ||
-            String(tx.id).startsWith('tx-wajib-') ||
-            String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
-            String(tx.keterangan || '').includes('50% Pokok');
-
-          if (tx.tipe === 'masuk') {
-            if (isKewajibanSplit) {
-              const pPart = Math.floor(nom * 0.5);
-              const qPart = Math.floor(nom * 0.25);
-              const zPart = nom - pPart - qPart;
-              p += pPart;
-              q += qPart;
-              z += zPart;
-            } else if (tx.kategori === 'qurban') {
-              q += nom;
-            } else if (tx.kategori === 'zakat') {
-              z += nom;
-            } else {
-              u += nom;
-            }
-            run += nom;
-          } else {
-            if (isKewajibanSplit) {
-              const pPart = Math.floor(nom * 0.5);
-              const qPart = Math.floor(nom * 0.25);
-              const zPart = nom - pPart - qPart;
-              p = Math.max(0, p - pPart);
-              q = Math.max(0, q - qPart);
-              z = Math.max(0, z - zPart);
-            } else if (tx.kategori === 'qurban') {
-              q = Math.max(0, q - nom);
-            } else if (tx.kategori === 'zakat') {
-              z = Math.max(0, z - nom);
-            } else {
-              u = Math.max(0, u - nom);
-            }
-            run = Math.max(0, run - nom);
-          }
-          tx.saldoSetelah = p + u;
-        });
-
-        member.saldoPokok = p;
-        member.saldoUmum = u;
-        member.saldoZakatFitrah = z;
-        member.saldoQurban = q;
-        member.totalSimpanan = p + u + z + q;
-        member.jumlahHariPokok = Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000));
-      }
-
+      const member = (currentState.members || []).find((m: any) => m.id === deletedTx.memberId);
       currentState.auditLogs = currentState.auditLogs || [];
       currentState.auditLogs.unshift({
         id: `log-tx-single-${Date.now()}`,
@@ -6193,11 +6474,152 @@ async function startServer() {
       });
 
       saveDatabase(currentState);
-      broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: [deletedTx.id], affectedMemberIds: [targetMemberId] });
+      broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: [deletedTx.id], affectedMemberIds: [deletedTx.memberId] });
       broadcastStatePulse('updated');
       res.json({ success: true, deletedTx, state: currentState });
     } catch (err: any) {
       res.status(500).json({ error: 'Gagal menghapus mutasi transaksi: ' + err.message });
+    }
+  });
+
+  // Endpoints Persetujuan Berjenjang Mutasi Anggota (Hapus Mutasi, Koreksi Saldo, Bagi Hasil)
+  // Admin Write -> Admin Approval atau Super Admin
+  // Admin Approval -> Wajib Super Admin
+  app.post('/api/mutasi-requests/create', (req: Request, res: Response) => {
+    try {
+      const request = req.body?.request || req.body;
+      if (!request || !request.id || !request.actionType || !request.requestedByRole) {
+        return res.status(400).json({ error: 'Payload pengajuan mutasi tidak valid atau tidak lengkap.' });
+      }
+
+      if (!isWriterRoleServer(request.requestedByRole) && !isApprovalRoleServer(request.requestedByRole) && !isDirectExecutionRoleServer(request.requestedByRole)) {
+        return res.status(403).json({ error: 'Akses Ditolak: Peran Anda tidak diizinkan mengajukan aksi mutasi anggota.' });
+      }
+
+      currentState.pendingMutasiRequests = currentState.pendingMutasiRequests || [];
+      const existing = currentState.pendingMutasiRequests.find((r: any) => r.id === request.id);
+      if (!existing) {
+        currentState.pendingMutasiRequests.unshift({
+          ...request,
+          status: 'pending',
+          requestedAt: request.requestedAt || new Date().toISOString(),
+        });
+      }
+
+      const actionTitle =
+        request.actionType === 'delete_tx'
+          ? 'Pengajuan Hapus Mutasi Anggota'
+          : request.actionType === 'bagi_hasil'
+          ? 'Pengajuan Pembagian Hasil (SHU)'
+          : 'Pengajuan Koreksi Saldo Anggota';
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-mutreq-create-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: request.requestedByRole || 'admin_write',
+        adminNama: request.requestedBy || 'Admin',
+        adminRole: request.requestedByRole || 'admin_write',
+        action: actionTitle,
+        detail: `${request.requestedBy} (${request.requestedByRole}) mengajukan ${request.actionType} untuk ${request.memberNama || request.wilayah || 'anggota'}. Menunggu persetujuan ${getRequiredApproverLabelServer(request.requestedByRole)}. Alasan: "${request.alasan || ''}"`,
+        targetId: request.id,
+      });
+
+      saveDatabase(currentState);
+      broadcastStatePulse('updated');
+      res.json({ success: true, request, state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal mengirim pengajuan mutasi: ' + (err.message || 'Server error') });
+    }
+  });
+
+  app.post('/api/mutasi-requests/approve', (req: Request, res: Response) => {
+    try {
+      const { id, isApproved, adminName, adminRole, rejectionReason } = req.body;
+      if (!id) return res.status(400).json({ error: 'ID pengajuan mutasi diperlukan.' });
+
+      currentState.pendingMutasiRequests = currentState.pendingMutasiRequests || [];
+      const idx = currentState.pendingMutasiRequests.findIndex((r: any) => r.id === id);
+      if (idx === -1) return res.status(404).json({ error: 'Pengajuan mutasi tidak ditemukan.' });
+
+      const reqItem = currentState.pendingMutasiRequests[idx];
+      if (!canApproveByRoleServer(reqItem.requestedByRole, adminRole)) {
+        return res.status(403).json({
+          error: `Akses Ditolak: Pengajuan oleh ${isApprovalRoleServer(reqItem.requestedByRole) ? 'Admin Approval' : 'Admin'} wajib disetujui oleh ${getRequiredApproverLabelServer(reqItem.requestedByRole)}.`,
+        });
+      }
+
+      if (reqItem.status !== 'pending') {
+        return res.status(400).json({ error: `Pengajuan ini sudah diproses dengan status: ${reqItem.status}.` });
+      }
+
+      let deletedIds: string[] = [];
+      let affectedIds: string[] = [];
+
+      if (isApproved) {
+        if (reqItem.actionType === 'delete_tx') {
+          const delRes = executeSelectiveDeleteServer({
+            wilayah: reqItem.wilayah,
+            memberId: reqItem.memberId,
+            transactionIds: reqItem.transactionIds,
+            resetBalance: !!reqItem.resetBalance,
+          });
+          deletedIds = delRes.newlyDeletedIds;
+          affectedIds = delRes.affectedIds;
+        } else if (reqItem.actionType === 'adjust_balance') {
+          executeBalanceAdjustmentServer({
+            targetIds: reqItem.targetIds || [],
+            nominalNum: Number(reqItem.nominal) || 0,
+            tipe: reqItem.tipe || 'masuk',
+            jenisTabungan: reqItem.jenisTabungan || 'umum',
+            jumlahHari: reqItem.jumlahHari,
+            keterangan: reqItem.keterangan || reqItem.alasan || 'Penyesuaian Saldo',
+            inputBy: reqItem.requestedBy || adminName || 'Admin',
+            approvedBy: adminName || 'Admin Approval',
+          });
+        } else if (reqItem.actionType === 'bagi_hasil') {
+          executeBagiHasilServer({
+            targetIds: reqItem.targetIds || [],
+            persen: Number(reqItem.persen) || 0,
+            bukuKasSumber: reqItem.bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi',
+            tujuanKredit: reqItem.tujuanKredit === 'pokok' ? 'pokok' : 'umum',
+            keterangan: reqItem.keterangan || reqItem.alasan || 'Pembagian Hasil Usaha',
+            inputBy: reqItem.requestedBy || adminName || 'Admin',
+            approvedBy: adminName || 'Admin Approval',
+          });
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      currentState.pendingMutasiRequests[idx] = {
+        ...reqItem,
+        status: isApproved ? 'approved' : 'rejected',
+        approvedBy: adminName || 'Admin Approval',
+        approvedByRole: adminRole,
+        approvedAt: nowIso,
+        rejectionReason: !isApproved ? (rejectionReason || reqItem.rejectionReason) : undefined,
+      };
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-mutreq-app-${Date.now()}`,
+        timestamp: nowIso,
+        adminId: adminRole || 'admin_approval',
+        adminNama: adminName || 'Admin Approval',
+        adminRole: adminRole || 'admin_approval',
+        action: isApproved ? `Pengesahan ${reqItem.actionType}` : `Penolakan ${reqItem.actionType}`,
+        detail: `${adminName || 'Admin'} (${adminRole}) ${isApproved ? 'menyetujui & menjalankan' : 'menolak'} pengajuan ${reqItem.actionType} dari ${reqItem.requestedBy}: "${reqItem.alasan || ''}"`,
+        targetId: reqItem.id,
+      });
+
+      saveDatabase(currentState);
+      if (isApproved && reqItem.actionType === 'delete_tx') {
+        broadcastEvent('TRANSACTIONS_DELETED', { deletedTransactionIds: deletedIds, affectedMemberIds: affectedIds });
+      }
+      broadcastStatePulse('updated');
+      res.json({ success: true, state: currentState });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Gagal memproses persetujuan pengajuan: ' + (err.message || 'Server error') });
     }
   });
 

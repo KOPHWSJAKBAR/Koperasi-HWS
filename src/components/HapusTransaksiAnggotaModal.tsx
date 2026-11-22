@@ -5,8 +5,15 @@ import {
   MemberUser,
   MemberTransaction,
   WilayahKoperasi,
+  PendingMutasiActionRequest,
 } from '../types';
-import { formatRupiah, createAuditLog, sortMembersDesc } from '../lib/storage';
+import {
+  formatRupiah,
+  createAuditLog,
+  sortMembersDesc,
+  isApprovalRole,
+  getRequiredApproverLabel,
+} from '../lib/storage';
 import {
   Trash2,
   ShieldAlert,
@@ -44,6 +51,10 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
   onClose,
 }) => {
   const isSuperAdmin = currentAdmin.role === 'super_admin';
+  const isApproval = isApprovalRole(currentAdmin.role);
+  const isWriter = currentAdmin.role === 'admin_write';
+  const canRequestDelete = isSuperAdmin || isApproval || isWriter;
+  const requiredApproverLabel = getRequiredApproverLabel(currentAdmin.role);
 
   const [selectedWilayah, setSelectedWilayah] = useState<WilayahKoperasi | 'semua'>(initialWilayah);
   const [selectedMemberId, setSelectedMemberId] = useState<string>(initialMemberId);
@@ -162,13 +173,13 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
     ? matchingTransactions.map((t) => t.id)
     : selectedTxIds;
 
-  // Handle Submit Hapus Transaksi (Verifikasi Password Super Admin & Persetujuan)
+  // Handle Submit Hapus Transaksi (Langsung untuk Super Admin, Pengajuan Approval untuk Admin Write & Admin Approval)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
-    if (!isSuperAdmin) {
-      setErrorMessage('Akses ditolak: Menu ini hanya dapat diakses dan dijalankan oleh Super Admin.');
+    if (!canRequestDelete) {
+      setErrorMessage('Akses ditolak: Peran admin Anda tidak memiliki izin mengajukan penghapusan mutasi anggota.');
       return;
     }
 
@@ -184,6 +195,81 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
 
     if (!alasan.trim()) {
       setErrorMessage('Alasan penghapusan mutasi wajib diisi untuk catatan audit!');
+      return;
+    }
+
+    const selectedMemberObj = state.members.find((m) => m.id === selectedMemberId);
+    const targetLabel = selectedMemberId !== 'semua' && selectedMemberObj
+      ? `${selectedMemberObj.nama} (${selectedMemberObj.nomorRekening || selectedMemberObj.nomorAnggota})`
+      : selectedWilayah !== 'semua'
+      ? `Semua Anggota di Wilayah ${selectedWilayah}`
+      : 'Seluruh Anggota di Semua Wilayah';
+
+    // Jika bukan Super Admin (Admin Write atau Admin Approval), buat pengajuan pending approval
+    if (!isSuperAdmin) {
+      const totalNominalSummary = matchingTransactions
+        .filter((t) => activeSelectedIds.includes(t.id))
+        .reduce((sum, t) => sum + (Number(t.nominal) || 0), 0);
+
+      const newReq: PendingMutasiActionRequest = {
+        id: `mutreq-del-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        actionType: 'delete_tx',
+        status: 'pending',
+        requestedBy: currentAdmin.nama,
+        requestedByRole: currentAdmin.role,
+        requestedAt: new Date().toISOString(),
+        alasan: alasan.trim(),
+        memberId: selectedMemberId,
+        memberNama: selectedMemberId !== 'semua' && selectedMemberObj ? selectedMemberObj.nama : targetLabel,
+        memberRekening: selectedMemberId !== 'semua' && selectedMemberObj ? (selectedMemberObj.nomorRekening || selectedMemberObj.nomorAnggota) : undefined,
+        wilayah: selectedWilayah,
+        transactionIds: activeSelectedIds,
+        resetBalance,
+        txCount: activeSelectedIds.length,
+        totalNominalSummary,
+      };
+
+      setIsSubmitting(true);
+      try {
+        let serverOk = false;
+        try {
+          const res = await fetch('/api/mutasi-requests/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request: newReq }),
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            if (data.state) {
+              serverOk = true;
+              await updateState(() => data.state);
+            }
+          }
+        } catch {}
+
+        if (!serverOk) {
+          await updateState((prev) => {
+            const audit = createAuditLog(
+              currentAdmin,
+              'Pengajuan Hapus Mutasi Anggota',
+              `${currentAdmin.nama} (${isApproval ? 'Admin Approval' : 'Admin Write'}) mengajukan penghapusan ${activeSelectedIds.length} mutasi untuk ${targetLabel} (${resetBalance ? 'Reset Saldo 0' : 'Hitung Ulang'}). Menunggu persetujuan ${requiredApproverLabel}. Alasan: "${alasan.trim()}"`,
+              newReq.id
+            );
+            return {
+              ...prev,
+              pendingMutasiRequests: [newReq, ...(prev.pendingMutasiRequests || [])],
+              auditLogs: [audit, ...(prev.auditLogs || [])],
+            };
+          });
+        }
+
+        alert(`✓ Pengajuan penghapusan ${activeSelectedIds.length} mutasi untuk ${targetLabel} berhasil dikirim!\n\nStatus: Menunggu Persetujuan ${requiredApproverLabel}. Saldo dan mutasi anggota belum berubah sebelum disetujui.`);
+        onClose();
+      } catch (err: any) {
+        setErrorMessage('Gagal mengirim pengajuan: ' + (err.message || 'Error'));
+      } finally {
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -207,13 +293,6 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
       return;
     }
 
-    const selectedMemberObj = state.members.find((m) => m.id === selectedMemberId);
-    const targetLabel = selectedMemberId !== 'semua' && selectedMemberObj
-      ? `${selectedMemberObj.nama} (${selectedMemberObj.nomorRekening || selectedMemberObj.nomorAnggota})`
-      : selectedWilayah !== 'semua'
-      ? `Semua Anggota di Wilayah ${selectedWilayah}`
-      : 'Seluruh Anggota di Semua Wilayah';
-
     setIsSubmitting(true);
     try {
       // Panggil server endpoint /api/transactions/delete-selective
@@ -222,6 +301,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
           wilayah: selectedWilayah,
           memberId: selectedMemberId,
           transactionIds: activeSelectedIds,
@@ -438,16 +518,18 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
               <Trash2 className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm sm:text-base font-black text-white">
-                  Hapus Transaksi Anggota Koperasi
+                  {isSuperAdmin ? 'Hapus Transaksi Anggota Koperasi' : 'Ajukan Hapus Mutasi Anggota'}
                 </h3>
                 <span className="text-[10px] bg-rose-500 text-slate-950 font-black px-2 py-0.5 rounded-full">
-                  Super Admin
+                  {isSuperAdmin ? 'Super Admin' : isApproval ? 'Admin Approval' : 'Admin Write'}
                 </span>
               </div>
               <p className="text-[11px] text-rose-300/80 mt-0.5">
-                Pilih wilayah & nama anggota, seleksi mutasi yang ingin dihapus, masukkan sandi admin untuk konfirmasi.
+                {isSuperAdmin
+                  ? 'Pilih wilayah & nama anggota, seleksi mutasi yang ingin dihapus, masukkan sandi admin untuk konfirmasi.'
+                  : `Pengajuan penghapusan mutasi anggota wajib disetujui oleh ${requiredApproverLabel}.`}
               </p>
             </div>
           </div>
@@ -688,35 +770,49 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
             </p>
           </div>
 
-          {/* 4. Masukan Password Super Admin */}
-          <div className="p-3.5 bg-rose-950/30 border border-rose-500/40 rounded-2xl space-y-2">
-            <label className="block font-black text-rose-200 text-xs">
-              4. Masukan Kata Sandi Super Admin untuk Konfirmasi *
-            </label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={adminPassword}
-                onChange={(e) => {
-                  setAdminPassword(e.target.value);
-                  setErrorMessage('');
-                }}
-                placeholder="Ketik password Super Admin Anda..."
-                className="w-full px-3 py-2.5 bg-slate-800 border border-rose-500/50 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-rose-500 pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white cursor-pointer"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+          {/* 4. Verifikasi Super Admin atau Info Ketentuan Persetujuan */}
+          {isSuperAdmin ? (
+            <div className="p-3.5 bg-rose-950/30 border border-rose-500/40 rounded-2xl space-y-2">
+              <label className="block font-black text-rose-200 text-xs">
+                4. Masukan Kata Sandi Super Admin untuk Konfirmasi *
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={adminPassword}
+                  onChange={(e) => {
+                    setAdminPassword(e.target.value);
+                    setErrorMessage('');
+                  }}
+                  placeholder="Ketik password Super Admin Anda..."
+                  className="w-full px-3 py-2.5 bg-slate-800 border border-rose-500/50 rounded-xl text-white font-mono text-sm focus:ring-2 focus:ring-rose-500 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <p className="text-[10px] text-rose-300/80">
+                * Keamanan Otoritas: Diperlukan verifikasi kata sandi Super Admin untuk menghapus transaksi anggota secara langsung.
+              </p>
             </div>
-            <p className="text-[10px] text-rose-300/80">
-              * Keamanan Otoritas: Diperlukan verifikasi kata sandi Super Admin untuk menghapus transaksi anggota. Riwayat yang dihapus juga otomatis terhapus dari cetak mutasi rekening.
-            </p>
-          </div>
+          ) : (
+            <div className="p-3.5 bg-amber-950/30 border border-amber-500/40 rounded-2xl space-y-1.5">
+              <div className="font-black text-amber-200 text-xs flex items-center gap-1.5">
+                <ShieldAlert className="w-4 h-4 text-amber-400" />
+                <span>Ketentuan Persetujuan Bertingkat</span>
+              </div>
+              <p className="text-[11px] text-amber-200/85 leading-relaxed">
+                {isApproval
+                  ? 'Pengajuan penghapusan mutasi oleh Admin Approval wajib disetujui oleh Super Admin terlebih dahulu sebelum saldo & mutasi anggota berubah.'
+                  : 'Pengajuan penghapusan mutasi oleh Admin Write wajib disetujui oleh Admin Approval atau Super Admin terlebih dahulu sebelum saldo & mutasi anggota berubah.'}
+              </p>
+            </div>
+          )}
 
           {/* Tombol Aksi & Persetujuan */}
           <div className="pt-2 flex gap-2.5">
@@ -730,11 +826,24 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || matchingTransactions.length === 0 || activeSelectedIds.length === 0 || !adminPassword || !alasan.trim()}
+              disabled={
+                isSubmitting ||
+                !canRequestDelete ||
+                (matchingTransactions.length === 0 && !resetBalance) ||
+                (matchingTransactions.length > 0 && activeSelectedIds.length === 0 && !resetBalance) ||
+                (isSuperAdmin && !adminPassword) ||
+                !alasan.trim()
+              }
               className="flex-[2] py-3 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs shadow-lg shadow-rose-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
             >
               <Check className="w-4 h-4" />
-              <span>{isSubmitting ? 'Memproses Penghapusan...' : `✓ Klik Persetujuan & Hapus ${activeSelectedIds.length} Transaksi`}</span>
+              <span>
+                {isSubmitting
+                  ? 'Memproses...'
+                  : isSuperAdmin
+                  ? `✓ Klik Persetujuan & Hapus ${activeSelectedIds.length} Transaksi`
+                  : `Ajukan Hapus ${activeSelectedIds.length} Mutasi ➔ ${requiredApproverLabel}`}
+              </span>
             </button>
           </div>
         </form>

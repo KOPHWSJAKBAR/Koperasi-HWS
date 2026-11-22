@@ -8,7 +8,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, sortMembersDesc } from '../lib/storage';
+import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
 import {
@@ -100,6 +100,7 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
       penerimaIds: eligibleMembers.map((m) => m.id),
       keterangan: keterangan || `Penyaluran ${jenisPenyaluran === 'zakat_fitrah' ? 'Zakat Fitrah' : 'Tabungan Qurban'} ${wilayahTarget}`,
       diajukanOleh: currentAdmin.nama,
+      diajukanOlehRole: currentAdmin.role,
       status: isSuperAdmin ? 'disetujui' : 'pending_approval',
       disetujuiOleh: isSuperAdmin ? currentAdmin.nama : undefined,
       createdAt: new Date().toISOString(),
@@ -113,7 +114,7 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
         ...prev,
         penyaluranList: [newPenyaluran, ...prev.penyaluranList],
       }));
-      alert('Pengajuan penyaluran dikirim ke Super Admin untuk persetujuan.');
+      alert(`Pengajuan penyaluran dikirim ke ${getRequiredApproverLabel(currentAdmin.role)} untuk persetujuan.`);
     }
 
     setShowPenyaluranModal(false);
@@ -122,6 +123,10 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
   };
 
   const executeDistribution = async (p: PenyaluranZakatQurban) => {
+    if (p.status === 'pending_approval' && !canApproveByRole(p.diajukanOlehRole || 'admin_write', currentAdmin?.role)) {
+      alert(`Akses Ditolak: Pengajuan dari ${p.diajukanOleh} wajib disetujui oleh ${getRequiredApproverLabel(p.diajukanOlehRole)}.`);
+      return;
+    }
     const now = new Date();
     const tgl = p.tanggal;
     const jam = now.toTimeString().split(' ')[0].slice(0, 5);
@@ -465,11 +470,13 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
                 <th className="py-2.5 px-3">Keterangan</th>
                 <th className="py-2.5 px-3 text-right">Nominal Total</th>
                 <th className="py-2.5 px-3">Status</th>
-                {!isMember && isSuperAdmin && <th className="py-2.5 px-3 text-right">Aksi</th>}
+                {!isMember && <th className="py-2.5 px-3 text-right">Aksi</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {filteredPenyaluranList.map((item) => (
+              {filteredPenyaluranList.map((item) => {
+                const canApproveItem = canApproveByRole(item.diajukanOlehRole || 'admin_write', currentAdmin?.role);
+                return (
                 <tr key={item.id} className="hover:bg-slate-800/30">
                   <td className="py-3 px-3 font-mono text-slate-300">{item.tanggal}</td>
                   <td className="py-3 px-3 font-bold text-white">
@@ -496,20 +503,26 @@ export const ZakatQurbanView: React.FC<ZakatQurbanViewProps> = ({
                       {item.status.toUpperCase()}
                     </span>
                   </td>
-                  {!isMember && isSuperAdmin && (
+                  {!isMember && (
                     <td className="py-3 px-3 text-right">
                       {item.status === 'pending_approval' && (
-                        <button
-                          onClick={() => executeDistribution(item)}
-                          className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold"
-                        >
-                          Setujui Penyaluran
-                        </button>
+                        canApproveItem ? (
+                          <button
+                            onClick={() => executeDistribution(item)}
+                            className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold cursor-pointer"
+                          >
+                            Setujui Penyaluran
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-amber-300 font-semibold">
+                            Menunggu {getRequiredApproverLabel(item.diajukanOlehRole)}
+                          </span>
+                        )
                       )}
                     </td>
                   )}
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
 

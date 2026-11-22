@@ -184,6 +184,11 @@ export interface MemberUser {
   status: 'aktif' | 'nonaktif' | 'pending' | 'pending_deletion' | 'dibekukan' | 'pending_freeze';
   freezeRequest?: FreezeRequest;
   lockPokokRequest?: LockPokokRequest;
+  deleteRequest?: {
+    requestedByName: string;
+    requestedByRole: AdminRole | string;
+    requestedAt: string;
+  };
   terdaftarSejak: string;
   createdAt?: string;
   updatedAt?: string;
@@ -253,9 +258,24 @@ export interface KasEntry {
   saldoKasSetelah: number;
   inputBy: string;
   approvedBy?: string;
+  requestedBy?: string;
+  requestedByRole?: AdminRole | string;
   status: 'approved' | 'pending_approval' | 'rejected';
   pendingAction?: 'create' | 'update' | 'delete';
   originalData?: Partial<KasEntry>;
+  pendingAnggotaMeta?: {
+    subKategori?: 'pokok' | 'umum' | 'bebas' | 'lainnya';
+    memberId?: string;
+    memberNama?: string;
+    periode?: string;
+    jumlahHari?: number;
+    referensiId?: string;
+    nominalPokok?: number;
+    nominalZakat?: number;
+    nominalQurban?: number;
+    metode?: string;
+    kategori?: string;
+  };
   createdAt: string;
 }
 
@@ -270,6 +290,7 @@ export interface PenyaluranZakatQurban {
   penerimaIds: string[];
   keterangan: string;
   diajukanOleh: string;
+  diajukanOlehRole?: AdminRole | string;
   disetujuiOleh?: string;
   status: 'pending_approval' | 'disetujui' | 'ditolak';
   createdAt: string;
@@ -362,11 +383,45 @@ export interface SedekahBerbagiEntry {
   kasKoperasiId?: string; // id transaksi pencatatan di Buku Kas Koperasi
   kasAnggotaId?: string; // id transaksi pencatatan pindah saldo keluar di Buku Kas Anggota (TFTU)
   inputBy: string;
+  requestedByRole?: AdminRole | string;
   verifiedBy?: string;
   verifiedAt?: string;
   rejectionReason?: string;
   catatanAdmin?: string;
   createdAt: string;
+}
+
+export interface PendingMutasiActionRequest {
+  id: string;
+  actionType: 'delete_tx' | 'adjust_balance' | 'bagi_hasil';
+  status: 'pending' | 'approved' | 'rejected';
+  requestedBy: string;
+  requestedByRole: AdminRole | string;
+  requestedAt: string;
+  approvedBy?: string;
+  approvedByRole?: AdminRole | string;
+  approvedAt?: string;
+  rejectionReason?: string;
+  alasan: string;
+  memberId?: string;
+  memberNama?: string;
+  memberRekening?: string;
+  wilayah?: string;
+  transactionIds?: string[];
+  resetBalance?: boolean;
+  txCount?: number;
+  totalNominalSummary?: number;
+  targetIds?: string[];
+  targetNames?: string[];
+  nominal?: number;
+  tipe?: 'masuk' | 'keluar';
+  jenisTabungan?: 'umum' | 'pokok' | 'zakat' | 'qurban';
+  jumlahHari?: number;
+  persen?: number;
+  bukuKasSumber?: 'anggota' | 'koperasi';
+  tujuanKredit?: 'umum' | 'pokok';
+  keterangan?: string;
+  totalDana?: number;
 }
 
 export interface AppState {
@@ -379,6 +434,7 @@ export interface AppState {
   penyaluranList: PenyaluranZakatQurban[];
   sedekahList?: SedekahBerbagiEntry[]; // Daftar mutasi sedekah/berbagi
   pengaturanBerbagi?: PengaturanBerbagi; // Nama berbagi & rekening kas berbagi
+  pendingMutasiRequests?: PendingMutasiActionRequest[];
   chatMessages: ChatMessage[];
   suratList: SuratResmi[];
   auditLogs: AuditLog[];

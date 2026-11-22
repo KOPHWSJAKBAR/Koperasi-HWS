@@ -6,8 +6,19 @@ import {
   WilayahKoperasi,
   MemberTransaction,
   KasEntry,
+  PendingMutasiActionRequest,
 } from '../types';
-import { formatRupiah, createAuditLog, getWibDateStr, getWibTimeStr, formatWibDateShort, sortMembersDesc } from '../lib/storage';
+import {
+  formatRupiah,
+  createAuditLog,
+  getWibDateStr,
+  getWibTimeStr,
+  formatWibDateShort,
+  sortMembersDesc,
+  canApproveByRole,
+  getRequiredApproverLabel,
+  isApprovalRole,
+} from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
 import {
   SlidersHorizontal,
@@ -106,14 +117,209 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const totalPokokTarget = targetMembersBagiHasil.reduce((sum, m) => sum + (m.saldoPokok || 0), 0);
   const totalBagiHasilEstimasi = Math.round(totalPokokTarget * (persenNum / 100));
 
-  // Role check: Admin Write dapat menginput, Admin Approval / Super Admin menyetujui (Req User)
+  // Role check: Hanya Super Admin yang eksekusi langsung; Admin Write -> Approval/Super Admin; Admin Approval -> Super Admin
   const isSuperAdmin = currentAdmin.role === 'super_admin';
   const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola';
   const isWriter = currentAdmin.role === 'admin_write';
   const isPembukuan = currentAdmin.role === 'admin_pembukuan';
   const isLaporan = currentAdmin.role === 'admin_laporan';
   const canPerformAdjustment = isSuperAdmin || isApproval || isWriter || isPembukuan;
-  const isDirectApproval = isSuperAdmin || isApproval;
+  const isDirectApproval = isSuperAdmin;
+  const requiredApproverLabel = getRequiredApproverLabel(currentAdmin.role);
+
+  const pendingMutasiAdjustRequests = (state.pendingMutasiRequests || []).filter(
+    (r) => r.status === 'pending' && (r.actionType === 'adjust_balance' || r.actionType === 'bagi_hasil')
+  );
+  const actionableAdjustRequests = pendingMutasiAdjustRequests.filter((r) =>
+    canApproveByRole(r.requestedByRole, currentAdmin.role)
+  );
+  const waitingAdjustRequests = pendingMutasiAdjustRequests.filter(
+    (r) => !canApproveByRole(r.requestedByRole, currentAdmin.role)
+  );
+
+  const handleApproveMutasiRequest = async (reqItem: PendingMutasiActionRequest, isApproved: boolean) => {
+    if (!canApproveByRole(reqItem.requestedByRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan ini wajib disetujui oleh ${getRequiredApproverLabel(reqItem.requestedByRole)}.`);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/mutasi-requests/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: reqItem.id,
+          isApproved,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+        }),
+      });
+      if (res.status === 403) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Akses Ditolak.');
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.state) {
+          await updateState(() => data.state);
+          alert(isApproved ? '✓ Pengajuan mutasi/penyesuaian saldo berhasil disetujui dan diterapkan!' : 'Permohonan penyesuaian saldo telah ditolak.');
+          return;
+        }
+      }
+    } catch {}
+
+    // Offline fallback
+    await updateState((prev) => {
+      const nowIso = new Date().toISOString();
+      const tgl = getWibDateStr();
+      const jam = getWibTimeStr();
+      let nextMembers = [...prev.members];
+      let nextTxs = [...(prev.memberTransactions || [])];
+      let nextKas = [...(prev.kasList || [])];
+
+      if (isApproved) {
+        if (reqItem.actionType === 'adjust_balance') {
+          const targetSet = new Set(reqItem.targetIds || []);
+          const nom = Number(reqItem.nominal) || 0;
+          const jenis = reqItem.jenisTabungan || 'umum';
+          const tipe = reqItem.tipe === 'keluar' ? 'keluar' : 'masuk';
+          const hari = reqItem.jumlahHari || Math.max(1, Math.round(nom / (prev.profile?.biayaWajibHarian || 2000)));
+          const newTxs: MemberTransaction[] = [];
+          const newKas: KasEntry[] = [];
+
+          nextMembers = nextMembers.map((m) => {
+            if (!targetSet.has(m.id)) return m;
+            let p = Number(m.saldoPokok) || 0;
+            let u = Number(m.saldoUmum) || 0;
+            let z = Number(m.saldoZakatFitrah) || 0;
+            let q = Number(m.saldoQurban) || 0;
+            const pPart = Math.floor(nom * 0.5);
+            const qPart = Math.floor(nom * 0.25);
+            const zPart = nom - pPart - qPart;
+            if (jenis === 'pokok') {
+              if (tipe === 'masuk') { p += pPart; q += qPart; z += zPart; }
+              else { p = Math.max(0, p - pPart); q = Math.max(0, q - qPart); z = Math.max(0, z - zPart); }
+            } else {
+              if (tipe === 'masuk') u += nom;
+              else u = Math.max(0, u - nom);
+            }
+            const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
+            newTxs.push({
+              id: `tx-adj-${Date.now()}-${m.id.slice(-4)}`,
+              memberId: m.id,
+              tanggal: tgl,
+              jam,
+              keterangan: jenis === 'pokok'
+                ? `KOREKSI TABUNGAN POKOK (${hari} Hari • 50% Pokok, 25% Qurban, 25% Zakat): ${reqItem.keterangan || reqItem.alasan}`
+                : `KOREKSI SALDO UMUM: ${reqItem.keterangan || reqItem.alasan}`,
+              cbg: jenis === 'pokok' ? '93907' : '93740',
+              tipe,
+              nominal: nom,
+              saldoSetelah: p + u,
+              kategori: jenis === 'pokok' ? 'pokok' : 'umum',
+              referensiId: refId,
+              jumlahHari: hari,
+            });
+            if (jenis === 'pokok') {
+              newKas.push(
+                { id: `kas-adj-p-${Date.now()}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Pokok', keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: pPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso },
+                { id: `kas-adj-q-${Date.now() + 1}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Qurban', keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: qPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso },
+                { id: `kas-adj-z-${Date.now() + 2}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Zakat', keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: zPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso }
+              );
+            } else {
+              newKas.push({ id: `kas-adj-u-${Date.now()}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Bebas', keterangan: `Koreksi Saldo Umum ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} ${m.nama}: ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, tipe, nominal: nom, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso });
+            }
+            return { ...m, saldoPokok: p, saldoUmum: u, saldoZakatFitrah: z, saldoQurban: q, totalSimpanan: p + u + z + q, jumlahHariPokok: Math.floor(p / (prev.profile?.pembagianPokokHarian || 1000)) };
+          });
+          nextTxs = [...newTxs, ...nextTxs];
+          nextKas = [...newKas, ...nextKas];
+        } else if (reqItem.actionType === 'bagi_hasil') {
+          const targetSet = new Set(reqItem.targetIds || []);
+          const pct = Number(reqItem.persen) || 0;
+          const sumber = reqItem.bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi';
+          const tujuan = reqItem.tujuanKredit === 'pokok' ? 'pokok' : 'umum';
+          const shuRefId = `SHU-${Date.now().toString().slice(-6)}`;
+          const cbgCode = tujuan === 'umum' ? (sumber === 'anggota' ? '114114' : '114117') : (sumber === 'anggota' ? '114514' : '114517');
+          const newTxs: MemberTransaction[] = [];
+          let totalBagi = 0;
+
+          nextMembers = nextMembers.map((m) => {
+            if (!targetSet.has(m.id) || (m.saldoPokok || 0) <= 0) return m;
+            const part = Math.round(m.saldoPokok * (pct / 100));
+            if (part <= 0) return m;
+            totalBagi += part;
+            const upP = tujuan === 'pokok' ? m.saldoPokok + part : m.saldoPokok;
+            const upU = tujuan === 'umum' ? m.saldoUmum + part : m.saldoUmum;
+            newTxs.push({
+              id: `tx-shu-${Date.now()}-${m.id.slice(-4)}`,
+              memberId: m.id,
+              tanggal: tgl,
+              jam,
+              keterangan: `BAGI HASIL ${pct}% DARI POKOK (${formatRupiah(m.saldoPokok)}): ${reqItem.keterangan || reqItem.alasan}`,
+              cbg: cbgCode,
+              tipe: 'masuk',
+              nominal: part,
+              saldoSetelah: upP + upU,
+              kategori: tujuan,
+              referensiId: shuRefId,
+            });
+            return { ...m, saldoPokok: upP, saldoUmum: upU, totalSimpanan: upP + upU + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0) };
+          });
+          if (totalBagi > 0) {
+            nextTxs = [...newTxs, ...nextTxs];
+            nextKas = [
+              {
+                id: `kas-shu-${Date.now()}`,
+                bukuKas: sumber,
+                tanggal: tgl,
+                jam,
+                kategori: 'Penyaluran Bagi Hasil / SHU',
+                keterangan: `Pembagian Hasil ${pct}% Tabungan Pokok ke ${newTxs.length} Anggota: ${reqItem.keterangan || reqItem.alasan}`,
+                namaPenerima: `Bagi Hasil ${newTxs.length} Anggota Koperasi`,
+                referensiId: shuRefId,
+                tipe: 'keluar',
+                nominal: totalBagi,
+                saldoKasSetelah: 0,
+                inputBy: reqItem.requestedBy,
+                approvedBy: currentAdmin.nama,
+                status: 'approved',
+                createdAt: nowIso,
+              },
+              ...nextKas,
+            ];
+          }
+        }
+      }
+
+      const updatedReqs = (prev.pendingMutasiRequests || []).map((r) =>
+        r.id === reqItem.id
+          ? {
+              ...r,
+              status: isApproved ? ('approved' as const) : ('rejected' as const),
+              approvedBy: currentAdmin.nama,
+              approvedByRole: currentAdmin.role,
+              approvedAt: nowIso,
+            }
+          : r
+      );
+      const audit = createAuditLog(
+        currentAdmin,
+        isApproved ? 'Pengesahan Penyesuaian Saldo' : 'Penolakan Penyesuaian Saldo',
+        `${currentAdmin.nama} ${isApproved ? 'menyetujui' : 'menolak'} pengajuan ${reqItem.actionType} oleh ${reqItem.requestedBy}: ${reqItem.alasan}`,
+        reqItem.id
+      );
+      return {
+        ...prev,
+        members: nextMembers,
+        memberTransactions: nextTxs,
+        kasList: nextKas,
+        pendingMutasiRequests: updatedReqs,
+        auditLogs: [audit, ...(prev.auditLogs || [])],
+      };
+    });
+    alert(isApproved ? '✓ Pengajuan penyesuaian saldo disetujui!' : 'Permohonan penyesuaian saldo ditolak.');
+  };
 
   // ================= SUBMIT KOREKSI SALDO =================
   const handleKirimKoreksi = async (e: React.FormEvent) => {
@@ -168,7 +374,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
 
     const totalDana = nominalNum * targetMembersKoreksi.length;
     const confirmMsg =
-      `Konfirmasi ${isDirectApproval ? 'Koreksi Saldo' : 'Pengajuan Koreksi Saldo (Admin Write)'}:\n` +
+      `Konfirmasi ${isDirectApproval ? 'Koreksi Saldo' : `Pengajuan Koreksi Saldo (${isApproval ? 'Admin Approval' : 'Admin Write'})`}:\n` +
       `- Tipe: ${koreksiTipe === 'masuk' ? 'Penambahan / Pemasukan (+)' : 'Pengurangan / Pengeluaran (-)'}\n` +
       `- Tabungan: ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (50% Pokok, 25% Qurban, 25% Zakat)` : 'Tabungan Umum'}\n` +
       (koreksiJenisTabungan === 'pokok' ? `- Jumlah Hari: ${hariNum} Hari\n` : '') +
@@ -178,7 +384,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       `- Keterangan: ${koreksiKeterangan}\n\n` +
       (isDirectApproval
         ? 'Apakah Anda yakin ingin memproses transaksi ini dan langsung mengkoreksi saldo anggota?'
-        : 'Apakah Anda yakin ingin mengirim pengajuan koreksi saldo ini ke Admin Approval / Super Admin?');
+        : `Apakah Anda yakin ingin mengirim pengajuan koreksi saldo ini ke ${requiredApproverLabel}? Saldo belum berubah sebelum disetujui.`);
 
     if (!confirm(confirmMsg)) return;
 
@@ -192,7 +398,73 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       const targetIdsSet = new Set(targetIds);
       let serverAdjusted = false;
 
-      // 1. Authoritative Backend Processing
+      if (!isDirectApproval) {
+        const newReq: PendingMutasiActionRequest = {
+          id: `mutreq-adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          actionType: 'adjust_balance',
+          status: 'pending',
+          requestedBy: currentAdmin.nama,
+          requestedByRole: currentAdmin.role,
+          requestedAt: now.toISOString(),
+          alasan: koreksiKeterangan.trim(),
+          targetIds,
+          targetNames: targetMembersKoreksi.slice(0, 5).map((m) => m.nama),
+          memberNama:
+            targetMembersKoreksi.length === 1
+              ? targetMembersKoreksi[0].nama
+              : `${targetMembersKoreksi.length} Anggota (${koreksiTargetTipe === 'wilayah' ? koreksiWilayah : 'Semua'})`,
+          nominal: nominalNum,
+          tipe: koreksiTipe,
+          jenisTabungan: koreksiJenisTabungan,
+          jumlahHari: hariNum,
+          keterangan: koreksiKeterangan.trim(),
+          totalDana,
+        };
+
+        try {
+          const res = await fetch('/api/mutasi-requests/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request: newReq }),
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            if (data.state) {
+              serverAdjusted = true;
+              await updateState(() => data.state);
+            }
+          }
+        } catch {}
+
+        if (!serverAdjusted) {
+          await updateState((prev) => {
+            const audit = createAuditLog(
+              currentAdmin,
+              'Pengajuan Koreksi Saldo',
+              `${currentAdmin.nama} (${isApproval ? 'Admin Approval' : 'Admin Write'}) mengajukan koreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Menunggu persetujuan ${requiredApproverLabel}. Ket: ${koreksiKeterangan}`,
+              newReq.id
+            );
+            return {
+              ...prev,
+              pendingMutasiRequests: [newReq, ...(prev.pendingMutasiRequests || [])],
+              auditLogs: [audit, ...(prev.auditLogs || [])],
+            };
+          });
+        }
+
+        alert(
+          `✓ Pengajuan Penyesuaian Saldo Berhasil Dikirim!\n\nDokumen masuk antrean MENUNGGU PERSETUJUAN ${requiredApproverLabel}. Saldo anggota belum berubah sampai disetujui.`
+        );
+        setKoreksiNominal('');
+        setKoreksiJumlahHari('');
+        setKoreksiKeterangan('');
+        setAdminPasswordInput('');
+        setPasswordError('');
+        setIsSubmittingKoreksi(false);
+        return;
+      }
+
+      // 1. Authoritative Backend Processing (Khusus Super Admin)
       try {
         const res = await fetch('/api/balance/adjust', {
           method: 'POST',
@@ -205,7 +477,8 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             jumlahHari: hariNum,
             keterangan: koreksiKeterangan.trim(),
             adminName: currentAdmin.nama,
-            isDirectApproval,
+            adminRole: currentAdmin.role,
+            isDirectApproval: true,
             password: adminPasswordInput.trim() || undefined,
           }),
         });
@@ -257,7 +530,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             const totalSimpanan = updatedPokok + updatedUmum + updatedZakat + updatedQurban;
             const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
             const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
-            const statusTransaksi = isDirectApproval ? 'approved' : 'pending_approval';
 
             newTransactions.push({
               id: txId,
@@ -276,7 +548,6 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               jumlahHari: hariNum,
             });
 
-            // Buat entri Buku Kas Anggota per anggota agar sinkronisasi hapus/tambah per anggota akurat
             if (koreksiJenisTabungan === 'pokok') {
               newKasEntries.push(
                 {
@@ -294,8 +565,8 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   nominal: pokokPortion,
                   saldoKasSetelah: 0,
                   inputBy: currentAdmin.nama,
-                  status: statusTransaksi,
-                  pendingAction: isDirectApproval ? undefined : 'create',
+                  approvedBy: currentAdmin.nama,
+                  status: 'approved',
                   createdAt: now.toISOString(),
                 },
                 {
@@ -313,8 +584,8 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   nominal: qurbanPortion,
                   saldoKasSetelah: 0,
                   inputBy: currentAdmin.nama,
-                  status: statusTransaksi,
-                  pendingAction: isDirectApproval ? undefined : 'create',
+                  approvedBy: currentAdmin.nama,
+                  status: 'approved',
                   createdAt: now.toISOString(),
                 },
                 {
@@ -332,8 +603,8 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   nominal: zakatPortion,
                   saldoKasSetelah: 0,
                   inputBy: currentAdmin.nama,
-                  status: statusTransaksi,
-                  pendingAction: isDirectApproval ? undefined : 'create',
+                  approvedBy: currentAdmin.nama,
+                  status: 'approved',
                   createdAt: now.toISOString(),
                 }
               );
@@ -352,64 +623,55 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 nominal: nominalNum,
                 saldoKasSetelah: 0,
                 inputBy: currentAdmin.nama,
-                status: statusTransaksi,
-                pendingAction: isDirectApproval ? undefined : 'create',
+                approvedBy: currentAdmin.nama,
+                status: 'approved',
                 createdAt: now.toISOString(),
               });
             }
 
             return {
               ...m,
-              saldoPokok: isDirectApproval ? updatedPokok : m.saldoPokok,
-              saldoUmum: isDirectApproval ? updatedUmum : m.saldoUmum,
-              saldoZakatFitrah: isDirectApproval ? updatedZakat : m.saldoZakatFitrah,
-              saldoQurban: isDirectApproval ? updatedQurban : m.saldoQurban,
-              totalSimpanan: isDirectApproval ? totalSimpanan : m.totalSimpanan,
-              ...(koreksiJenisTabungan === 'pokok' && isDirectApproval
-                ? {
-                    jumlahHariPokok: Math.floor(updatedPokok / (prev.profile?.pembagianPokokHarian || 1000)),
-                  }
+              saldoPokok: updatedPokok,
+              saldoUmum: updatedUmum,
+              saldoZakatFitrah: updatedZakat,
+              saldoQurban: updatedQurban,
+              totalSimpanan,
+              ...(koreksiJenisTabungan === 'pokok'
+                ? { jumlahHariPokok: Math.floor(updatedPokok / (prev.profile?.pembagianPokokHarian || 1000)) }
                 : {}),
             };
           });
 
           const audit = createAuditLog(
             currentAdmin,
-            isDirectApproval ? 'Koreksi Saldo Anggota' : 'Pengajuan Koreksi Saldo',
-            `${currentAdmin.nama} (${isDirectApproval ? 'Super Admin/Approval' : 'Admin Write'}) ${isDirectApproval ? 'mengkoreksi' : 'mengajukan koreksi'} saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Ket: ${koreksiKeterangan}`,
+            'Koreksi Saldo Anggota',
+            `${currentAdmin.nama} (Super Admin) mengkoreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Ket: ${koreksiKeterangan}`,
             newKasEntries[0]?.id
           );
 
           return {
             ...prev,
             members: updatedMembers,
-            memberTransactions: isDirectApproval
-              ? [...newTransactions, ...(prev.memberTransactions || [])]
-              : prev.memberTransactions,
+            memberTransactions: [...newTransactions, ...(prev.memberTransactions || [])],
             kasList: [...newKasEntries, ...(prev.kasList || [])],
             auditLogs: [audit, ...(prev.auditLogs || [])],
           };
         });
       }
 
-      // Kirim Real-time FCM Notification ke masing-masing anggota target jika approved
-      if (isDirectApproval) {
-        targetMembersKoreksi.forEach((m) => {
-          sendRealtimeNotification({
-            recipientId: m.id,
-            recipientNama: m.nama,
-            title: `💳 Penyesuaian Saldo: ${koreksiTipe === 'masuk' ? 'Penambahan (+)' : 'Pengurangan (-)'}`,
-            body: `Transaksi ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (${hariNum} Hari)` : 'Tabungan Umum'} sebesar ${formatRupiah(nominalNum)} telah diproses. Ket: ${koreksiKeterangan}.`,
-            type: 'mutasi_baru',
-            data: { nominal: nominalNum, tipe: koreksiTipe },
-          }).catch(() => {});
-        });
-      }
+      targetMembersKoreksi.forEach((m) => {
+        sendRealtimeNotification({
+          recipientId: m.id,
+          recipientNama: m.nama,
+          title: `💳 Penyesuaian Saldo: ${koreksiTipe === 'masuk' ? 'Penambahan (+)' : 'Pengurangan (-)'}`,
+          body: `Transaksi ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (${hariNum} Hari)` : 'Tabungan Umum'} sebesar ${formatRupiah(nominalNum)} telah diproses. Ket: ${koreksiKeterangan}.`,
+          type: 'mutasi_baru',
+          data: { nominal: nominalNum, tipe: koreksiTipe },
+        }).catch(() => {});
+      });
 
       alert(
-        isDirectApproval
-          ? `✓ Koreksi Saldo Berhasil! Transaksi ${koreksiTipe === 'masuk' ? 'penambahan (+)' : 'pengurangan (-)'} sebesar ${formatRupiah(nominalNum)} untuk ${targetMembersKoreksi.length} anggota berhasil diproses.`
-          : `✓ Pengajuan Penyesuaian Saldo Berhasil Dikirim oleh Admin Write! Dokumen telah masuk ke antrean verifikasi dan menunggu persetujuan (approval) oleh Admin Approval atau Super Admin.`
+        `✓ Koreksi Saldo Berhasil! Transaksi ${koreksiTipe === 'masuk' ? 'penambahan (+)' : 'pengurangan (-)'} sebesar ${formatRupiah(nominalNum)} untuk ${targetMembersKoreksi.length} anggota berhasil diproses.`
       );
       setKoreksiNominal('');
       setKoreksiJumlahHari('');
@@ -429,21 +691,22 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     setPasswordError('');
 
     if (!canPerformAdjustment) {
-      alert('Akses Ditolak: Hanya Super Admin yang berwenang menyetujui transaksi pembagian hasil.');
+      alert('Akses Ditolak: Anda tidak memiliki wewenang untuk mengajukan atau memproses pembagian hasil.');
       return;
     }
 
-    // Validasi Password Super Admin (Req User)
-    const expectedPassword = currentAdmin.password || 'admin123';
-    if (!adminPasswordInput.trim()) {
-      setPasswordError('Password Super Admin wajib diisi untuk persetujuan transaksi.');
-      return;
-    }
+    if (isDirectApproval) {
+      const expectedPassword = currentAdmin.password || 'admin123';
+      if (!adminPasswordInput.trim()) {
+        setPasswordError('Password Super Admin wajib diisi untuk persetujuan transaksi.');
+        return;
+      }
 
-    if (adminPasswordInput.trim() !== expectedPassword) {
-      setPasswordError('Password Super Admin salah! Verifikasi persetujuan transaksi ditolak.');
-      alert('Verifikasi Gagal: Password Super Admin yang Anda masukkan salah.');
-      return;
+      if (adminPasswordInput.trim() !== expectedPassword) {
+        setPasswordError('Password Super Admin salah! Verifikasi persetujuan transaksi ditolak.');
+        alert('Verifikasi Gagal: Password Super Admin yang Anda masukkan salah.');
+        return;
+      }
     }
 
     if (persenNum <= 0) {
@@ -462,7 +725,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     }
 
     const confirmMsg =
-      `Konfirmasi Pembagian Hasil (Bagi Hasil / SHU):\n` +
+      `Konfirmasi ${isDirectApproval ? 'Pembagian Hasil (Bagi Hasil / SHU)' : `Pengajuan Pembagian Hasil (${isApproval ? 'Admin Approval' : 'Admin Write'})`}:\n` +
       `- Persentase: ${persenNum}% dari Tabungan Pokok\n` +
       `- Jumlah Anggota Penerima: ${targetMembersBagiHasil.length} Anggota\n` +
       `- Total Tabungan Pokok Dasar: ${formatRupiah(totalPokokTarget)}\n` +
@@ -470,9 +733,72 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       `- Buku Kas Sumber Beban: Buku Kas ${bagiHasilBukuKas.toUpperCase()}\n` +
       `- Tujuan Kredit Saldo: ${bagiHasilTujuanKredit === 'umum' ? 'Tabungan Umum (Bebas Ditarik)' : 'Tabungan Pokok'}\n` +
       `- Keterangan: ${bagiHasilKeterangan}\n\n` +
-      `Apakah Anda yakin ingin memproses pembagian hasil ini ke seluruh anggota target?`;
+      (isDirectApproval
+        ? 'Apakah Anda yakin ingin memproses pembagian hasil ini ke seluruh anggota target?'
+        : `Pengajuan ini akan menunggu persetujuan ${requiredApproverLabel} sebelum saldo dikreditkan. Lanjutkan?`);
 
     if (!confirm(confirmMsg)) return;
+
+    if (!isDirectApproval) {
+      setIsSubmittingBagiHasil(true);
+      const nowReq = new Date();
+      const newReq: PendingMutasiActionRequest = {
+        id: `mutreq-shu-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        actionType: 'bagi_hasil',
+        status: 'pending',
+        requestedBy: currentAdmin.nama,
+        requestedByRole: currentAdmin.role,
+        requestedAt: nowReq.toISOString(),
+        alasan: bagiHasilKeterangan.trim(),
+        targetIds: targetMembersBagiHasil.map((m) => m.id),
+        targetNames: targetMembersBagiHasil.slice(0, 5).map((m) => m.nama),
+        memberNama: `${targetMembersBagiHasil.length} Anggota`,
+        persen: persenNum,
+        bukuKasSumber: bagiHasilBukuKas,
+        tujuanKredit: bagiHasilTujuanKredit,
+        keterangan: bagiHasilKeterangan.trim(),
+        totalDana: totalBagiHasilEstimasi,
+      };
+      try {
+        let serverOk = false;
+        try {
+          const res = await fetch('/api/mutasi-requests/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ request: newReq }),
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            if (data.state) {
+              serverOk = true;
+              await updateState(() => data.state);
+            }
+          }
+        } catch {}
+
+        if (!serverOk) {
+          await updateState((prev) => {
+            const audit = createAuditLog(
+              currentAdmin,
+              'Pengajuan Pembagian Hasil',
+              `${currentAdmin.nama} mengajukan bagi hasil ${persenNum}% (${formatRupiah(totalBagiHasilEstimasi)}) untuk ${targetMembersBagiHasil.length} anggota. Menunggu persetujuan ${requiredApproverLabel}.`,
+              newReq.id
+            );
+            return {
+              ...prev,
+              pendingMutasiRequests: [newReq, ...(prev.pendingMutasiRequests || [])],
+              auditLogs: [audit, ...(prev.auditLogs || [])],
+            };
+          });
+        }
+        alert(`✓ Pengajuan Pembagian Hasil berhasil dikirim! Menunggu persetujuan ${requiredApproverLabel}.`);
+      } catch (err: any) {
+        alert('Gagal mengirim pengajuan bagi hasil: ' + err.message);
+      } finally {
+        setIsSubmittingBagiHasil(false);
+      }
+      return;
+    }
 
     setIsSubmittingBagiHasil(true);
     const now = new Date();
@@ -649,6 +975,85 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
           <span>
             Mode Pratinjau: Peran Admin Laporan hanya memiliki izin melihat data dan mengunduh laporan. Tombol eksekusi koreksi saldo dan pembagian hasil dinonaktifkan.
           </span>
+        </div>
+      )}
+
+      {/* Panel Persetujuan Penyesuaian Saldo & Bagi Hasil */}
+      {(actionableAdjustRequests.length > 0 || waitingAdjustRequests.length > 0) && (
+        <div className="space-y-3">
+          {actionableAdjustRequests.length > 0 && (
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-amber-950/70 via-slate-900 to-indigo-950/70 border border-amber-500/50 rounded-3xl space-y-3 shadow-xl">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="text-xs sm:text-sm font-black text-amber-200 flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-amber-400" />
+                  <span>Pengajuan Penyesuaian / Bagi Hasil Menunggu Persetujuan Anda ({actionableAdjustRequests.length})</span>
+                </div>
+                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  {isSuperAdmin ? 'Otoritas Super Admin' : 'Persetujuan Pengajuan Admin Write'}
+                </span>
+              </div>
+              <div className="space-y-2">
+                {actionableAdjustRequests.map((req) => (
+                  <div key={req.id} className="p-3 bg-slate-900/90 border border-amber-500/30 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                          {req.actionType === 'bagi_hasil' ? `Bagi Hasil ${req.persen || 0}%` : `Koreksi ${(req.tipe || 'masuk').toUpperCase()} (${(req.jenisTabungan || 'umum').toUpperCase()})`}
+                        </span>
+                        <span className="font-bold text-white">{req.memberNama || `${req.targetIds?.length || 0} Anggota`}</span>
+                        <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-bold">
+                          {isApprovalRole(req.requestedByRole) ? 'Admin Approval' : 'Admin Write'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-300">
+                        Total: <span className="font-mono font-bold text-amber-300">{formatRupiah(req.totalDana || req.nominal || 0)}</span> • Ket: {req.alasan}
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Diajukan oleh <b>{req.requestedBy}</b> • {new Date(req.requestedAt).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                      <button
+                        type="button"
+                        onClick={() => handleApproveMutasiRequest(req, false)}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
+                      >
+                        Tolak
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApproveMutasiRequest(req, true)}
+                        className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl font-black text-xs cursor-pointer"
+                      >
+                        ✓ Setujui
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {waitingAdjustRequests.length > 0 && (
+            <div className="p-3.5 bg-sky-950/30 border border-sky-500/30 rounded-2xl space-y-2 text-xs">
+              <div className="font-bold text-sky-300">
+                Menunggu Persetujuan Pimpinan ({waitingAdjustRequests.length} Pengajuan)
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {waitingAdjustRequests.map((req) => (
+                  <div key={req.id} className="p-2.5 bg-slate-900/80 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
+                    <div className="truncate">
+                      <div className="font-bold text-white truncate">{req.alasan}</div>
+                      <div className="text-[10px] text-slate-400">Oleh {req.requestedBy} • {formatRupiah(req.totalDana || req.nominal || 0)}</div>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 shrink-0">
+                      Menunggu {getRequiredApproverLabel(req.requestedByRole)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -987,26 +1392,32 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 />
               </div>
 
-              {/* Verifikasi Password Super Admin */}
-              <div className="space-y-1.5 p-3 bg-slate-900/80 border border-slate-700/80 rounded-2xl">
-                <label className="block font-bold text-amber-300 text-xs">
-                  6. Konfirmasi Password Super Admin *
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Masukkan password Super Admin (default: admin123)"
-                  value={adminPasswordInput}
-                  onChange={(e) => {
-                    setAdminPasswordInput(e.target.value);
-                    setPasswordError('');
-                  }}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-                {passwordError && (
-                  <p className="text-[11px] text-red-400 font-semibold">{passwordError}</p>
-                )}
-              </div>
+              {/* Verifikasi Super Admin atau Info Approval */}
+              {isDirectApproval ? (
+                <div className="space-y-1.5 p-3 bg-slate-900/80 border border-slate-700/80 rounded-2xl">
+                  <label className="block font-bold text-amber-300 text-xs">
+                    6. Konfirmasi Password Super Admin *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Masukkan password Super Admin"
+                    value={adminPasswordInput}
+                    onChange={(e) => {
+                      setAdminPasswordInput(e.target.value);
+                      setPasswordError('');
+                    }}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  {passwordError && (
+                    <p className="text-[11px] text-red-400 font-semibold">{passwordError}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 bg-amber-950/30 border border-amber-500/40 rounded-2xl text-[11px] text-amber-200/90">
+                  <b>Ketentuan Persetujuan:</b> Pengajuan koreksi saldo ini akan diteruskan ke <b>{requiredApproverLabel}</b> untuk disetujui sebelum saldo & mutasi anggota berubah.
+                </div>
+              )}
 
               {/* Action Button */}
               <div className="pt-2">
@@ -1017,7 +1428,11 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>
-                    {isSubmittingKoreksi ? 'Memproses Koreksi...' : 'Klik Kirim Koreksi Saldo'}
+                    {isSubmittingKoreksi
+                      ? 'Memproses...'
+                      : isDirectApproval
+                      ? 'Klik Kirim Koreksi Saldo'
+                      : `Ajukan Koreksi Saldo ➔ ${requiredApproverLabel}`}
                   </span>
                 </button>
               </div>
@@ -1307,26 +1722,32 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 />
               </div>
 
-              {/* Verifikasi Password Super Admin */}
-              <div className="space-y-1.5 p-3 bg-slate-900/80 border border-slate-700/80 rounded-2xl">
-                <label className="block font-bold text-amber-300 text-xs">
-                  6. Konfirmasi Password Super Admin *
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Masukkan password Super Admin (default: admin123)"
-                  value={adminPasswordInput}
-                  onChange={(e) => {
-                    setAdminPasswordInput(e.target.value);
-                    setPasswordError('');
-                  }}
-                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
-                />
-                {passwordError && (
-                  <p className="text-[11px] text-red-400 font-semibold">{passwordError}</p>
-                )}
-              </div>
+              {/* Verifikasi Super Admin atau Info Approval */}
+              {isDirectApproval ? (
+                <div className="space-y-1.5 p-3 bg-slate-900/80 border border-slate-700/80 rounded-2xl">
+                  <label className="block font-bold text-amber-300 text-xs">
+                    6. Konfirmasi Password Super Admin *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Masukkan password Super Admin"
+                    value={adminPasswordInput}
+                    onChange={(e) => {
+                      setAdminPasswordInput(e.target.value);
+                      setPasswordError('');
+                    }}
+                    className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                  {passwordError && (
+                    <p className="text-[11px] text-red-400 font-semibold">{passwordError}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 bg-amber-950/30 border border-amber-500/40 rounded-2xl text-[11px] text-amber-200/90">
+                  <b>Ketentuan Persetujuan:</b> Pengajuan pembagian hasil ini wajib disetujui oleh <b>{requiredApproverLabel}</b> sebelum dikreditkan ke saldo anggota.
+                </div>
+              )}
 
               {/* Action Button */}
               <div className="pt-2">
@@ -1337,7 +1758,11 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 >
                   <TrendingUp className="w-4 h-4" />
                   <span>
-                    {isSubmittingBagiHasil ? 'Memproses Bagi Hasil...' : 'Klik Kirim & Proses Pembagian Hasil'}
+                    {isSubmittingBagiHasil
+                      ? 'Memproses Bagi Hasil...'
+                      : isDirectApproval
+                      ? 'Klik Kirim & Proses Pembagian Hasil'
+                      : `Ajukan Pembagian Hasil ➔ ${requiredApproverLabel}`}
                   </span>
                 </button>
               </div>

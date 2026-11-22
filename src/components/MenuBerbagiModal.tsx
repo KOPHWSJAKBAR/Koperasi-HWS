@@ -9,7 +9,7 @@ import {
   KasEntry,
   WilayahKoperasi,
 } from '../types';
-import { formatRupiah, createAuditLog, sortMembersDesc } from '../lib/storage';
+import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel } from '../lib/storage';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { exportLaporanBerbagiPdf, exportLaporanBerbagiExcel } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
@@ -955,8 +955,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     }
 
     const isSuperAdmin = currentAdmin?.role === 'super_admin';
-    const isApproval = currentAdmin?.role === 'admin_approval';
-    const isDirectApprove = isSuperAdmin || isApproval;
+    const isDirectApprove = isSuperAdmin;
+    const requiredApprover = getRequiredApproverLabel(currentAdmin?.role);
 
     const jenisLabel = getJenisLabel(salurJenis);
     const kategoriPengeluaran = `Penyaluran ${jenisLabel}`;
@@ -983,12 +983,13 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         }`,
         kasKoperasiId: isDirectApprove ? kasId : undefined,
         inputBy: currentAdmin?.nama || 'Admin Pengurus',
+        requestedByRole: currentAdmin?.role,
         verifiedBy: isDirectApprove ? (currentAdmin?.nama || 'Super Admin') : undefined,
         verifiedAt: isDirectApprove ? now.toISOString() : undefined,
         createdAt: now.toISOString(),
       };
 
-      // Jika langsung disetujui oleh Super Admin atau Admin Approval: catat ke Buku Kas Koperasi
+      // Jika langsung disetujui oleh Super Admin: catat ke Buku Kas Koperasi
       let newKasListEntries: KasEntry[] = [];
       if (isDirectApprove) {
         newKasListEntries = [
@@ -1005,6 +1006,9 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             nominal,
             saldoKasSetelah: 0,
             inputBy: currentAdmin?.nama || 'Admin Pengurus',
+            requestedBy: currentAdmin?.nama,
+            requestedByRole: currentAdmin?.role,
+            approvedBy: currentAdmin?.nama,
             status: 'approved',
             createdAt: now.toISOString(),
           },
@@ -1016,8 +1020,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           currentAdmin || ({ nama: 'Admin', role: 'admin_write' } as any),
           isDirectApprove ? 'Penyaluran Dana Berbagi Disahkan' : 'Pengajuan Penyaluran Sedekah',
           isDirectApprove
-            ? `${currentAdmin?.nama || 'Admin'} menyetujui langsung penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Tercatat di Buku Kas Koperasi.`
-            : `Admin Write (${currentAdmin?.nama || 'Admin'}) mengajukan penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Menunggu persetujuan Admin Approval / Super Admin.`
+            ? `${currentAdmin?.nama || 'Super Admin'} menyetujui langsung penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Tercatat di Buku Kas Koperasi.`
+            : `${currentAdmin?.nama || 'Admin'} (${currentAdmin?.role}) mengajukan penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} kepada "${salurPenerima.trim()}". Menunggu persetujuan ${requiredApprover}.`
         );
 
         return {
@@ -1031,7 +1035,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       if (isDirectApprove) {
         alert(`✓ Penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} berhasil disahkan dan resmi dicatat di Buku Kas Koperasi!`);
       } else {
-        alert(`✓ Pengajuan penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} berhasil diajukan oleh Admin Write! Menunggu persetujuan (approval) dari Admin Approval atau Super Admin.`);
+        alert(`✓ Pengajuan penyaluran ${jenisLabel} senilai ${formatRupiah(nominal)} berhasil diajukan! Menunggu persetujuan dari ${requiredApprover}.`);
       }
 
       setSalurNominal('');
@@ -1043,12 +1047,11 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     }
   };
 
-  // Otorisasi / Approval Penyaluran Sedekah oleh Admin Approval atau Super Admin (Req E)
+  // Otorisasi / Approval Penyaluran Sedekah Berjenjang
   const handleApprovePenyaluran = async (entry: SedekahBerbagiEntry) => {
-    const isSuperAdmin = currentAdmin?.role === 'super_admin';
-    const isApproval = currentAdmin?.role === 'admin_approval';
-    if (!isSuperAdmin && !isApproval) {
-      alert('Akses Ditolak: Hanya Admin Approval atau Super Admin yang berwenang menyetujui penyaluran sedekah.');
+    const reqRole = entry.requestedByRole || 'admin_write';
+    if (!canApproveByRole(reqRole, currentAdmin?.role)) {
+      alert(`Akses Ditolak: Pengajuan penyaluran ini wajib disetujui oleh ${getRequiredApproverLabel(reqRole)}.`);
       return;
     }
 
@@ -1070,7 +1073,10 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         tipe: 'keluar',
         nominal: entry.nominal,
         saldoKasSetelah: 0,
-        inputBy: currentAdmin?.nama || 'Admin Approval',
+        inputBy: entry.inputBy || currentAdmin?.nama || 'Admin',
+        requestedBy: entry.inputBy,
+        requestedByRole: entry.requestedByRole,
+        approvedBy: currentAdmin?.nama,
         status: 'approved',
         createdAt: now.toISOString(),
       };
@@ -1091,7 +1097,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         const audit = createAuditLog(
           currentAdmin!,
           'Persetujuan Penyaluran Sedekah',
-          `${currentAdmin?.nama} (Approval) menyetujui pengajuan penyaluran ${jenisLabel} senilai ${formatRupiah(
+          `${currentAdmin?.nama} (${currentAdmin?.role}) menyetujui pengajuan penyaluran ${jenisLabel} senilai ${formatRupiah(
             entry.nominal
           )} kepada "${entry.penerimaManfaat}". Resmi dibukukan ke Buku Kas Koperasi.`
         );
@@ -1110,12 +1116,11 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     }
   };
 
-  // Tolak Penyaluran Sedekah oleh Admin Approval atau Super Admin (Req E)
+  // Tolak Penyaluran Sedekah Berjenjang
   const handleRejectPenyaluran = async (entry: SedekahBerbagiEntry) => {
-    const isSuperAdmin = currentAdmin?.role === 'super_admin';
-    const isApproval = currentAdmin?.role === 'admin_approval';
-    if (!isSuperAdmin && !isApproval) {
-      alert('Akses Ditolak: Hanya Admin Approval atau Super Admin yang berwenang menolak penyaluran sedekah.');
+    const reqRole = entry.requestedByRole || 'admin_write';
+    if (!canApproveByRole(reqRole, currentAdmin?.role)) {
+      alert(`Akses Ditolak: Pengajuan penyaluran ini hanya dapat ditolak/disetujui oleh ${getRequiredApproverLabel(reqRole)}.`);
       return;
     }
 
@@ -1138,7 +1143,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       const audit = createAuditLog(
         currentAdmin!,
         'Tolak Pengajuan Penyaluran Sedekah',
-        `${currentAdmin?.nama} menolak pengajuan penyaluran senilai ${formatRupiah(entry.nominal)} kepada "${entry.penerimaManfaat}". Alasan: ${reason}`
+        `${currentAdmin?.nama} (${currentAdmin?.role}) menolak pengajuan penyaluran senilai ${formatRupiah(entry.nominal)} kepada "${entry.penerimaManfaat}". Alasan: ${reason}`
       );
 
       return {
@@ -2199,105 +2204,166 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
           {/* ================= TAB 3: SALURKAN DANA BERBAGI (ADMIN ONLY) ================= */}
           {activeTab === 'salurkan' && isAdmin && (
-            <form onSubmit={handleKirimPenyaluran} className="space-y-4">
-              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center gap-2.5 text-xs text-amber-300">
-                <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
-                <span>
-                  Otorisasi Penyaluran: Pengurus menyalurkan dana sedekah yang terkumpul pada Buku Kas Koperasi kepada mustahiq, anak yatim, atau lembaga sosial.
-                </span>
-              </div>
+            <div className="space-y-4">
+              {pendingSalurList.length > 0 && (
+                <div className="p-3.5 bg-amber-950/40 border border-amber-500/40 rounded-2xl space-y-2.5">
+                  <div className="text-xs font-black text-amber-300 flex items-center justify-between">
+                    <span>Antrean Persetujuan Penyaluran Sedekah ({pendingSalurList.length})</span>
+                    <span className="text-[10px] font-bold text-amber-200/80">Hierarki Approval</span>
+                  </div>
+                  <div className="space-y-2">
+                    {pendingSalurList.map((entry) => {
+                      const canAct = canApproveByRole(entry.requestedByRole || 'admin_write', currentAdmin?.role);
+                      return (
+                        <div key={entry.id} className="p-3 bg-slate-900/90 rounded-xl border border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                          <div className="space-y-0.5">
+                            <div className="font-bold text-white">
+                              {entry.namaBerbagiKustom || getJenisLabel(entry.jenis)} • {formatRupiah(entry.nominal)}
+                            </div>
+                            <div className="text-[11px] text-slate-300">
+                              Penerima: <b>{entry.penerimaManfaat || '-'}</b> • {entry.tanggal}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Diajukan oleh: <b className="text-amber-300">{entry.inputBy || 'Admin'}</b> ({entry.requestedByRole || 'admin_write'})
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {canAct ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectPenyaluran(entry)}
+                                  className="px-2.5 py-1.5 bg-red-950/70 hover:bg-red-900 text-red-300 font-bold rounded-lg text-[11px] cursor-pointer"
+                                >
+                                  Tolak
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleApprovePenyaluran(entry)}
+                                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-[11px] cursor-pointer"
+                                >
+                                  Setujui & Catat Kas
+                                </button>
+                              </>
+                            ) : (
+                              <span className="px-2.5 py-1 bg-slate-800 text-amber-300 rounded-lg text-[10px] font-bold border border-amber-500/30">
+                                Menunggu {getRequiredApproverLabel(entry.requestedByRole)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    Pilih Program Sedekah yang Disalurkan:
-                  </label>
-                  <select
-                    value={salurJenis}
-                    onChange={(e) => setSalurJenis(e.target.value as JenisSedekahBerbagi)}
-                    className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
-                  >
-                    <option value="sedekah_subuh">{namaSubuh} (Tersedia: {formatRupiah(subuhSaldo)})</option>
-                    <option value="sedekah_jumat">{namaJumat} (Tersedia: {formatRupiah(jumatSaldo)})</option>
-                    <option value="sedekah_umum">{namaUmum} (Tersedia: {formatRupiah(umumSaldo)})</option>
-                  </select>
+              <form onSubmit={handleKirimPenyaluran} className="space-y-4">
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center gap-2.5 text-xs text-amber-300">
+                  <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
+                  <span>
+                    {currentAdmin?.role === 'super_admin'
+                      ? 'Otorisasi Super Admin: Penyaluran dana sedekah langsung disahkan dan dicatat pada Buku Kas Koperasi.'
+                      : `Otorisasi Berjenjang: Pengajuan penyaluran Anda akan diteruskan untuk persetujuan ${getRequiredApproverLabel(currentAdmin?.role)}.`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
+                      Pilih Program Sedekah yang Disalurkan:
+                    </label>
+                    <select
+                      value={salurJenis}
+                      onChange={(e) => setSalurJenis(e.target.value as JenisSedekahBerbagi)}
+                      className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                    >
+                      <option value="sedekah_subuh">{namaSubuh} (Tersedia: {formatRupiah(subuhSaldo)})</option>
+                      <option value="sedekah_jumat">{namaJumat} (Tersedia: {formatRupiah(jumatSaldo)})</option>
+                      <option value="sedekah_umum">{namaUmum} (Tersedia: {formatRupiah(umumSaldo)})</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
+                      Tanggal Penyaluran:
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={salurTanggal}
+                      onChange={(e) => setSalurTanggal(e.target.value)}
+                      className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1">
-                    Tanggal Penyaluran:
+                    Nominal Dana yang Disalurkan:
+                  </label>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-xs text-slate-400 font-bold">
+                      Rp
+                    </span>
+                    <input
+                      type="number"
+                      min="1000"
+                      step="1000"
+                      required
+                      value={salurNominal}
+                      onChange={(e) => setSalurNominal(e.target.value)}
+                      placeholder="Masukkan nominal penyaluran..."
+                      className="w-full pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    Nama Penerima Manfaat / Lembaga / Sasaran *:
                   </label>
                   <input
-                    type="date"
+                    type="text"
                     required
-                    value={salurTanggal}
-                    onChange={(e) => setSalurTanggal(e.target.value)}
+                    value={salurPenerima}
+                    onChange={(e) => setSalurPenerima(e.target.value)}
+                    placeholder="Contoh: Panti Asuhan Yatim Piatu Al-Barokah / 25 Kaum Dhuafa Kembangan"
                     className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Nominal Dana yang Disalurkan:
-                </label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-xs text-slate-400 font-bold">
-                    Rp
-                  </span>
-                  <input
-                    type="number"
-                    min="1000"
-                    step="1000"
-                    required
-                    value={salurNominal}
-                    onChange={(e) => setSalurNominal(e.target.value)}
-                    placeholder="Masukkan nominal penyaluran..."
-                    className="w-full pl-9 pr-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-mono"
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    Keterangan Penyaluran / Dokumentasi:
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={salurKeterangan}
+                    onChange={(e) => setSalurKeterangan(e.target.value)}
+                    placeholder="Rincian paket sembako, santunan tunai, atau kebutuhan yang dibagikan..."
+                    className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Nama Penerima Manfaat / Lembaga / Sasaran *:
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={salurPenerima}
-                  onChange={(e) => setSalurPenerima(e.target.value)}
-                  placeholder="Contoh: Panti Asuhan Yatim Piatu Al-Barokah / 25 Kaum Dhuafa Kembangan"
-                  className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  Keterangan Penyaluran / Dokumentasi:
-                </label>
-                <textarea
-                  rows={2}
-                  value={salurKeterangan}
-                  onChange={(e) => setSalurKeterangan(e.target.value)}
-                  placeholder="Rincian paket sembako, santunan tunai, atau kebutuhan yang dibagikan..."
-                  className="w-full p-2.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  disabled={isSubmittingSalur}
-                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm rounded-2xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                >
-                  <Send className="w-4 h-4" />
-                  <span>
-                    {isSubmittingSalur ? 'Mengesahkan Penyaluran...' : 'Sahkan & Catat Penyaluran ke Kas Koperasi'}
-                  </span>
-                </button>
-              </div>
-            </form>
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSubmittingSalur}
+                    className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm rounded-2xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>
+                      {isSubmittingSalur
+                        ? 'Memproses Penyaluran...'
+                        : currentAdmin?.role === 'super_admin'
+                        ? 'Sahkan & Catat Penyaluran ke Kas Koperasi'
+                        : `Ajukan Penyaluran (Persetujuan ${getRequiredApproverLabel(currentAdmin?.role)})`}
+                    </span>
+                  </button>
+                </div>
+              </form>
+            </div>
           )}
 
           {/* ================= TAB 4: RIWAYAT & UNDUH LAPORAN BERBAGI (ADMIN ONLY) ================= */}

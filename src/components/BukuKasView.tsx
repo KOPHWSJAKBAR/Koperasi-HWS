@@ -5,7 +5,15 @@ import {
   KasEntry,
   MemberTransaction,
 } from '../types';
-import { formatRupiah, createAuditLog, getUnifiedSedekahList, sortMembersDesc } from '../lib/storage';
+import {
+  formatRupiah,
+  createAuditLog,
+  getUnifiedSedekahList,
+  sortMembersDesc,
+  canApproveByRole,
+  getRequiredApproverLabel,
+  isApprovalRole,
+} from '../lib/storage';
 import {
   downloadExcelCsv,
   printDocumentHtml,
@@ -124,13 +132,15 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const isApproval = currentAdmin.role === 'admin_approval' || currentAdmin.role === 'admin_kelola';
   const isLaporan = currentAdmin.role === 'admin_laporan';
 
-  // Can approve / direct modify: Super Admin or Admin Approval / Admin Pembukuan
-  const canDirectModify = isSuperAdmin || isApproval || isPembukuan;
-  // Can input documents: Super Admin, Admin Write, Admin Approval
+  // Hanya Super Admin yang dapat mengeksekusi langsung tanpa menunggu approval pihak lain
+  const isDirectExec = isSuperAdmin;
+  // Admin Approval & Super Admin dapat menyetujui pengajuan sesuai tingkatan (Approval -> Write saja; Super Admin -> Semua)
+  const canApprovePending = isSuperAdmin || isApproval || isPembukuan;
+  // Can input documents: Super Admin, Admin Write, Admin Approval (selain Super Admin -> masuk pending approval)
   const canInput = isSuperAdmin || isWriter || isApproval || isPembukuan;
-  // Can edit: Super Admin, Admin Write (dengan approval), atau Admin Approval
+  // Can edit: Super Admin, Admin Write, Admin Approval
   const canEdit = isSuperAdmin || isWriter || isApproval || isPembukuan;
-  // Can delete: Super Admin, Admin Write (dengan approval), atau Admin Approval
+  // Can delete: Super Admin, Admin Write, Admin Approval
   const canDelete = isSuperAdmin || isWriter || isApproval || isPembukuan;
 
   // Filter out deleted kas entries permanently (Jangan tampilkan transaksi yang telah dihapus per user instruction)
@@ -141,6 +151,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
   // Pending approval list for Buku Kas (Input, Edit, Hapus)
   const pendingKasApprovals = activeKasList.filter((k) => k.status === 'pending_approval');
+  const actionablePendingKas = pendingKasApprovals.filter((k) =>
+    canApproveByRole(k.requestedByRole || 'admin_write', currentAdmin.role)
+  );
+  const waitingForHigherKas = pendingKasApprovals.filter(
+    (k) => !canApproveByRole(k.requestedByRole || 'admin_write', currentAdmin.role)
+  );
 
   // 1. Calculate Running Saldo Buku Kas Anggota = total transaksi dari setoran anggota yang telah diverifikasi
   const runningSaldoMap = new Map<string, number>();
@@ -245,7 +261,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       const mId = selectedMember.id;
       const now = new Date();
       const jam = now.toTimeString().slice(0, 5);
-      const isApproved = isSuperAdmin || isApproval;
+      const isApproved = isDirectExec;
       const statusTx = isApproved ? 'approved' : 'pending_approval';
       const refId = `KAS-ANG-${Date.now()}`;
 
@@ -260,21 +276,33 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         let updatedSedekahList = prev.sedekahList || [];
 
         if (formSubKategoriAnggota === 'pokok') {
-          // Aturan kelipatan 2.000 / hari: 50% Pokok, 25% Qurban, 25% Zakat
           const jlhHari = Math.max(1, Math.round(nominal / 2000));
           const pNom = Math.floor(nominal * 0.5);
           const qNom = Math.floor(nominal * 0.25);
           const zNom = nominal - pNom - qNom;
 
-          if (formTipe === 'masuk') {
-            updatedPokok += pNom;
-            updatedQurban += qNom;
-            updatedZakat += zNom;
-          } else {
-            updatedPokok = Math.max(0, updatedPokok - pNom);
-            updatedQurban = Math.max(0, updatedQurban - qNom);
-            updatedZakat = Math.max(0, updatedZakat - zNom);
+          if (isApproved) {
+            if (formTipe === 'masuk') {
+              updatedPokok += pNom;
+              updatedQurban += qNom;
+              updatedZakat += zNom;
+            } else {
+              updatedPokok = Math.max(0, updatedPokok - pNom);
+              updatedQurban = Math.max(0, updatedQurban - qNom);
+              updatedZakat = Math.max(0, updatedZakat - zNom);
+            }
           }
+
+          const sharedMeta = {
+            subKategori: 'pokok' as const,
+            memberId: mId,
+            memberNama: mName,
+            jumlahHari: jlhHari,
+            referensiId: refId,
+            nominalPokok: pNom,
+            nominalQurban: qNom,
+            nominalZakat: zNom,
+          };
 
           newKasEntries.push(
             {
@@ -287,11 +315,17 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               namaPenerima: mName,
               memberId: mId,
               referensiId: refId,
+              jumlahHari: jlhHari,
               tipe: formTipe,
               nominal: pNom,
               saldoKasSetelah: 0,
               inputBy: currentAdmin.nama,
+              requestedBy: isApproved ? undefined : currentAdmin.nama,
+              requestedByRole: isApproved ? undefined : currentAdmin.role,
+              approvedBy: isApproved ? currentAdmin.nama : undefined,
               status: statusTx,
+              pendingAction: isApproved ? undefined : 'create',
+              pendingAnggotaMeta: isApproved ? undefined : sharedMeta,
               createdAt: now.toISOString(),
             },
             {
@@ -304,11 +338,17 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               namaPenerima: mName,
               memberId: mId,
               referensiId: refId,
+              jumlahHari: jlhHari,
               tipe: formTipe,
               nominal: qNom,
               saldoKasSetelah: 0,
               inputBy: currentAdmin.nama,
+              requestedBy: isApproved ? undefined : currentAdmin.nama,
+              requestedByRole: isApproved ? undefined : currentAdmin.role,
+              approvedBy: isApproved ? currentAdmin.nama : undefined,
               status: statusTx,
+              pendingAction: isApproved ? undefined : 'create',
+              pendingAnggotaMeta: isApproved ? undefined : sharedMeta,
               createdAt: now.toISOString(),
             },
             {
@@ -321,34 +361,44 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               namaPenerima: mName,
               memberId: mId,
               referensiId: refId,
+              jumlahHari: jlhHari,
               tipe: formTipe,
               nominal: zNom,
               saldoKasSetelah: 0,
               inputBy: currentAdmin.nama,
+              requestedBy: isApproved ? undefined : currentAdmin.nama,
+              requestedByRole: isApproved ? undefined : currentAdmin.role,
+              approvedBy: isApproved ? currentAdmin.nama : undefined,
               status: statusTx,
+              pendingAction: isApproved ? undefined : 'create',
+              pendingAnggotaMeta: isApproved ? undefined : sharedMeta,
               createdAt: now.toISOString(),
             }
           );
 
-          newTransactions.push({
-            id: `tx-wajib-${Date.now()}`,
-            memberId: mId,
-            tanggal: formTanggal,
-            jam,
-            keterangan: `${formTipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TABUNGAN POKOK (${jlhHari} HARI • 50% POKOK, 25% QURBAN, 25% ZAKAT): ${formKeterangan || ''}`,
-            cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
-            tipe: formTipe,
-            nominal,
-            saldoSetelah: updatedPokok + updatedUmum,
-            kategori: 'pokok',
-            referensiId: refId,
-            jumlahHari: jlhHari,
-          });
+          if (isApproved) {
+            newTransactions.push({
+              id: `tx-wajib-${Date.now()}`,
+              memberId: mId,
+              tanggal: formTanggal,
+              jam,
+              keterangan: `${formTipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TABUNGAN POKOK (${jlhHari} HARI • 50% POKOK, 25% QURBAN, 25% ZAKAT): ${formKeterangan || ''}`,
+              cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: formTipe,
+              nominal,
+              saldoSetelah: updatedPokok + updatedUmum,
+              kategori: 'pokok',
+              referensiId: refId,
+              jumlahHari: jlhHari,
+            });
+          }
         } else if (formSubKategoriAnggota === 'umum') {
-          if (formTipe === 'masuk') {
-            updatedUmum += nominal;
-          } else {
-            updatedUmum = Math.max(0, updatedUmum - nominal);
+          if (isApproved) {
+            if (formTipe === 'masuk') {
+              updatedUmum += nominal;
+            } else {
+              updatedUmum = Math.max(0, updatedUmum - nominal);
+            }
           }
 
           newKasEntries.push({
@@ -365,25 +415,38 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             nominal,
             saldoKasSetelah: 0,
             inputBy: currentAdmin.nama,
+            requestedBy: isApproved ? undefined : currentAdmin.nama,
+            requestedByRole: isApproved ? undefined : currentAdmin.role,
+            approvedBy: isApproved ? currentAdmin.nama : undefined,
             status: statusTx,
+            pendingAction: isApproved ? undefined : 'create',
+            pendingAnggotaMeta: isApproved
+              ? undefined
+              : {
+                  subKategori: 'umum',
+                  memberId: mId,
+                  memberNama: mName,
+                  referensiId: refId,
+                },
             createdAt: now.toISOString(),
           });
 
-          newTransactions.push({
-            id: `tx-umum-${Date.now()}`,
-            memberId: mId,
-            tanggal: formTanggal,
-            jam,
-            keterangan: `${formTipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TUNAI TABUNGAN BEBAS: ${formKeterangan || ''}`,
-            cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
-            tipe: formTipe,
-            nominal,
-            saldoSetelah: updatedPokok + updatedUmum,
-            kategori: 'umum',
-            referensiId: refId,
-          });
+          if (isApproved) {
+            newTransactions.push({
+              id: `tx-umum-${Date.now()}`,
+              memberId: mId,
+              tanggal: formTanggal,
+              jam,
+              keterangan: `${formTipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TUNAI TABUNGAN BEBAS: ${formKeterangan || ''}`,
+              cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: formTipe,
+              nominal,
+              saldoSetelah: updatedPokok + updatedUmum,
+              kategori: 'umum',
+              referensiId: refId,
+            });
+          }
         } else if (formSubKategoriAnggota === 'sedekah') {
-          // Sedekah Anggota
           newKasEntries.push({
             id: `kas-kop-sdk-${Date.now()}`,
             bukuKas: 'koperasi',
@@ -400,64 +463,82 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             nominal,
             saldoKasSetelah: 0,
             inputBy: currentAdmin.nama,
+            requestedBy: isApproved ? undefined : currentAdmin.nama,
+            requestedByRole: isApproved ? undefined : currentAdmin.role,
+            approvedBy: isApproved ? currentAdmin.nama : undefined,
             status: statusTx,
+            pendingAction: isApproved ? undefined : 'create',
+            pendingAnggotaMeta: isApproved
+              ? undefined
+              : {
+                  subKategori: 'lainnya',
+                  memberId: mId,
+                  memberNama: mName,
+                  referensiId: refId,
+                  kategori: 'sedekah',
+                },
             createdAt: now.toISOString(),
           });
 
-          newTransactions.push({
-            id: `tx-sdk-${Date.now()}`,
-            memberId: mId,
-            tanggal: formTanggal,
-            jam,
-            keterangan: `Sedekah Umum dari ${mName}${formKeterangan ? ` - ${formKeterangan}` : ''}`,
-            cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
-            tipe: formTipe,
-            nominal,
-            saldoSetelah: updatedPokok + updatedUmum,
-            kategori: 'sedekah',
-            referensiId: refId,
-          });
-
-          updatedSedekahList = [
-            {
-              id: refId,
+          if (isApproved) {
+            newTransactions.push({
+              id: `tx-sdk-${Date.now()}`,
+              memberId: mId,
               tanggal: formTanggal,
               jam,
+              keterangan: `Sedekah Umum dari ${mName}${formKeterangan ? ` - ${formKeterangan}` : ''}`,
+              cbg: `KCP ${(selectedMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+              tipe: formTipe,
               nominal,
-              tipe: formTipe === 'masuk' ? 'penerimaan' : 'penyaluran',
-              jenis: 'sedekah_umum',
-              donaturMemberId: mId,
-              donaturNama: mName,
-              keterangan: formKeterangan || 'Sedekah Anggota via Buku Kas',
-              status: isApproved ? 'approved' : 'pending',
-              inputBy: currentAdmin.nama,
-              verifiedAt: now.toISOString(),
-              verifiedBy: currentAdmin.nama,
-              createdAt: now.toISOString(),
-            },
-            ...updatedSedekahList,
-          ];
+              saldoSetelah: updatedPokok + updatedUmum,
+              kategori: 'sedekah',
+              referensiId: refId,
+            });
+
+            updatedSedekahList = [
+              {
+                id: refId,
+                tanggal: formTanggal,
+                jam,
+                nominal,
+                tipe: formTipe === 'masuk' ? 'penerimaan' : 'penyaluran',
+                jenis: 'sedekah_umum',
+                donaturMemberId: mId,
+                donaturNama: mName,
+                keterangan: formKeterangan || 'Sedekah Anggota via Buku Kas',
+                status: 'approved',
+                inputBy: currentAdmin.nama,
+                requestedByRole: currentAdmin.role,
+                verifiedAt: now.toISOString(),
+                verifiedBy: currentAdmin.nama,
+                createdAt: now.toISOString(),
+              },
+              ...updatedSedekahList,
+            ];
+          }
         }
 
         const totalSimpanan = updatedPokok + updatedUmum + updatedZakat + updatedQurban;
-        const updatedMembers = prev.members.map((m) =>
-          m.id === mId
-            ? {
-                ...m,
-                saldoPokok: updatedPokok,
-                saldoUmum: updatedUmum,
-                saldoZakatFitrah: updatedZakat,
-                saldoQurban: updatedQurban,
-                totalSimpanan,
-                jumlahHariPokok: Math.floor(updatedPokok / (prev.profile?.pembagianPokokHarian || 1000)),
-              }
-            : m
-        );
+        const updatedMembers = isApproved
+          ? prev.members.map((m) =>
+              m.id === mId
+                ? {
+                    ...m,
+                    saldoPokok: updatedPokok,
+                    saldoUmum: updatedUmum,
+                    saldoZakatFitrah: updatedZakat,
+                    saldoQurban: updatedQurban,
+                    totalSimpanan,
+                    jumlahHariPokok: Math.floor(updatedPokok / (prev.profile?.pembagianPokokHarian || 1000)),
+                  }
+                : m
+            )
+          : prev.members;
 
         const audit = createAuditLog(
           currentAdmin,
-          `Input Kas Anggota [${formSubKategoriAnggota.toUpperCase()}]`,
-          `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)} untuk ${mName} (${formKeterangan || formSubKategoriAnggota})`,
+          isApproved ? `Input Kas Anggota [${formSubKategoriAnggota.toUpperCase()}]` : `Pengajuan Kas Anggota [${formSubKategoriAnggota.toUpperCase()}]`,
+          `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)} untuk ${mName} (${formKeterangan || formSubKategoriAnggota}) - ${isApproved ? 'Disetujui Langsung' : `Menunggu Persetujuan ${getRequiredApproverLabel(currentAdmin.role)}`}`,
           refId
         );
 
@@ -476,12 +557,15 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       setFormMemberId('');
       setFormNamaPenerima('');
       setFormKeterangan('');
-      alert(`✓ Transaksi Buku Kas Anggota (${formatRupiah(nominal)}) berhasil dibukukan dan saldo anggota telah disinkronkan!`);
+      alert(
+        isApproved
+          ? `✓ Transaksi Buku Kas Anggota (${formatRupiah(nominal)}) berhasil dibukukan dan saldo anggota telah disinkronkan!`
+          : `✓ Pengajuan Buku Kas Anggota (${formatRupiah(nominal)}) masuk status MENUNGGU PERSETUJUAN ${getRequiredApproverLabel(currentAdmin.role)}. Saldo anggota belum berubah sebelum disetujui.`
+      );
       return;
     }
 
     // Input Buku Kas Koperasi
-    // Check no-minus rule: requirement 47 "Kedua Buku kas tidak bisa minus"
     if (formTipe === 'keluar' && nominal > saldoKasKoperasi) {
       alert(`Transaksi ditolak: Saldo Kas Koperasi tidak mencukupi (Tersedia: ${formatRupiah(saldoKasKoperasi)})`);
       return;
@@ -496,18 +580,20 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       namaPenerima: formNamaPenerima.trim() || (formTipe === 'masuk' ? 'Kasir / Penyetor Koperasi' : 'Pihak Penerima Kas'),
       tipe: formTipe,
       nominal,
-      saldoKasSetelah: formTipe === 'masuk' ? saldoKasKoperasi + nominal : saldoKasKoperasi - nominal,
+      saldoKasSetelah: isDirectExec ? (formTipe === 'masuk' ? saldoKasKoperasi + nominal : saldoKasKoperasi - nominal) : saldoKasKoperasi,
       inputBy: currentAdmin.nama,
-      status: (isSuperAdmin || isApproval) ? 'approved' : 'pending_approval',
-      pendingAction: (isSuperAdmin || isApproval) ? undefined : 'create',
-      approvedBy: (isSuperAdmin || isApproval) ? currentAdmin.nama : undefined,
+      requestedBy: isDirectExec ? undefined : currentAdmin.nama,
+      requestedByRole: isDirectExec ? undefined : currentAdmin.role,
+      status: isDirectExec ? 'approved' : 'pending_approval',
+      pendingAction: isDirectExec ? undefined : 'create',
+      approvedBy: isDirectExec ? currentAdmin.nama : undefined,
       createdAt: new Date().toISOString(),
     };
 
     const audit = createAuditLog(
       currentAdmin,
-      'Input Kas Koperasi',
-      `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)}: ${formKeterangan} (${newKas.namaPenerima}) - ${newKas.status === 'approved' ? 'Disetujui' : 'Menunggu Approval'}`,
+      isDirectExec ? 'Input Kas Koperasi' : 'Pengajuan Input Kas Koperasi',
+      `${formTipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(nominal)}: ${formKeterangan} (${newKas.namaPenerima}) - ${newKas.status === 'approved' ? 'Disetujui' : `Menunggu Persetujuan ${getRequiredApproverLabel(currentAdmin.role)}`}`,
       newKas.id
     );
 
@@ -522,14 +608,13 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     setFormNamaPenerima('');
     setFormKeterangan('');
     alert(
-      (isSuperAdmin || isApproval)
+      isDirectExec
         ? '✓ Transaksi kas koperasi berhasil dicatat dan disetujui!'
-        : '✓ Transaksi berhasil ditulis oleh Admin Write! Dokumen masuk status MENUNGGU PERSETUJUAN (Approval) oleh Admin Approval / Super Admin.'
+        : `✓ Pengajuan transaksi kas koperasi berhasil dikirim! Menunggu persetujuan ${getRequiredApproverLabel(currentAdmin.role)}.`
     );
   };
 
   // Handle Transfer Antar Buku Kas (Req 2: Kas Anggota ⇄ Kas Koperasi)
-  // Pinjaman Kas (sesuai dari mana buku kas diterima) dan Pengembalian Kas (sesuai dari mana buku kas diambil)
   const handleTransferBukuKasSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canInput) {
@@ -556,7 +641,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     const idKeluar = `tf-out-${Date.now()}`;
     const idMasuk = `tf-in-${Date.now() + 1}`;
 
-    // Req 2: Pinjaman Kas (sesuai dari mana buku kas diterima) & Pengembalian Kas (sesuai dari mana buku kas diambil)
     const kategoriKeluar = isPinjaman ? 'Pinjaman Kas' : 'Pengembalian Kas';
     const kategoriMasuk = isPinjaman ? 'Pinjaman Kas' : 'Pengembalian Buku Kas';
 
@@ -568,7 +652,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       ? `Penerimaan Pinjaman Kas dari ${labelSumber}${tfKeterangan.trim() ? ` - ${tfKeterangan.trim()}` : ''}`
       : `Penerimaan Pengembalian Kas dari ${labelSumber}${tfKeterangan.trim() ? ` - ${tfKeterangan.trim()}` : ''}`;
 
-    const statusTransaksi = (isSuperAdmin || isApproval) ? 'approved' : 'pending_approval';
+    const statusTransaksi = isDirectExec ? 'approved' : 'pending_approval';
 
     const entryKeluar: KasEntry = {
       id: idKeluar,
@@ -581,7 +665,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       nominal,
       saldoKasSetelah: 0,
       inputBy: tfNamaPetugas || currentAdmin.nama,
+      requestedBy: isDirectExec ? undefined : currentAdmin.nama,
+      requestedByRole: isDirectExec ? undefined : currentAdmin.role,
+      approvedBy: isDirectExec ? currentAdmin.nama : undefined,
       status: statusTransaksi,
+      pendingAction: isDirectExec ? undefined : 'create',
       createdAt: now.toISOString(),
     };
 
@@ -596,13 +684,17 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       nominal,
       saldoKasSetelah: 0,
       inputBy: tfNamaPetugas || currentAdmin.nama,
+      requestedBy: isDirectExec ? undefined : currentAdmin.nama,
+      requestedByRole: isDirectExec ? undefined : currentAdmin.role,
+      approvedBy: isDirectExec ? currentAdmin.nama : undefined,
       status: statusTransaksi,
+      pendingAction: isDirectExec ? undefined : 'create',
       createdAt: now.toISOString(),
     };
 
     const audit = createAuditLog(
       currentAdmin,
-      'Transfer Antar Buku Kas',
+      isDirectExec ? 'Transfer Antar Buku Kas' : 'Pengajuan Transfer Antar Buku Kas',
       `Transfer ${labelSumber} ➔ ${labelTujuan} sebesar ${formatRupiah(nominal)} (${isPinjaman ? 'Pinjaman Kas' : 'Pengembalian Kas'})${tfKeterangan ? ` - ${tfKeterangan}` : ''}`,
       idKeluar
     );
@@ -619,7 +711,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     alert(
       statusTransaksi === 'approved'
         ? `✓ Transfer antar buku kas sebesar ${formatRupiah(nominal)} berhasil dibukukan (${labelSumber} ➔ ${labelTujuan})!`
-        : `✓ Pengajuan transfer antar buku kas sebesar ${formatRupiah(nominal)} berhasil dibuat oleh Admin Write! Menunggu approval.`
+        : `✓ Pengajuan transfer antar buku kas sebesar ${formatRupiah(nominal)} berhasil dibuat! Menunggu persetujuan ${getRequiredApproverLabel(currentAdmin.role)}.`
     );
   };
 
@@ -656,11 +748,11 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       return;
     }
 
-    const isDirect = isSuperAdmin || isApproval;
+    const isDirect = isDirectExec;
     const updatedEntry: KasEntry = {
       ...editingKasEntry,
       tanggal: editTanggal,
-      bukuKas: 'koperasi', // Selalu koperasi jika diedit
+      bukuKas: 'koperasi',
       kategori: editKategori,
       tipe: editTipe,
       nominal: nominalNum,
@@ -677,16 +769,21 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         keterangan: editingKasEntry.keterangan,
         namaPenerima: editingKasEntry.namaPenerima,
       },
-      inputBy: isDirect ? (editingKasEntry.inputBy || currentAdmin.nama) : currentAdmin.nama,
+      inputBy: editingKasEntry.inputBy || currentAdmin.nama,
+      requestedBy: isDirect ? undefined : currentAdmin.nama,
+      requestedByRole: isDirect ? undefined : currentAdmin.role,
       approvedBy: isDirect ? currentAdmin.nama : undefined,
     };
 
-    // Kirim update ke server
     try {
       const res = await fetch('/api/kas/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry: updatedEntry, adminName: currentAdmin.nama }),
+        body: JSON.stringify({
+          entry: updatedEntry,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -702,7 +799,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       const audit = createAuditLog(
         currentAdmin,
         isDirect ? 'Edit Transaksi Buku Kas' : 'Pengajuan Edit Buku Kas',
-        `Mengubah transaksi kas [${updatedEntry.bukuKas}] ${updatedEntry.keterangan} senilai ${formatRupiah(updatedEntry.nominal)} (${isDirect ? 'Disetujui Langsung' : 'Menunggu Approval'})`,
+        `Mengubah transaksi kas [${updatedEntry.bukuKas}] ${updatedEntry.keterangan} senilai ${formatRupiah(updatedEntry.nominal)} (${isDirect ? 'Disetujui Langsung' : `Menunggu Persetujuan ${getRequiredApproverLabel(currentAdmin.role)}`})`,
         updatedEntry.id
       );
       return {
@@ -716,239 +813,263 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     alert(
       isDirect
         ? '✓ Transaksi buku kas berhasil diperbarui dan disetujui!'
-        : '✓ Perubahan transaksi kas berhasil ditulis oleh Admin Write! Menunggu persetujuan (approval) oleh Admin Approval / Super Admin.'
+        : `✓ Perubahan transaksi kas berhasil diajukan! Menunggu persetujuan ${getRequiredApproverLabel(currentAdmin.role)}.`
     );
   };
 
-  // Handle Delete Kas Entry (Req: Super Admin dapat menghapus buku kas anggota & kas koperasi)
-  const handleDeleteKas = async (entry: KasEntry) => {
-    if (entry.bukuKas === 'anggota' && !isSuperAdmin) {
-      alert('Buku Kas Anggota bersifat otomatis dan dilindungi. Hanya Super Admin yang berhak menghapus catatan Buku Kas Anggota.');
-      return;
-    }
+  // Helper: Sinkronisasi otomatis mutasi, saldo anggota & running saldo buku kas saat entri Buku Kas dihapus
+  const applyKasDeletionWithMemberSync = (prev: AppState, deletedEntry: KasEntry): AppState => {
+    const remainingKas = prev.kasList.filter((k) => k.id !== deletedEntry.id);
 
-    if (isWriter) {
-      const confirmReq = confirm(
-        `Ajukan penghapusan transaksi Buku Kas Koperasi:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nPengajuan akan diteruskan ke Admin Approval atau Super Admin untuk disahkan. Lanjutkan?`
-      );
-      if (!confirmReq) return;
-
-      try {
-        await fetch('/api/kas/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: false }),
+    const recomputeKasSaldo = (list: KasEntry[]) => {
+      const byType = (type: 'anggota' | 'koperasi') => {
+        const items = list
+          .filter((k) => k.bukuKas === type)
+          .slice()
+          .sort((a, b) => (a.tanggal + (a.createdAt || '')).localeCompare(b.tanggal + (b.createdAt || '')));
+        let run = 0;
+        const map = new Map<string, number>();
+        items.forEach((it) => {
+          if (it.status === 'approved') {
+            run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+          }
+          map.set(it.id, run);
         });
-      } catch {}
-
-      await updateState((prev) => ({
-        ...prev,
-        kasList: prev.kasList.map((k) =>
-          k.id === entry.id
-            ? { ...k, status: 'pending_approval', pendingAction: 'delete', inputBy: currentAdmin.nama }
-            : k
-        ),
-        auditLogs: [
-          createAuditLog(
-            currentAdmin,
-            'Pengajuan Hapus Buku Kas',
-            `Admin Write ${currentAdmin.nama} mengajukan penghapusan transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)}`,
-            entry.id
-          ),
-          ...prev.auditLogs,
-        ],
-      }));
-
-      alert(`✓ Pengajuan hapus transaksi "${entry.keterangan}" berhasil dikirim! Menunggu persetujuan Admin Approval atau Super Admin.`);
-      return;
-    }
-
-    // Helper: Sinkronisasi otomatis mutasi, saldo anggota & running saldo buku kas saat entri Buku Kas dihapus
-    const applyKasDeletionWithMemberSync = (prev: AppState, deletedEntry: KasEntry) => {
-      const remainingKas = prev.kasList.filter((k) => k.id !== deletedEntry.id);
-
-      // Recompute running saldoKasSetelah per bukuKas
-      const recomputeKasSaldo = (list: KasEntry[]) => {
-        const byType = (type: 'anggota' | 'koperasi') => {
-          const items = list
-            .filter((k) => k.bukuKas === type)
-            .slice()
-            .sort((a, b) => (a.tanggal + (a.createdAt || '')).localeCompare(b.tanggal + (b.createdAt || '')));
-          let run = 0;
-          const map = new Map<string, number>();
-          items.forEach((it) => {
-            if (it.status === 'approved') {
-              run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
-            }
-            map.set(it.id, run);
-          });
-          return map;
-        };
-        const mapAnggota = byType('anggota');
-        const mapKoperasi = byType('koperasi');
-        return list.map((k) => ({
-          ...k,
-          saldoKasSetelah:
-            k.bukuKas === 'anggota'
-              ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
-              : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
-        }));
+        return map;
       };
+      const mapAnggota = byType('anggota');
+      const mapKoperasi = byType('koperasi');
+      return list.map((k) => ({
+        ...k,
+        saldoKasSetelah:
+          k.bukuKas === 'anggota'
+            ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+            : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+      }));
+    };
 
-      const syncedKasList = recomputeKasSaldo(remainingKas);
-      const nextDeletedKasIds = Array.from(new Set([...(prev.deletedKasIds || []), deletedEntry.id]));
+    const syncedKasList = recomputeKasSaldo(remainingKas);
+    const nextDeletedKasIds = Array.from(new Set([...(prev.deletedKasIds || []), deletedEntry.id]));
 
-      if (deletedEntry.bukuKas !== 'anggota') {
-        const isSdkKop =
-          (deletedEntry.kategori || '').toLowerCase().includes('sedekah') ||
-          (deletedEntry.keterangan || '').toLowerCase().includes('sedekah');
-        let nextSedekahList = prev.sedekahList || [];
-        let nextDeletedSetoran = prev.deletedSetoranIds || [];
-        if (isSdkKop && deletedEntry.referensiId) {
-          nextSedekahList = nextSedekahList.filter((s) => s.id !== deletedEntry.referensiId && s.id !== deletedEntry.id);
-          nextDeletedSetoran = Array.from(new Set([...nextDeletedSetoran, deletedEntry.referensiId]));
-        }
-        return {
-          ...prev,
-          kasList: syncedKasList,
-          sedekahList: nextSedekahList,
-          deletedKasIds: nextDeletedKasIds,
-          deletedSetoranIds: nextDeletedSetoran,
-        };
+    if (deletedEntry.bukuKas !== 'anggota') {
+      const isSdkKop =
+        (deletedEntry.kategori || '').toLowerCase().includes('sedekah') ||
+        (deletedEntry.keterangan || '').toLowerCase().includes('sedekah');
+      let nextSedekahList = prev.sedekahList || [];
+      let nextDeletedSetoran = prev.deletedSetoranIds || [];
+      if (isSdkKop && deletedEntry.referensiId) {
+        nextSedekahList = nextSedekahList.filter((s) => s.id !== deletedEntry.referensiId && s.id !== deletedEntry.id);
+        nextDeletedSetoran = Array.from(new Set([...nextDeletedSetoran, deletedEntry.referensiId]));
       }
+      return {
+        ...prev,
+        kasList: syncedKasList,
+        sedekahList: nextSedekahList,
+        deletedKasIds: nextDeletedKasIds,
+        deletedSetoranIds: nextDeletedSetoran,
+      };
+    }
 
-      // Cari anggota yang bersangkutan berdasarkan namaPenerima atau keterangan
-      const cleanPenerima = (deletedEntry.namaPenerima || '').trim().toLowerCase();
-      const cleanKet = (deletedEntry.keterangan || '').trim().toLowerCase();
-      const katLower = (deletedEntry.kategori || '').toLowerCase();
-      const isSedekah = katLower.includes('sedekah') || cleanKet.includes('sedekah');
+    const cleanPenerima = (deletedEntry.namaPenerima || '').trim().toLowerCase();
+    const cleanKet = (deletedEntry.keterangan || '').trim().toLowerCase();
+    const katLower = (deletedEntry.kategori || '').toLowerCase();
+    const isSedekah = katLower.includes('sedekah') || cleanKet.includes('sedekah');
 
-      const matchedMembers = prev.members.filter((m) => {
-        const mName = (m.nama || '').trim().toLowerCase();
-        if (!mName) return false;
-        if (cleanPenerima && cleanPenerima === mName) return true;
-        if (cleanKet && cleanKet.includes(mName)) return true;
-        return false;
-      });
+    const matchedMembers = prev.members.filter((m) => {
+      if (deletedEntry.memberId && m.id === deletedEntry.memberId) return true;
+      const mName = (m.nama || '').trim().toLowerCase();
+      if (!mName) return false;
+      if (cleanPenerima && cleanPenerima === mName) return true;
+      if (cleanKet && cleanKet.includes(mName)) return true;
+      return false;
+    });
 
-      const matchedMemberIds = new Set(matchedMembers.map((m) => m.id));
-      const newlyDeletedTxIds: string[] = [];
+    const matchedMemberIds = new Set(matchedMembers.map((m) => m.id));
+    const newlyDeletedTxIds: string[] = [];
 
-      // Hapus atau koreksi mutasi anggota yang terkait dengan kas yang dihapus
-      let removedOrAdjustedTx = false;
-      const updatedTransactions: MemberTransaction[] = [];
+    let removedOrAdjustedTx = false;
+    const updatedTransactions: MemberTransaction[] = [];
 
-      for (const tx of prev.memberTransactions || []) {
+    for (const tx of prev.memberTransactions || []) {
+      if (
+        !removedOrAdjustedTx &&
+        matchedMemberIds.has(tx.memberId) &&
+        ((deletedEntry.referensiId && tx.referensiId === deletedEntry.referensiId) ||
+          (tx.tanggal === deletedEntry.tanggal && tx.tipe === deletedEntry.tipe))
+      ) {
+        if (tx.nominal === deletedEntry.nominal) {
+          removedOrAdjustedTx = true;
+          newlyDeletedTxIds.push(tx.id);
+          continue;
+        } else if (tx.nominal > deletedEntry.nominal) {
+          removedOrAdjustedTx = true;
+          updatedTransactions.push({
+            ...tx,
+            nominal: tx.nominal - deletedEntry.nominal,
+          });
+          continue;
+        }
+      }
+      updatedTransactions.push(tx);
+    }
+
+    let updatedSedekahList = prev.sedekahList || [];
+    if (isSedekah) {
+      let removedSdk = false;
+      updatedSedekahList = updatedSedekahList.filter((sdk) => {
+        if (removedSdk) return true;
         if (
-          !removedOrAdjustedTx &&
-          matchedMemberIds.has(tx.memberId) &&
-          tx.tanggal === deletedEntry.tanggal &&
-          tx.tipe === deletedEntry.tipe
+          (deletedEntry.referensiId && sdk.id === deletedEntry.referensiId) ||
+          sdk.id === deletedEntry.id ||
+          ((sdk.donaturMemberId && matchedMemberIds.has(sdk.donaturMemberId)) && sdk.nominal === deletedEntry.nominal)
         ) {
-          if (tx.nominal === deletedEntry.nominal) {
-            removedOrAdjustedTx = true;
-            newlyDeletedTxIds.push(tx.id);
-            continue;
-          } else if (tx.nominal > deletedEntry.nominal) {
-            removedOrAdjustedTx = true;
-            updatedTransactions.push({
-              ...tx,
-              nominal: tx.nominal - deletedEntry.nominal,
-            });
-            continue;
-          }
+          removedSdk = true;
+          return false;
         }
-        updatedTransactions.push(tx);
+        return true;
+      });
+    }
+
+    const nextDeletedSetoranIds = deletedEntry.referensiId
+      ? Array.from(new Set([...(prev.deletedSetoranIds || []), deletedEntry.referensiId]))
+      : (prev.deletedSetoranIds || []);
+    const nextSetoranList = deletedEntry.referensiId
+      ? (prev.setoranList || []).filter((s) => s.id !== deletedEntry.referensiId)
+      : (prev.setoranList || []);
+
+    const updatedMembers = prev.members.map((m) => {
+      if (!matchedMemberIds.has(m.id)) return m;
+
+      const perMemberNominal =
+        matchedMembers.length > 1
+          ? Math.floor(deletedEntry.nominal / matchedMembers.length)
+          : deletedEntry.nominal;
+
+      let p = Number(m.saldoPokok) || 0;
+      let u = Number(m.saldoUmum) || 0;
+      let z = Number(m.saldoZakatFitrah) || 0;
+      let q = Number(m.saldoQurban) || 0;
+
+      if (deletedEntry.tipe === 'masuk') {
+        if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
+        else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
+        else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
+        else if (!isSedekah) u = Math.max(0, u - perMemberNominal);
+      } else {
+        if (katLower.includes('pokok')) p += perMemberNominal;
+        else if (katLower.includes('qurban')) q += perMemberNominal;
+        else if (katLower.includes('zakat')) z += perMemberNominal;
+        else if (!isSedekah) u += perMemberNominal;
       }
 
-      // Sinkronisasi Sedekah List jika transaksi yang dihapus merupakan donasi sedekah anggota
-      let updatedSedekahList = prev.sedekahList || [];
-      if (isSedekah) {
-        let removedSdk = false;
-        updatedSedekahList = updatedSedekahList.filter((sdk) => {
-          if (removedSdk) return true;
-          if (
-            (deletedEntry.referensiId && sdk.id === deletedEntry.referensiId) ||
-            sdk.id === deletedEntry.id ||
-            ((sdk.donaturMemberId && matchedMemberIds.has(sdk.donaturMemberId)) && sdk.nominal === deletedEntry.nominal)
-          ) {
-            removedSdk = true;
-            return false;
-          }
-          return true;
-        });
-      }
-
-      // Sinkronisasi setoranList & deletedSetoranIds
-      const nextDeletedSetoranIds = deletedEntry.referensiId
-        ? Array.from(new Set([...(prev.deletedSetoranIds || []), deletedEntry.referensiId]))
-        : (prev.deletedSetoranIds || []);
-      const nextSetoranList = deletedEntry.referensiId
-        ? (prev.setoranList || []).filter((s) => s.id !== deletedEntry.referensiId)
-        : (prev.setoranList || []);
-
-      // Koreksi langsung saldo simpanan anggota sesuai kategori buku kas yang dihapus
-      const updatedMembers = prev.members.map((m) => {
-        if (!matchedMemberIds.has(m.id)) return m;
-
-        const perMemberNominal =
-          matchedMembers.length > 1
-            ? Math.floor(deletedEntry.nominal / matchedMembers.length)
-            : deletedEntry.nominal;
-
-        let p = Number(m.saldoPokok) || 0;
-        let u = Number(m.saldoUmum) || 0;
-        let z = Number(m.saldoZakatFitrah) || 0;
-        let q = Number(m.saldoQurban) || 0;
-
-        if (deletedEntry.tipe === 'masuk') {
-          if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
-          else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
-          else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
-          else if (!isSedekah) u = Math.max(0, u - perMemberNominal);
-        } else {
-          if (katLower.includes('pokok')) p += perMemberNominal;
-          else if (katLower.includes('qurban')) q += perMemberNominal;
-          else if (katLower.includes('zakat')) z += perMemberNominal;
-          else if (!isSedekah) u += perMemberNominal;
-        }
-
-        // Rekalkulasi running saldoSetelah pada mutasi anggota tersebut
-        const mTxs = updatedTransactions
-          .filter((t) => t.memberId === m.id)
-          .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
-        let runSaldo = 0;
-        mTxs.forEach((t) => {
-          runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);
-          t.saldoSetelah = runSaldo;
-        });
-
-        return {
-          ...m,
-          saldoPokok: p,
-          saldoUmum: u,
-          saldoZakatFitrah: z,
-          saldoQurban: q,
-          totalSimpanan: p + u + z + q,
-        };
+      const mTxs = updatedTransactions
+        .filter((t) => t.memberId === m.id)
+        .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+      let runSaldo = 0;
+      mTxs.forEach((t) => {
+        runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);
+        t.saldoSetelah = runSaldo;
       });
 
       return {
-        ...prev,
-        members: updatedMembers,
-        memberTransactions: updatedTransactions,
-        kasList: syncedKasList,
-        sedekahList: updatedSedekahList,
-        setoranList: nextSetoranList,
-        deletedKasIds: nextDeletedKasIds,
-        deletedSetoranIds: nextDeletedSetoranIds,
-        deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...newlyDeletedTxIds])),
+        ...m,
+        saldoPokok: p,
+        saldoUmum: u,
+        saldoZakatFitrah: z,
+        saldoQurban: q,
+        totalSimpanan: p + u + z + q,
       };
-    };
+    });
 
-    // Super Admin & Admin Approval direct delete
+    return {
+      ...prev,
+      members: updatedMembers,
+      memberTransactions: updatedTransactions,
+      kasList: syncedKasList,
+      sedekahList: updatedSedekahList,
+      setoranList: nextSetoranList,
+      deletedKasIds: nextDeletedKasIds,
+      deletedSetoranIds: nextDeletedSetoranIds,
+      deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...newlyDeletedTxIds])),
+    };
+  };
+
+  // Handle Delete Kas Entry (Buku Kas Anggota & Buku Kas Koperasi)
+  const handleDeleteKas = async (entry: KasEntry) => {
+    if (!canDelete) {
+      alert('Akses Ditolak: Anda tidak memiliki izin untuk menghapus catatan Buku Kas.');
+      return;
+    }
+
+    if (entry.status === 'pending_approval') {
+      alert('Transaksi ini sedang menunggu persetujuan. Tidak dapat diajukan hapus ulang.');
+      return;
+    }
+
+    const labelBuku = entry.bukuKas === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi';
+
+    if (!isDirectExec) {
+      const targetApprover = getRequiredApproverLabel(currentAdmin.role);
+      const roleLabel = isWriter ? 'Admin Write' : 'Admin Approval';
+      const confirmReq = confirm(
+        `Ajukan penghapusan transaksi ${labelBuku}:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai ${roleLabel}, pengajuan ini wajib disetujui oleh ${targetApprover} sebelum transaksi dihapus dan saldo disesuaikan. Lanjutkan?`
+      );
+      if (!confirmReq) return;
+
+      let serverStateApplied = false;
+      try {
+        const res = await fetch('/api/kas/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: entry.id,
+            adminName: currentAdmin.nama,
+            adminRole: currentAdmin.role,
+            isDirectDelete: false,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.state) {
+            serverStateApplied = true;
+            await updateState(() => data.state);
+          }
+        }
+      } catch {}
+
+      if (!serverStateApplied) {
+        await updateState((prev) => ({
+          ...prev,
+          kasList: prev.kasList.map((k) =>
+            k.id === entry.id
+              ? {
+                  ...k,
+                  status: 'pending_approval',
+                  pendingAction: 'delete',
+                  requestedBy: currentAdmin.nama,
+                  requestedByRole: currentAdmin.role,
+                }
+              : k
+          ),
+          auditLogs: [
+            createAuditLog(
+              currentAdmin,
+              'Pengajuan Hapus Buku Kas',
+              `${roleLabel} ${currentAdmin.nama} mengajukan penghapusan transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} (Menunggu Persetujuan ${targetApprover})`,
+              entry.id
+            ),
+            ...prev.auditLogs,
+          ],
+        }));
+      }
+
+      alert(`✓ Pengajuan hapus transaksi ${labelBuku} "${entry.keterangan}" berhasil dikirim! Menunggu persetujuan ${targetApprover}.`);
+      return;
+    }
+
+    // Super Admin direct delete
     const confirmDelete = confirm(
-      `Hapus transaksi Buku Kas ${entry.bukuKas === 'anggota' ? 'Anggota' : 'Koperasi'}:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai ${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}, transaksi ini akan langsung dihapus, saldo Buku Kas dikoreksi otomatis${entry.bukuKas === 'anggota' ? ', serta mutasi & saldo simpanan anggota terkait langsung disesuaikan' : ''}. Lanjutkan?`
+      `Hapus transaksi ${labelBuku}:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai Super Admin, transaksi ini akan langsung dihapus, saldo Buku Kas dikoreksi otomatis${entry.bukuKas === 'anggota' ? ', serta mutasi & saldo simpanan anggota terkait langsung disesuaikan' : ''}. Lanjutkan?`
     );
     if (!confirmDelete) return;
 
@@ -957,7 +1078,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       const res = await fetch('/api/kas/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: entry.id, adminName: currentAdmin.nama, isDirectDelete: true }),
+        body: JSON.stringify({
+          id: entry.id,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+          isDirectDelete: true,
+        }),
       });
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -968,7 +1094,6 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       }
     } catch {}
 
-    // Hapus dokumen dari Firestore secara langsung agar tidak kembali saat sinkronisasi
     try {
       const { db } = await import('../lib/firebase');
       const { doc, deleteDoc } = await import('firebase/firestore');
@@ -981,7 +1106,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         const audit = createAuditLog(
           currentAdmin,
           'Hapus Transaksi Kas & Koreksi Saldo',
-          `${isSuperAdmin ? 'Super Admin' : 'Admin Approval'} ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} beserta koreksi saldo otomatis`,
+          `Super Admin ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} beserta koreksi saldo otomatis`,
           entry.id
         );
         return {
@@ -996,15 +1121,29 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
   // Handle Approval for pending kas changes (Input, Edit, Hapus)
   const handleApproveKasAction = async (entry: KasEntry, isApproved: boolean) => {
-    if (!canDirectModify) return;
+    const reqRole = entry.requestedByRole || 'admin_write';
+    if (!canApproveByRole(reqRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan oleh ${isApprovalRole(reqRole) ? 'Admin Approval' : 'Admin'} wajib disetujui oleh ${getRequiredApproverLabel(reqRole)}.`);
+      return;
+    }
 
     let serverStateApplied = false;
     try {
       const res = await fetch('/api/kas/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: entry.id, isApproved, adminName: currentAdmin.nama }),
+        body: JSON.stringify({
+          id: entry.id,
+          isApproved,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+        }),
       });
+      if (res.status === 403) {
+        const errData = await res.json().catch(() => ({}));
+        alert(errData.error || 'Akses Ditolak: Anda tidak memiliki wewenang menyetujui pengajuan pada tingkat admin ini.');
+        return;
+      }
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (data.state) {
@@ -1024,27 +1163,192 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
     if (!serverStateApplied) {
       await updateState((prev) => {
+        if (isApproved && entry.pendingAction === 'delete') {
+          const nextState = applyKasDeletionWithMemberSync(prev, entry);
+          const audit = createAuditLog(
+            currentAdmin,
+            'Pengesahan Hapus Transaksi Kas',
+            `${currentAdmin.nama} (${isSuperAdmin ? 'Super Admin' : 'Admin Approval'}) menyetujui penghapusan transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} beserta sinkronisasi saldo`,
+            entry.id
+          );
+          return {
+            ...nextState,
+            auditLogs: [audit, ...nextState.auditLogs],
+          };
+        }
+
         let updatedList = [...prev.kasList];
+        let nextMembers = [...prev.members];
+        let nextTxs = [...(prev.memberTransactions || [])];
+        let nextSedekahList = [...(prev.sedekahList || [])];
+
         if (isApproved) {
-          if (entry.pendingAction === 'delete') {
-            updatedList = updatedList.filter((k) => k.id !== entry.id);
-          } else {
-            updatedList = updatedList.map((k) =>
-              k.id === entry.id ? { ...k, status: 'approved', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
-            );
+          const isGroupAnggotaCreate =
+            entry.pendingAction === 'create' &&
+            entry.referensiId &&
+            String(entry.referensiId).startsWith('KAS-ANG-');
+
+          const targetEntries = isGroupAnggotaCreate
+            ? updatedList.filter((k) => k.referensiId === entry.referensiId && k.status === 'pending_approval')
+            : [entry];
+
+          const approvedIds = new Set(targetEntries.map((t) => t.id));
+          updatedList = updatedList.map((k) =>
+            approvedIds.has(k.id)
+              ? { ...k, status: 'approved', approvedBy: currentAdmin.nama, pendingAction: undefined, pendingAnggotaMeta: undefined }
+              : k
+          );
+
+          // Jika pengajuan input baru untuk Buku Kas Anggota memiliki metadata anggota, terapkan ke saldo & mutasi anggota
+          const meta = entry.pendingAnggotaMeta;
+          if (entry.pendingAction === 'create' && meta?.memberId) {
+            const targetMember = nextMembers.find((m) => m.id === meta.memberId);
+            if (targetMember) {
+              const nowIso = new Date().toISOString();
+              const jamNow = entry.jam || new Date().toTimeString().slice(0, 5);
+              if (meta.subKategori === 'pokok') {
+                const pNom = Number(meta.nominalPokok) || 0;
+                const qNom = Number(meta.nominalQurban) || 0;
+                const zNom = Number(meta.nominalZakat) || 0;
+                const totalNom = pNom + qNom + zNom || entry.nominal;
+                const jlhHari = meta.jumlahHari || Math.max(1, Math.round(totalNom / 2000));
+                const sign = entry.tipe === 'masuk' ? 1 : -1;
+                const upP = Math.max(0, (Number(targetMember.saldoPokok) || 0) + sign * pNom);
+                const upQ = Math.max(0, (Number(targetMember.saldoQurban) || 0) + sign * qNom);
+                const upZ = Math.max(0, (Number(targetMember.saldoZakatFitrah) || 0) + sign * zNom);
+                const upU = Number(targetMember.saldoUmum) || 0;
+                nextMembers = nextMembers.map((m) =>
+                  m.id === targetMember.id
+                    ? {
+                        ...m,
+                        saldoPokok: upP,
+                        saldoQurban: upQ,
+                        saldoZakatFitrah: upZ,
+                        totalSimpanan: upP + upU + upQ + upZ,
+                        jumlahHariPokok: Math.floor(upP / (prev.profile?.pembagianPokokHarian || 1000)),
+                      }
+                    : m
+                );
+                if (!nextTxs.some((t) => t.referensiId === entry.referensiId)) {
+                  nextTxs = [
+                    {
+                      id: `tx-wajib-${Date.now()}`,
+                      memberId: targetMember.id,
+                      tanggal: entry.tanggal,
+                      jam: jamNow,
+                      keterangan: `${entry.tipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TABUNGAN POKOK (${jlhHari} HARI • 50% POKOK, 25% QURBAN, 25% ZAKAT)`,
+                      cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+                      tipe: entry.tipe,
+                      nominal: totalNom,
+                      saldoSetelah: upP + upU,
+                      kategori: 'pokok',
+                      referensiId: entry.referensiId,
+                      jumlahHari: jlhHari,
+                    },
+                    ...nextTxs,
+                  ];
+                }
+              } else if (meta.subKategori === 'umum') {
+                const sign = entry.tipe === 'masuk' ? 1 : -1;
+                const upU = Math.max(0, (Number(targetMember.saldoUmum) || 0) + sign * entry.nominal);
+                const upP = Number(targetMember.saldoPokok) || 0;
+                const upQ = Number(targetMember.saldoQurban) || 0;
+                const upZ = Number(targetMember.saldoZakatFitrah) || 0;
+                nextMembers = nextMembers.map((m) =>
+                  m.id === targetMember.id
+                    ? { ...m, saldoUmum: upU, totalSimpanan: upP + upU + upQ + upZ }
+                    : m
+                );
+                if (!nextTxs.some((t) => t.referensiId === entry.referensiId)) {
+                  nextTxs = [
+                    {
+                      id: `tx-umum-${Date.now()}`,
+                      memberId: targetMember.id,
+                      tanggal: entry.tanggal,
+                      jam: jamNow,
+                      keterangan: `${entry.tipe === 'masuk' ? 'SETORAN' : 'PENARIKAN'} TUNAI TABUNGAN BEBAS`,
+                      cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+                      tipe: entry.tipe,
+                      nominal: entry.nominal,
+                      saldoSetelah: upP + upU,
+                      kategori: 'umum',
+                      referensiId: entry.referensiId,
+                    },
+                    ...nextTxs,
+                  ];
+                }
+              } else if (meta.kategori === 'sedekah') {
+                if (!nextTxs.some((t) => t.referensiId === entry.referensiId)) {
+                  nextTxs = [
+                    {
+                      id: `tx-sdk-${Date.now()}`,
+                      memberId: targetMember.id,
+                      tanggal: entry.tanggal,
+                      jam: jamNow,
+                      keterangan: entry.keterangan,
+                      cbg: `KCP ${(targetMember.wilayah || 'CENGKARENG').toUpperCase()}`,
+                      tipe: entry.tipe,
+                      nominal: entry.nominal,
+                      saldoSetelah: (Number(targetMember.saldoPokok) || 0) + (Number(targetMember.saldoUmum) || 0),
+                      kategori: 'sedekah',
+                      referensiId: entry.referensiId,
+                    },
+                    ...nextTxs,
+                  ];
+                }
+                if (entry.referensiId && !nextSedekahList.some((s) => s.id === entry.referensiId)) {
+                  nextSedekahList = [
+                    {
+                      id: entry.referensiId,
+                      tanggal: entry.tanggal,
+                      jam: jamNow,
+                      nominal: entry.nominal,
+                      tipe: entry.tipe === 'masuk' ? 'penerimaan' : 'penyaluran',
+                      jenis: 'sedekah_umum',
+                      donaturMemberId: targetMember.id,
+                      donaturNama: targetMember.nama,
+                      keterangan: entry.keterangan || 'Sedekah Anggota via Buku Kas',
+                      status: 'approved',
+                      inputBy: entry.inputBy,
+                      requestedByRole: entry.requestedByRole,
+                      verifiedAt: nowIso,
+                      verifiedBy: currentAdmin.nama,
+                      createdAt: nowIso,
+                    },
+                    ...nextSedekahList,
+                  ];
+                }
+              }
+            }
           }
         } else {
           if (entry.pendingAction === 'delete') {
             updatedList = updatedList.map((k) =>
-              k.id === entry.id ? { ...k, status: 'approved', pendingAction: undefined } : k
+              k.id === entry.id
+                ? { ...k, status: 'approved', pendingAction: undefined, requestedBy: undefined, requestedByRole: undefined }
+                : k
             );
           } else if (entry.pendingAction === 'update' && entry.originalData) {
             updatedList = updatedList.map((k) =>
-              k.id === entry.id ? { ...k, ...entry.originalData, status: 'approved', pendingAction: undefined, originalData: undefined } : k
+              k.id === entry.id
+                ? {
+                    ...k,
+                    ...entry.originalData,
+                    status: 'approved',
+                    pendingAction: undefined,
+                    originalData: undefined,
+                    requestedBy: undefined,
+                    requestedByRole: undefined,
+                  }
+                : k
             );
           } else {
+            const isGroupAnggotaCreate =
+              entry.referensiId && String(entry.referensiId).startsWith('KAS-ANG-');
             updatedList = updatedList.map((k) =>
-              k.id === entry.id ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined } : k
+              k.id === entry.id || (isGroupAnggotaCreate && k.referensiId === entry.referensiId)
+                ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined }
+                : k
             );
           }
         }
@@ -1060,11 +1364,10 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
         return {
           ...prev,
+          members: nextMembers,
+          memberTransactions: nextTxs,
+          sedekahList: nextSedekahList,
           kasList: updatedList,
-          deletedKasIds:
-            isApproved && entry.pendingAction === 'delete'
-              ? Array.from(new Set([...(prev.deletedKasIds || []), entry.id]))
-              : prev.deletedKasIds,
           auditLogs: [audit, ...prev.auditLogs],
         };
       });
@@ -1072,7 +1375,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
 
     alert(
       isApproved
-        ? `✓ ${entry.pendingAction === 'delete' ? 'Penghapusan transaksi' : 'Perubahan transaksi'} berhasil disetujui!`
+        ? `✓ ${entry.pendingAction === 'delete' ? 'Penghapusan transaksi' : 'Perubahan / input transaksi'} berhasil disetujui!`
         : `Permohonan transaksi kas telah ditolak.`
     );
   };
@@ -1678,8 +1981,8 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       ) : (
         /* Table of Cashbook Transactions */
         <div className="bg-[#111c33] border border-slate-700/80 rounded-3xl p-5 sm:p-6 shadow-xl">
-          {/* PENDING KAS APPROVALS ALERT BOX FOR ADMIN APPROVAL & SUPER ADMIN (Req: Transaksi kas dapat dihapus oleh admin write dan disetujui admin approval / super admin) */}
-          {(isSuperAdmin || isApproval) && pendingKasApprovals.length > 0 && (
+          {/* PENDING KAS APPROVALS ALERT BOX FOR AUTHORIZED APPROVERS (Super Admin -> semua; Admin Approval -> pengajuan Admin Write) */}
+          {canApprovePending && actionablePendingKas.length > 0 && (
             <div className="mb-5 bg-gradient-to-r from-amber-950/70 via-slate-900 to-indigo-950/70 border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2.5">
@@ -1688,10 +1991,12 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                   </div>
                   <div>
                     <h4 className="font-black text-sm text-amber-200">
-                      Permintaan Transaksi Buku Kas Menunggu Persetujuan ({pendingKasApprovals.length} Transaksi)
+                      Permintaan Transaksi Buku Kas Menunggu Persetujuan Anda ({actionablePendingKas.length} Transaksi)
                     </h4>
                     <p className="text-[11px] text-amber-300/80">
-                      Diajukan oleh Admin Write (input, edit, atau hapus transaksi). Memerlukan pengesahan dari Admin Approval atau Super Admin.
+                      {isSuperAdmin
+                        ? 'Menampilkan seluruh pengajuan Admin Write dan Admin Approval (Kas Anggota & Kas Koperasi).'
+                        : 'Admin Approval berwenang mengesahkan pengajuan dari Admin Write.'}
                     </p>
                   </div>
                 </div>
@@ -1701,81 +2006,93 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               </div>
 
               <div className="space-y-2.5 pt-1">
-                {pendingKasApprovals.map((k) => (
-                  <div
-                    key={k.id}
-                    className="p-3.5 bg-slate-900/90 rounded-2xl border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
-                          k.pendingAction === 'delete'
-                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                            : k.pendingAction === 'update'
-                            ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
-                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                        }`}>
-                          {k.pendingAction === 'delete' ? '🗑️ Permintaan HAPUS' : k.pendingAction === 'update' ? '✏️ Permintaan EDIT' : '➕ Permintaan INPUT BARU'}
-                        </span>
-                        <span className="font-extrabold text-white text-xs">
-                          {k.keterangan}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono bg-slate-800 px-1.5 py-0.5 rounded">
-                          [{k.bukuKas.toUpperCase()}]
-                        </span>
+                {actionablePendingKas.map((k) => {
+                  const reqRoleTag = isApprovalRole(k.requestedByRole) ? 'Admin Approval' : 'Admin Write';
+                  return (
+                    <div
+                      key={k.id}
+                      className="p-3.5 bg-slate-900/90 rounded-2xl border border-amber-500/30 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${
+                            k.pendingAction === 'delete'
+                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                              : k.pendingAction === 'update'
+                              ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                              : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          }`}>
+                            {k.pendingAction === 'delete' ? '🗑️ Permintaan HAPUS' : k.pendingAction === 'update' ? '✏️ Permintaan EDIT' : '➕ Permintaan INPUT BARU'}
+                          </span>
+                          <span className="font-extrabold text-white text-xs">
+                            {k.keterangan}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono bg-slate-800 px-1.5 py-0.5 rounded">
+                            [KAS {k.bukuKas.toUpperCase()}]
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                            {reqRoleTag}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-300">
+                          Nominal: <span className="font-mono font-bold text-amber-400">{formatRupiah(k.nominal)}</span> ({k.tipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'}) • Kategori: {k.kategori} • Tanggal: {k.tanggal}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Diajukan oleh: <b className="text-slate-300">{k.requestedBy || k.inputBy}</b> ({reqRoleTag}) pada {new Date(k.createdAt).toLocaleString('id-ID')}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-300">
-                        Nominal: <span className="font-mono font-bold text-amber-400">{formatRupiah(k.nominal)}</span> ({k.tipe === 'masuk' ? 'Pemasukan' : 'Pengeluaran'}) • Kategori: {k.kategori} • Tanggal: {k.tanggal}
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        Diajukan oleh: <b className="text-slate-300">{k.inputBy}</b> pada {new Date(k.createdAt).toLocaleString('id-ID')}
+                      <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                        <button
+                          type="button"
+                          onClick={() => handleApproveKasAction(k, false)}
+                          className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                        >
+                          Tolak
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApproveKasAction(k, true)}
+                          className={`px-4 py-1.5 font-black rounded-xl text-xs shadow-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                            k.pendingAction === 'delete'
+                              ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
+                              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
+                          }`}
+                        >
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          <span>{k.pendingAction === 'delete' ? 'Setujui Hapus' : 'Setujui'}</span>
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                      <button
-                        type="button"
-                        onClick={() => handleApproveKasAction(k, false)}
-                        className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-colors cursor-pointer"
-                      >
-                        Tolak
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleApproveKasAction(k, true)}
-                        className={`px-4 py-1.5 font-black rounded-xl text-xs shadow-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                          k.pendingAction === 'delete'
-                            ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
-                            : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30'
-                        }`}
-                      >
-                        <CheckCircle className="w-3.5 h-3.5" />
-                        <span>{k.pendingAction === 'delete' ? 'Setujui Hapus' : 'Setujui'}</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* PENDING KAS INFO BOX FOR ADMIN WRITE */}
-          {isWriter && pendingKasApprovals.length > 0 && (
+          {/* PENDING KAS INFO BOX FOR SUBMITTERS WAITING HIGHER APPROVAL */}
+          {(isWriter || isApproval || isPembukuan) && waitingForHigherKas.length > 0 && (
             <div className="mb-5 bg-sky-950/30 border border-sky-500/30 rounded-3xl p-4 shadow-xl space-y-2">
               <div className="flex items-center gap-2 text-sky-300 text-xs font-bold">
                 <Clock className="w-4 h-4 text-sky-400 animate-spin" />
-                <span>Pengajuan Transaksi Buku Kas Anda ({pendingKasApprovals.length} Menunggu Persetujuan Admin Approval / Super Admin)</span>
+                <span>
+                  {isWriter
+                    ? `Pengajuan Transaksi Buku Kas (${waitingForHigherKas.length} Menunggu Persetujuan Admin Approval / Super Admin)`
+                    : `Pengajuan dari Admin Approval (${waitingForHigherKas.length} Wajib Disetujui Super Admin)`}
+                </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
-                {pendingKasApprovals.map((k) => (
+                {waitingForHigherKas.map((k) => (
                   <div key={k.id} className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800 flex justify-between items-center gap-2">
                     <div className="truncate">
                       <div className="font-extrabold text-white text-xs truncate">{k.keterangan}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">{formatRupiah(k.nominal)} • [{k.bukuKas}]</div>
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {formatRupiah(k.nominal)} • [kas {k.bukuKas}] • Oleh {k.requestedBy || k.inputBy}
+                      </div>
                     </div>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
                       k.pendingAction === 'delete' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
                     }`}>
-                      {k.pendingAction === 'delete' ? 'Hapus' : k.pendingAction === 'update' ? 'Edit' : 'Input'} (Pending)
+                      {k.pendingAction === 'delete' ? 'Hapus' : k.pendingAction === 'update' ? 'Edit' : 'Input'} ➔ {getRequiredApproverLabel(k.requestedByRole)}
                     </span>
                   </div>
                 ))}
@@ -1859,95 +2176,101 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                             Kuitansi
                           </button>
 
-                          {entry.bukuKas === 'anggota' ? (
-                            isSuperAdmin ? (
+                          {entry.status === 'pending_approval' ? (
+                            <>
+                              {canApproveByRole(entry.requestedByRole || 'admin_write', currentAdmin.role) ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApproveKasAction(entry, true)}
+                                    className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-[10px] flex items-center gap-1 shadow-md transition-all active:scale-95 cursor-pointer"
+                                    title={`Setujui ${entry.pendingAction === 'delete' ? 'Penghapusan' : entry.pendingAction === 'update' ? 'Perubahan' : 'Pencatatan'} Kas`}
+                                  >
+                                    <CheckCircle className="w-3.5 h-3.5" />
+                                    <span>Setujui</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApproveKasAction(entry, false)}
+                                    className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[10px] flex items-center gap-1 shadow-md transition-all active:scale-95 cursor-pointer"
+                                    title={`Tolak ${entry.pendingAction === 'delete' ? 'Penghapusan' : entry.pendingAction === 'update' ? 'Perubahan' : 'Pencatatan'} Kas`}
+                                  >
+                                    <XCircle className="w-3.5 h-3.5" />
+                                    <span>Tolak</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <span
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-bold border inline-flex items-center gap-1 ${
+                                    entry.pendingAction === 'delete'
+                                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                      : entry.pendingAction === 'update'
+                                      ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                                      : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                  }`}
+                                >
+                                  <Clock className="w-3 h-3 animate-spin" />
+                                  <span>
+                                    Menunggu {getRequiredApproverLabel(entry.requestedByRole)}
+                                  </span>
+                                </span>
+                              )}
+                            </>
+                          ) : entry.bukuKas === 'anggota' ? (
+                            canDelete ? (
                               <button
                                 type="button"
                                 onClick={() => handleDeleteKas(entry)}
                                 className="px-2 py-1 bg-red-950/50 hover:bg-red-900/80 text-rose-300 border border-red-500/50 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
-                                title="Super Admin: Hapus Catatan Buku Kas Anggota"
+                                title={
+                                  isDirectExec
+                                    ? 'Super Admin: Hapus Catatan Buku Kas Anggota'
+                                    : `Ajukan Penghapusan Buku Kas Anggota ke ${getRequiredApproverLabel(currentAdmin.role)}`
+                                }
                               >
                                 <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                                Hapus (Super Admin)
+                                {isDirectExec ? 'Hapus' : 'Ajukan Hapus'}
                               </button>
                             ) : (
                               <span
                                 className="px-2 py-1 bg-slate-900 border border-slate-750 text-slate-400 rounded-lg text-[10px] font-bold"
-                                title="Buku Kas Anggota tercatat otomatis dan dilindungi (hanya Super Admin yang dapat menghapus)"
+                                title="Buku Kas Anggota hanya dapat dihapus oleh Admin berwenang"
                               >
                                 🔒 Kas Anggota
                               </span>
                             )
                           ) : (
                             <>
-                              {entry.status === 'pending_approval' ? (
-                                <>
-                                  {/* Jika status pending, Admin Approval & Super Admin melihat tombol persetujuan */}
-                                  {canDirectModify && (
-                                    <div className="flex items-center gap-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleApproveKasAction(entry, true)}
-                                        className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-lg text-[10px] flex items-center gap-1 shadow-md transition-all active:scale-95 cursor-pointer"
-                                        title={`Setujui ${entry.pendingAction === 'delete' ? 'Penghapusan' : entry.pendingAction === 'update' ? 'Perubahan' : 'Pencatatan'} Kas`}
-                                      >
-                                        <CheckCircle className="w-3.5 h-3.5" />
-                                        <span>Setujui</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleApproveKasAction(entry, false)}
-                                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[10px] flex items-center gap-1 shadow-md transition-all active:scale-95 cursor-pointer"
-                                        title={`Tolak ${entry.pendingAction === 'delete' ? 'Penghapusan' : entry.pendingAction === 'update' ? 'Perubahan' : 'Pencatatan'} Kas`}
-                                      >
-                                        <XCircle className="w-3.5 h-3.5" />
-                                        <span>Tolak</span>
-                                      </button>
-                                    </div>
-                                  )}
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditKas(entry)}
+                                  className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
+                                  title={
+                                    isDirectExec
+                                      ? 'Edit Transaksi Kas Koperasi'
+                                      : `Ajukan Edit Transaksi Kas ke ${getRequiredApproverLabel(currentAdmin.role)}`
+                                  }
+                                >
+                                  <Edit className="w-3.5 h-3.5 text-sky-400" />
+                                  Edit
+                                </button>
+                              )}
 
-                                  {/* Untuk Admin Write yang sedang menunggu persetujuan */}
-                                  {isWriter && (
-                                    <span className={`px-2 py-1 rounded-lg text-[10px] font-bold border inline-flex items-center gap-1 ${
-                                      entry.pendingAction === 'delete'
-                                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                                        : entry.pendingAction === 'update'
-                                        ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
-                                        : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                                    }`}>
-                                      <Clock className="w-3 h-3 animate-spin" />
-                                      <span>Menunggu {entry.pendingAction === 'delete' ? 'Hapus' : entry.pendingAction === 'update' ? 'Edit' : 'Input'}</span>
-                                    </span>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  {/* Tombol Edit Buku Kas Koperasi (Admin Write mengajukan, Admin Approval / Super Admin menyetujui) */}
-                                  {canEdit && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenEditKas(entry)}
-                                      className="px-2 py-1 bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 border border-sky-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
-                                      title={isWriter ? 'Edit Transaksi Kas (Ajukan Persetujuan)' : 'Edit Transaksi Kas Koperasi'}
-                                    >
-                                      <Edit className="w-3.5 h-3.5 text-sky-400" />
-                                      Edit
-                                    </button>
-                                  )}
-
-                                  {/* Tombol Hapus Buku Kas Koperasi (Admin Write mengajukan, Admin Approval / Super Admin menyetujui) */}
-                                  {canDelete && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteKas(entry)}
-                                      className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
-                                      title={isWriter ? 'Ajukan Penghapusan Transaksi ke Approval / Super Admin' : 'Hapus Transaksi Buku Kas Koperasi'}
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                                      Hapus
-                                    </button>
-                                  )}
-                                </>
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteKas(entry)}
+                                  className="px-2 py-1 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/40 rounded-lg flex items-center gap-1 text-[11px] font-bold transition-all cursor-pointer"
+                                  title={
+                                    isDirectExec
+                                      ? 'Hapus Transaksi Buku Kas Koperasi'
+                                      : `Ajukan Penghapusan Transaksi ke ${getRequiredApproverLabel(currentAdmin.role)}`
+                                  }
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                  {isDirectExec ? 'Hapus' : 'Ajukan Hapus'}
+                                </button>
                               )}
                             </>
                           )}
@@ -2687,7 +3010,9 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                   type="submit"
                   className="flex-1 py-2.5 bg-gradient-to-r from-sky-500 to-sky-400 hover:from-sky-400 hover:to-sky-300 text-slate-950 font-black rounded-xl shadow-lg transition-all"
                 >
-                  {isWriter ? 'Ajukan Perubahan (Menunggu Approval)' : 'Simpan & Setujui Transaksi'}
+                  {isDirectExec
+                    ? 'Simpan & Setujui Transaksi'
+                    : `Ajukan Perubahan (Persetujuan ${getRequiredApproverLabel(currentAdmin.role)})`}
                 </button>
               </div>
             </form>

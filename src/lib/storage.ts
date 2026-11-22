@@ -11,6 +11,7 @@ import {
   SuratResmi,
   AuditLog,
   SedekahBerbagiEntry,
+  PendingMutasiActionRequest,
   WilayahKoperasi,
   WILAYAH_CODE_MAP,
   WILAYAH_ABBR_MAP,
@@ -18,6 +19,37 @@ import {
 import { getIsInternetConnected } from '../components/NetworkStatusGuard';
 
 const STORAGE_KEY = 'koperasi_hws_local_cache';
+
+export function isApprovalRole(role?: string): boolean {
+  const r = String(role || '').toLowerCase();
+  return r === 'admin_approval' || r === 'admin_kelola' || r === 'admin_pembukuan';
+}
+
+export function isWriterRole(role?: string): boolean {
+  return String(role || '').toLowerCase() === 'admin_write';
+}
+
+export function isDirectExecutionRole(role?: string): boolean {
+  return String(role || '').toLowerCase() === 'super_admin';
+}
+
+export function canApproveByRole(requestedByRole?: string, approverRole?: string): boolean {
+  const appRole = String(approverRole || '').toLowerCase();
+  const reqRole = String(requestedByRole || 'admin_write').toLowerCase();
+  if (appRole === 'super_admin') return true;
+  if (isApprovalRole(appRole)) {
+    return reqRole === 'admin_write';
+  }
+  return false;
+}
+
+export function getRequiredApproverLabel(requestedByRole?: string): string {
+  const reqRole = String(requestedByRole || '').toLowerCase();
+  if (isApprovalRole(reqRole)) {
+    return 'Super Admin';
+  }
+  return 'Admin Approval / Super Admin';
+}
 
 // Clean initial fallback if server has not responded yet
 const defaultInitialState: AppState = {
@@ -257,6 +289,7 @@ const defaultInitialState: AppState = {
   kasList: [],
   penyaluranList: [],
   sedekahList: [],
+  pendingMutasiRequests: [],
   chatMessages: [],
   suratList: [],
   auditLogs: [],
@@ -1624,6 +1657,31 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
     pengaturanBerbagi,
+    pendingMutasiRequests: (() => {
+      const reqMap = new Map<string, PendingMutasiActionRequest>();
+      (base.pendingMutasiRequests || []).forEach((r) => {
+        if (r && r.id) reqMap.set(r.id, { ...r });
+      });
+      (incoming.pendingMutasiRequests || []).forEach((r) => {
+        if (!r || !r.id) return;
+        const existing = reqMap.get(r.id);
+        if (!existing) {
+          reqMap.set(r.id, { ...r });
+        } else {
+          const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
+          const finalStatus = isTerminal ? existing.status : (r.status || existing.status);
+          reqMap.set(r.id, {
+            ...existing,
+            ...r,
+            status: finalStatus,
+            approvedBy: existing.approvedBy || r.approvedBy,
+            approvedByRole: existing.approvedByRole || r.approvedByRole,
+            approvedAt: existing.approvedAt || r.approvedAt,
+          });
+        }
+      });
+      return Array.from(reqMap.values()).sort((a, b) => (b.requestedAt > a.requestedAt ? 1 : -1));
+    })(),
     categoriesKasKoperasi:
       incoming.categoriesKasKoperasi &&
       (Array.isArray(incoming.categoriesKasKoperasi.pemasukan) ||
@@ -2406,6 +2464,7 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>, forc
         pengaturanBerbagi: serverData.pengaturanBerbagi || {},
         sedekahList: serverData.sedekahList || [],
         penyaluranList: serverData.penyaluranList || [],
+        pendingMutasiRequests: serverData.pendingMutasiRequests || [],
         maintenanceLock: serverData.maintenanceLock || { isLocked: false },
         accountNumberSchemaVersion: serverData.accountNumberSchemaVersion || 2,
         lastRunningNumber: serverData.lastRunningNumber || 769,
@@ -2562,6 +2621,7 @@ export async function syncShardedToFirestore(state: AppState) {
       pengaturanBerbagi: state.pengaturanBerbagi || {},
       sedekahList: state.sedekahList || [],
       penyaluranList: state.penyaluranList || [],
+      pendingMutasiRequests: state.pendingMutasiRequests || [],
       maintenanceLock: state.maintenanceLock || { isLocked: false },
       accountNumberSchemaVersion: state.accountNumberSchemaVersion || 2,
       lastRunningNumber: state.lastRunningNumber || 769,
@@ -3091,6 +3151,7 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
           if (data.pengaturanBerbagi) patch.pengaturanBerbagi = data.pengaturanBerbagi;
           if (Array.isArray(data.sedekahList)) patch.sedekahList = data.sedekahList;
           if (Array.isArray(data.penyaluranList)) patch.penyaluranList = data.penyaluranList;
+          if (Array.isArray(data.pendingMutasiRequests)) patch.pendingMutasiRequests = data.pendingMutasiRequests;
           if (data.maintenanceLock) patch.maintenanceLock = data.maintenanceLock;
           if (data.accountNumberSchemaVersion) patch.accountNumberSchemaVersion = data.accountNumberSchemaVersion;
           if (data.lastRunningNumber) patch.lastRunningNumber = data.lastRunningNumber;

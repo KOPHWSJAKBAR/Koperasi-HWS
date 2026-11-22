@@ -9,6 +9,8 @@ import {
   requestNotificationPermission,
   triggerBrowserNotification,
   getUnifiedSedekahList,
+  canApproveByRole,
+  getRequiredApproverLabel,
 } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -378,27 +380,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Pending deposits count
   const pendingDepositsCount = state.setoranList.filter((s) => s.status === 'pending').length;
 
-  // Pending Tabungan Pokok Lock / Unlock requests (Req 7)
-  const pendingLockPokokCount = state.members.filter((m) => !!m.lockPokokRequest).length;
+  // Pending Tabungan Pokok Lock / Unlock requests yang dapat disetujui oleh role saat ini
+  const pendingLockPokokCount = state.members.filter(
+    (m) => !!m.lockPokokRequest && canApproveByRole(m.lockPokokRequest.requestedByRole, currentAdmin.role)
+  ).length;
 
-  // Pending Buku Kas Koperasi Approval (Input, Edit, Hapus)
-  const pendingKasCount = state.kasList.filter((k) => k.status === 'pending_approval').length;
+  // Pending Buku Kas (Anggota & Koperasi) yang dapat disetujui oleh role saat ini
+  const pendingKasCount = state.kasList.filter(
+    (k) => k.status === 'pending_approval' && canApproveByRole(k.requestedByRole || 'admin_write', currentAdmin.role)
+  ).length;
+
+  // Pending Mutasi Anggota (Hapus Mutasi / Koreksi Saldo / Bagi Hasil) yang dapat disetujui oleh role saat ini
+  const pendingMutasiCount = (state.pendingMutasiRequests || []).filter(
+    (r) => r.status === 'pending' && canApproveByRole(r.requestedByRole, currentAdmin.role)
+  ).length;
 
   // Unread chat messages from members (only count active existing members)
   const unreadChatCount = state.chatMessages.filter(
     (m) => m.senderType === 'member' && !m.isReadByAdmin && state.members.some((mem) => mem.id === m.memberId)
   ).length;
 
-  // Pending Penyaluran Sedekah Approval (Input Admin Write butuh persetujuan Approval / Super Admin per Req E)
+  // Pending Penyaluran Sedekah Approval yang dapat disetujui oleh role saat ini
   const pendingSalurCount = (state.sedekahList || []).filter(
-    (e) => e.tipe === 'penyaluran' && e.status === 'pending'
+    (e) => e.tipe === 'penyaluran' && e.status === 'pending' && canApproveByRole(e.requestedByRole || 'admin_write', currentAdmin.role)
   ).length;
 
   const totalNotifCount =
     pendingDepositsCount +
     unreadChatCount +
     unreadSuratAdminCount +
-    ((isSuperAdmin || isApproval) ? pendingLockPokokCount + pendingKasCount + pendingSalurCount : 0);
+    ((isSuperAdmin || isApproval) ? pendingLockPokokCount + pendingKasCount + pendingMutasiCount + pendingSalurCount : 0);
 
   // Bersihkan notifikasi & tandai pesan/surat sudah terbaca permanen
   const handleClearAllNotifications = async () => {
@@ -803,9 +814,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           >
             <Users className="w-3.5 h-3.5" />
             <span>Data Anggota ({state.members.length})</span>
-            {pendingLockPokokCount > 0 && (isSuperAdmin || isApproval) && (
+            {(pendingLockPokokCount + pendingMutasiCount) > 0 && (isSuperAdmin || isApproval) && (
               <span className="px-1.5 py-0.5 bg-sky-500 text-slate-950 rounded-full font-black text-[10px] animate-pulse">
-                {pendingLockPokokCount} Lock
+                {pendingLockPokokCount + pendingMutasiCount} Approval
               </span>
             )}
           </button>
@@ -987,6 +998,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
+            {/* PENDING MUTASI ANGGOTA APPROVAL ALERT BANNER */}
+            {(isSuperAdmin || isApproval) && pendingMutasiCount > 0 && (
+              <div
+                onClick={() => setActiveTab('anggota')}
+                className="bg-gradient-to-r from-rose-950/80 via-red-950/70 to-slate-900 border border-rose-500/50 rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer hover:border-rose-400 transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center shrink-0">
+                    <Trash2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-extrabold text-white">
+                        Ada {pendingMutasiCount} Pengajuan Mutasi / Penghapusan Mutasi Anggota Menunggu Persetujuan Anda
+                      </h4>
+                      <span className="text-[10px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full animate-pulse">
+                        Approval Mutasi
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-rose-300/80 mt-0.5">
+                      Klik untuk membuka menu Data Anggota atau Penyesuaian Saldo dan meninjau pengajuan.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white font-black rounded-xl text-xs shrink-0 shadow-lg shadow-rose-500/20 transition-all cursor-pointer self-end sm:self-center"
+                >
+                  Tinjau Mutasi →
+                </button>
+              </div>
+            )}
+
             {/* PENDING BUKU KAS APPROVAL ALERT BANNER (Input, Edit, Hapus) */}
             {(isSuperAdmin || isApproval) && pendingKasCount > 0 && (
               <div
@@ -1000,14 +1044,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div>
                     <div className="flex items-center gap-2">
                       <h4 className="text-sm font-extrabold text-white">
-                        Ada {pendingKasCount} Transaksi Buku Kas Koperasi Menunggu Persetujuan
+                        Ada {pendingKasCount} Transaksi Buku Kas Menunggu Persetujuan Anda
                       </h4>
                       <span className="text-[10px] font-black bg-amber-500 text-slate-950 px-2 py-0.5 rounded-full animate-pulse">
                         Approval Kas
                       </span>
                     </div>
                     <p className="text-[11px] text-amber-300/80 mt-0.5">
-                      Diajukan oleh Admin Write (input, edit, atau permohonan hapus). Klik untuk membuka Buku Kas dan menyetujui atau menolak.
+                      Pengajuan input, edit, atau hapus Buku Kas Anggota & Koperasi. Klik untuk membuka Buku Kas dan menyetujui atau menolak.
                     </p>
                   </div>
                 </div>
@@ -1691,7 +1735,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 )}
 
-                {isSuperAdmin && (
+                {(isSuperAdmin || isApproval || isWriter) && (
                   <button
                     type="button"
                     onClick={() => setShowHapusTxModal(true)}
@@ -1703,13 +1747,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div>
                         <div className="text-xs font-extrabold flex items-center gap-2">
-                          <span>10. Hapus & Reset Mutasi Anggota ke Nol</span>
+                          <span>{isSuperAdmin ? '10. Hapus & Reset Mutasi Anggota ke Nol' : 'Hapus Mutasi Anggota (Pengajuan Approval)'}</span>
                           <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-rose-500 text-white font-black">
-                            Super Admin
+                            {isSuperAdmin ? 'Super Admin' : `Disetujui ${getRequiredApproverLabel(currentAdmin.role)}`}
                           </span>
                         </div>
                         <div className="text-[10px] text-slate-400">
-                          Reset mutasi rekening anggota tertentu menjadi nol secara permanen dengan otoritas kata sandi
+                          {isSuperAdmin
+                            ? 'Reset mutasi rekening anggota tertentu menjadi nol secara permanen dengan otoritas kata sandi'
+                            : `Ajukan penghapusan mutasi rekening anggota untuk disetujui oleh ${getRequiredApproverLabel(currentAdmin.role)}`}
                         </div>
                       </div>
                     </div>
@@ -1934,8 +1980,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onBackToDashboard={() => setActiveTab('dashboard')}
       />
 
-      {/* ================= MODAL HAPUS TRANSAKSI & RESET MUTASI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}
-      {showHapusTxModal && isSuperAdmin && (
+      {/* ================= MODAL HAPUS TRANSAKSI & RESET MUTASI ANGGOTA ================= */}
+      {showHapusTxModal && (isSuperAdmin || isApproval || isWriter) && (
         <HapusTransaksiAnggotaModal
           state={state}
           updateState={updateState}

@@ -6,8 +6,9 @@ import {
   WilayahKoperasi,
   LockPokokRequest,
   MemberTransaction,
+  PendingMutasiActionRequest,
 } from '../types';
-import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc, getWibDateStr, formatWibDateShort, formatWibDate } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc, getWibDateStr, formatWibDateShort, formatWibDate, canApproveByRole, getRequiredApproverLabel } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
@@ -203,8 +204,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       requestedByName: currentAdmin.nama,
       reason: reason.trim(),
       requestedAt: new Date().toISOString(),
-      approvedByKelola: isKelola,
-      approvedByKelolaName: isKelola ? currentAdmin.nama : undefined,
+      approvedByKelola: false,
+      approvedByKelolaName: undefined,
       approvedBySuperAdmin: isSuperAdmin,
       approvedBySuperAdminName: isSuperAdmin ? currentAdmin.nama : undefined,
     };
@@ -226,7 +227,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         createAuditLog(
           currentAdmin,
           isDirectlyFrozen ? 'Bekukan Akun Anggota' : 'Pengajuan Pembekuan Akun',
-          `${currentAdmin.nama} (${currentAdmin.role}) mengajukan pembekuan akun ${member.nama} (${member.nomorAnggota}). Alasan: ${reason}`,
+          `${currentAdmin.nama} (${currentAdmin.role}) ${isDirectlyFrozen ? 'langsung membekukan' : 'mengajukan pembekuan'} akun ${member.nama} (${member.nomorAnggota}). Alasan: ${reason}`,
           member.id
         ),
         ...prev.auditLogs,
@@ -238,11 +239,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     alert(
       isDirectlyFrozen
         ? `Akun ${member.nama} berhasil DIBEKUKAN.`
-        : `Pengajuan pembekuan akun ${member.nama} berhasil dikirim! Menunggu persetujuan Admin Kelola dan Super Admin.`
+        : `Pengajuan pembekuan akun ${member.nama} berhasil dikirim! Menunggu persetujuan ${getRequiredApproverLabel(currentAdmin.role)}.`
     );
   };
 
-  // Approve account freeze by Kelola or Super Admin
+  // Approve account freeze by Admin Approval (for Admin Write) or Super Admin (for Admin Write & Admin Approval)
   const handleApproveFreeze = async (member: MemberUser) => {
     const existingReq = member.freezeRequest || {
       requestedByRole: 'admin_write',
@@ -251,11 +252,14 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       requestedAt: new Date().toISOString(),
     };
 
+    if (!canApproveByRole(existingReq.requestedByRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan pembekuan akun dari ${existingReq.requestedByName} hanya dapat disetujui oleh ${getRequiredApproverLabel(existingReq.requestedByRole)}.`);
+      return;
+    }
+
     const updatedKelola = isKelola ? true : !!existingReq.approvedByKelola;
     const updatedSuperAdmin = isSuperAdmin ? true : !!existingReq.approvedBySuperAdmin;
-
-    // Fully frozen if Super Admin approves or both approve
-    const isFinalized = isSuperAdmin || (updatedKelola && updatedSuperAdmin);
+    const isFinalized = true;
 
     await updateState((prev) => ({
       ...prev,
@@ -263,7 +267,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         m.id === member.id
           ? {
               ...m,
-              status: isFinalized ? 'dibekukan' : 'pending_freeze',
+              status: 'dibekukan',
               freezeRequest: {
                 ...existingReq,
                 approvedByKelola: updatedKelola,
@@ -277,7 +281,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       auditLogs: [
         createAuditLog(
           currentAdmin,
-          isFinalized ? 'Persetujuan Pembekuan Akun (Final)' : 'Persetujuan Pembekuan Akun (Bertahap)',
+          'Persetujuan Pembekuan Akun (Final)',
           `${currentAdmin.nama} (${currentAdmin.role}) menyetujui pembekuan akun ${member.nama}`,
           member.id
         ),
@@ -285,11 +289,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       ],
     }));
 
-    alert(
-      isFinalized
-        ? `Akun anggota ${member.nama} telah resmi DIBEKUKAN.`
-        : `Persetujuan Admin Kelola berhasil dicatat. Menunggu persetujuan Super Admin untuk memfinalisasi pembekuan.`
-    );
+    alert(`Akun anggota ${member.nama} telah resmi DIBEKUKAN.`);
   };
 
   // Reject account freeze
@@ -393,10 +393,14 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     }
   };
 
-  // Approve lock/unlock request (by Admin Approval or Super Admin)
+  // Approve lock/unlock request (by Admin Approval for Admin Write, or Super Admin for All)
   const handleApproveLockPokok = async (member: MemberUser) => {
     if (!member.lockPokokRequest) return;
     const req = member.lockPokokRequest;
+    if (!canApproveByRole(req.requestedByRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan dari ${req.requestedByName} wajib disetujui oleh ${getRequiredApproverLabel(req.requestedByRole)}.`);
+      return;
+    }
     const newLockedStatus = req.action === 'lock';
 
     await updateState((prev) => ({
@@ -414,7 +418,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         createAuditLog(
           currentAdmin,
           newLockedStatus ? 'Persetujuan Kunci Tabungan Pokok' : 'Persetujuan Buka Kunci Tabungan Pokok',
-          `Admin Approval ${currentAdmin.nama} menyetujui ${newLockedStatus ? 'penguncian' : 'pembukaan kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan pengajuan: ${req.reason}`,
+          `${currentAdmin.nama} (${currentAdmin.role}) menyetujui ${newLockedStatus ? 'penguncian' : 'pembukaan kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan pengajuan: ${req.reason}`,
           member.id
         ),
         ...prev.auditLogs,
@@ -427,10 +431,14 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     }
   };
 
-  // Reject lock/unlock request (by Admin Approval or Super Admin)
+  // Reject lock/unlock request
   const handleRejectLockPokok = async (member: MemberUser) => {
     if (!member.lockPokokRequest) return;
     const req = member.lockPokokRequest;
+    if (!canApproveByRole(req.requestedByRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan dari ${req.requestedByName} wajib ditolak/disetujui oleh ${getRequiredApproverLabel(req.requestedByRole)}.`);
+      return;
+    }
 
     await updateState((prev) => ({
       ...prev,
@@ -446,7 +454,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         createAuditLog(
           currentAdmin,
           'Penolakan Kunci/Buka Tabungan Pokok',
-          `Admin Approval ${currentAdmin.nama} menolak pengajuan ${req.action === 'lock' ? 'kunci' : 'buka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota})`,
+          `${currentAdmin.nama} (${currentAdmin.role}) menolak pengajuan ${req.action === 'lock' ? 'kunci' : 'buka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota})`,
           member.id
         ),
         ...prev.auditLogs,
@@ -473,8 +481,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     const member = lockPokokModalMember;
     const targetAction = lockPokokTargetAction;
 
-    // Super Admin & Admin Approval can directly execute
-    if (isSuperAdmin || isApproval) {
+    // Hanya Super Admin yang eksekusi langsung; Admin Approval & Admin Write mengajukan persetujuan berjenjang
+    if (isSuperAdmin) {
       const newLockedStatus = targetAction === 'lock';
       await updateState((prev) => ({
         ...prev,
@@ -491,7 +499,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
           createAuditLog(
             currentAdmin,
             newLockedStatus ? 'Kunci Tabungan Pokok' : 'Buka Kunci Tabungan Pokok',
-            `${isSuperAdmin ? 'Super Admin' : 'Admin Approval'} ${currentAdmin.nama} langsung ${newLockedStatus ? 'mengunci' : 'membuka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan: ${lockPokokReason.trim()}`,
+            `Super Admin ${currentAdmin.nama} langsung ${newLockedStatus ? 'mengunci' : 'membuka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan: ${lockPokokReason.trim()}`,
             member.id
           ),
           ...prev.auditLogs,
@@ -504,7 +512,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
       return;
     }
 
-    // Admin Write creates proposal for approval
+    // Admin Write -> disetujui Admin Approval / Super Admin; Admin Approval -> disetujui Super Admin
     const newReq: LockPokokRequest = {
       action: targetAction,
       requestedByRole: currentAdmin.role,
@@ -527,56 +535,69 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         createAuditLog(
           currentAdmin,
           'Pengajuan Kunci/Buka Tabungan Pokok',
-          `Admin Write ${currentAdmin.nama} mengajukan ${targetAction === 'lock' ? 'kunci' : 'buka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan: ${lockPokokReason.trim()}`,
+          `${currentAdmin.nama} (${currentAdmin.role}) mengajukan ${targetAction === 'lock' ? 'kunci' : 'buka kunci'} tabungan pokok untuk ${member.nama} (${member.nomorAnggota}). Alasan: ${lockPokokReason.trim()}`,
           member.id
         ),
         ...prev.auditLogs,
       ],
     }));
 
-    alert(`✓ Pengajuan ${targetAction === 'lock' ? 'penguncian' : 'pembukaan'} tabungan pokok untuk ${member.nama} berhasil dikirim ke Admin Approval!`);
+    alert(`✓ Pengajuan ${targetAction === 'lock' ? 'penguncian' : 'pembukaan'} tabungan pokok untuk ${member.nama} berhasil dikirim ke ${getRequiredApproverLabel(currentAdmin.role)}!`);
     setLockPokokModalMember(null);
     setLockPokokReason('');
   };
 
-  // Delete Member (Admin write requires approval from super admin or admin kelola)
+  // Delete Member (Admin write -> Approval/Super Admin; Admin approval -> Super Admin; Super Admin -> Langsung)
   const handleDeleteMember = async (member: MemberUser) => {
     if (!isSuperAdmin && !isKelola && !isWriter) {
       alert('Anda tidak memiliki hak untuk menghapus anggota.');
       return;
     }
 
-    if (isWriter) {
+    if (!isSuperAdmin) {
+      const targetApprover = getRequiredApproverLabel(currentAdmin.role);
       const confirmReq = confirm(
-        `Ajukan penghapusan anggota ${member.nama} (${member.nomorAnggota}) ke Super Admin / Admin Kelola?`
+        `Ajukan penghapusan anggota ${member.nama} (${member.nomorAnggota}) ke ${targetApprover}?`
       );
       if (!confirmReq) return;
+
+      const deleteRequest = {
+        requestedByName: currentAdmin.nama,
+        requestedByRole: currentAdmin.role,
+        requestedAt: new Date().toISOString(),
+      };
 
       await updateState((prev) => ({
         ...prev,
         members: prev.members.map((m) =>
-          m.id === member.id ? { ...m, status: 'pending_deletion' } : m
+          m.id === member.id ? { ...m, status: 'pending_deletion', deleteRequest } : m
         ),
         auditLogs: [
           createAuditLog(
             currentAdmin,
             'Pengajuan Hapus Anggota',
-            `Admin write mengajukan penghapusan anggota ${member.nama} (${member.nomorAnggota})`,
+            `${currentAdmin.nama} (${currentAdmin.role}) mengajukan penghapusan anggota ${member.nama} (${member.nomorAnggota})`,
             member.id
           ),
           ...prev.auditLogs,
         ],
       }));
-      alert('Pengajuan hapus anggota berhasil dikirim. Menunggu persetujuan Super Admin atau Admin Kelola.');
+      alert(`Pengajuan hapus anggota berhasil dikirim. Menunggu persetujuan ${targetApprover}.`);
       return;
     }
 
-    // Super Admin or Admin Kelola directly executes delete
+    // Super Admin directly executes delete
     await executeApprovedDelete(member);
   };
 
   // Execute deletion and record to Cash Books per User Req 1
   const executeApprovedDelete = async (member: MemberUser) => {
+    const reqRole = member.deleteRequest?.requestedByRole || 'admin_write';
+    if (!canApproveByRole(reqRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan hapus anggota dari ${member.deleteRequest?.requestedByName || 'Admin'} hanya dapat disetujui oleh ${getRequiredApproverLabel(reqRole)}.`);
+      return;
+    }
+
     const totalSaldo = member.saldoPokok + member.saldoUmum + member.saldoZakatFitrah + member.saldoQurban;
     const confirmDelete = confirm(
       `Setujui & hapus data anggota ${member.nama} (${member.nomorAnggota})?\n` +
@@ -691,10 +712,15 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   // Reject Deletion Request
   const handleRejectDelete = async (member: MemberUser) => {
+    const reqRole = member.deleteRequest?.requestedByRole || 'admin_write';
+    if (!canApproveByRole(reqRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan hapus anggota dari ${member.deleteRequest?.requestedByName || 'Admin'} hanya dapat ditolak/disetujui oleh ${getRequiredApproverLabel(reqRole)}.`);
+      return;
+    }
     await updateState((prev) => ({
       ...prev,
       members: prev.members.map((m) =>
-        m.id === member.id ? { ...m, status: 'aktif' } : m
+        m.id === member.id ? { ...m, status: 'aktif', deleteRequest: undefined } : m
       ),
       auditLogs: [
         createAuditLog(
@@ -861,10 +887,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     alert('Data anggota berhasil diperbarui! Nomor rekening awal tetap dipertahankan.');
   };
 
-  // Hapus 1 Mutasi Anggota (Khusus Super Admin per Req 2)
+  // Hapus 1 Mutasi Anggota (Super Admin langsung; Admin Approval/Write melalui pengajuan approval berjenjang)
   const handleDeleteSingleTx = async (tx: MemberTransaction) => {
-    if (!isSuperAdmin) {
-      alert('Akses Ditolak: Hanya Super Admin yang dapat menghapus mutasi transaksi anggota.');
+    if (!isSuperAdmin && !isApproval && !isWriter) {
+      alert('Akses Ditolak: Anda tidak memiliki hak untuk menghapus mutasi transaksi anggota.');
       return;
     }
 
@@ -874,6 +900,112 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
     setHapusTxInitialTxId(tx.id);
     setShowHapusTxModal(true);
     setViewingMemberProfile(null);
+  };
+
+  // Approval / Penolakan Mutasi Anggota (Penghapusan Mutasi, Koreksi Saldo, Bagi Hasil)
+  const pendingMutasiActionRequests = (state.pendingMutasiRequests || []).filter(
+    (r) => r.status === 'pending'
+  );
+  const actionableMutasiRequests = pendingMutasiActionRequests.filter((r) =>
+    canApproveByRole(r.requestedByRole, currentAdmin.role)
+  );
+  const waitingMutasiRequests = pendingMutasiActionRequests.filter(
+    (r) => !canApproveByRole(r.requestedByRole, currentAdmin.role)
+  );
+
+  const actionableLockPokokMembers = pendingLockPokokMembers.filter((m) =>
+    canApproveByRole(m.lockPokokRequest?.requestedByRole, currentAdmin.role)
+  );
+  const waitingLockPokokMembers = pendingLockPokokMembers.filter(
+    (m) => !canApproveByRole(m.lockPokokRequest?.requestedByRole, currentAdmin.role)
+  );
+
+  const actionableFreezeMembers = pendingFreezeMembers.filter((m) =>
+    canApproveByRole(m.freezeRequest?.requestedByRole || 'admin_write', currentAdmin.role)
+  );
+  const waitingFreezeMembers = pendingFreezeMembers.filter(
+    (m) => !canApproveByRole(m.freezeRequest?.requestedByRole || 'admin_write', currentAdmin.role)
+  );
+
+  const actionableDeleteMembers = pendingDeleteMembers.filter((m) =>
+    canApproveByRole(m.deleteRequest?.requestedByRole || 'admin_write', currentAdmin.role)
+  );
+  const waitingDeleteMembers = pendingDeleteMembers.filter(
+    (m) => !canApproveByRole(m.deleteRequest?.requestedByRole || 'admin_write', currentAdmin.role)
+  );
+
+  const handleApproveMutasiRequest = async (reqItem: PendingMutasiActionRequest, isApproved: boolean) => {
+    if (!canApproveByRole(reqItem.requestedByRole, currentAdmin.role)) {
+      alert(`Akses Ditolak: Pengajuan dari ${reqItem.requestedBy} wajib disetujui oleh ${getRequiredApproverLabel(reqItem.requestedByRole)}.`);
+      return;
+    }
+
+    const actionLabel =
+      reqItem.actionType === 'delete_tx'
+        ? `Penghapusan Mutasi Anggota (${reqItem.memberNama || reqItem.wilayah || 'Semua'})`
+        : reqItem.actionType === 'bagi_hasil'
+        ? 'Pembagian Hasil Usaha (SHU)'
+        : 'Koreksi Saldo Anggota';
+
+    if (!confirm(`${isApproved ? 'Setujui & jalankan' : 'Tolak'} pengajuan ${actionLabel} dari ${reqItem.requestedBy}?`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/mutasi-requests/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: reqItem.id,
+          isApproved,
+          adminName: currentAdmin.nama,
+          adminRole: currentAdmin.role,
+        }),
+      });
+      if (res.status === 403) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Akses Ditolak.');
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.state) {
+          await updateState(() => data.state);
+          alert(
+            isApproved
+              ? `✓ Pengajuan ${actionLabel} berhasil DISETUJUI dan diterapkan!`
+              : `Pengajuan ${actionLabel} telah ditolak.`
+          );
+          return;
+        }
+      }
+    } catch {}
+
+    // Offline fallback untuk penolakan atau pembaruan status
+    await updateState((prev) => ({
+      ...prev,
+      pendingMutasiRequests: (prev.pendingMutasiRequests || []).map((r) =>
+        r.id === reqItem.id
+          ? {
+              ...r,
+              status: isApproved ? 'approved' : 'rejected',
+              approvedBy: currentAdmin.nama,
+              approvedByRole: currentAdmin.role,
+              approvedAt: new Date().toISOString(),
+            }
+          : r
+      ),
+      auditLogs: [
+        createAuditLog(
+          currentAdmin,
+          isApproved ? `Persetujuan ${actionLabel}` : `Penolakan ${actionLabel}`,
+          `${currentAdmin.nama} (${currentAdmin.role}) ${isApproved ? 'menyetujui' : 'menolak'} pengajuan dari ${reqItem.requestedBy}: "${reqItem.alasan}"`,
+          reqItem.id
+        ),
+        ...prev.auditLogs,
+      ],
+    }));
+    alert(isApproved ? `✓ Pengajuan ${actionLabel} disetujui.` : `Pengajuan ${actionLabel} ditolak.`);
   };
 
   // Export Rekap Anggota (User Req 12 & 13)
@@ -921,8 +1053,132 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* PENDING LOCK / BUKA TABUNGAN POKOK APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN APPROVAL (Req 7) */}
-      {(isSuperAdmin || isApproval) && pendingLockPokokMembers.length > 0 && (
+      {/* PENDING MUTASI ANGGOTA (HAPUS MUTASI / KOREKSI SALDO / BAGI HASIL) APPROVAL BANNER */}
+      {actionableMutasiRequests.length > 0 && (
+        <div className="bg-gradient-to-r from-rose-950/75 via-amber-950/60 to-slate-900 border border-rose-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
+                <ShieldAlert className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h4 className="font-black text-sm text-rose-200">
+                  Pengajuan Mutasi / Penghapusan Mutasi Anggota Menunggu Persetujuan Anda ({actionableMutasiRequests.length})
+                </h4>
+                <p className="text-[11px] text-rose-300/80">
+                  Pengajuan dari Admin Write disetujui oleh Admin Approval / Super Admin; pengajuan dari Admin Approval disetujui oleh Super Admin.
+                </p>
+              </div>
+            </div>
+            <span className="text-[10px] font-black bg-rose-500/20 text-rose-200 border border-rose-500/40 px-2.5 py-1 rounded-full animate-pulse">
+              Perlu Persetujuan
+            </span>
+          </div>
+
+          <div className="space-y-2.5 pt-1">
+            {actionableMutasiRequests.map((req) => (
+              <div
+                key={req.id}
+                className="p-3.5 bg-slate-900/90 rounded-2xl border border-rose-500/30 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-inner"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-black text-xs px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                      {req.actionType === 'delete_tx'
+                        ? 'Hapus Mutasi Anggota'
+                        : req.actionType === 'bagi_hasil'
+                        ? 'Bagi Hasil (SHU)'
+                        : 'Koreksi Saldo'}
+                    </span>
+                    <span className="font-extrabold text-white text-sm">
+                      {req.memberNama || (req.wilayah && req.wilayah !== 'semua' ? `Wilayah ${req.wilayah}` : 'Seluruh Anggota')}
+                    </span>
+                    {req.memberRekening && (
+                      <span className="font-mono text-slate-400 text-[11px]">({req.memberRekening})</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-300">
+                    {req.actionType === 'delete_tx' ? (
+                      <>
+                        Jumlah Transaksi Dihapus: <b className="text-rose-300">{req.txCount ?? (req.transactionIds?.length || 0)} Mutasi</b>
+                        {typeof req.totalNominalSummary === 'number' && req.totalNominalSummary > 0 && (
+                          <> • Total Nominal: <b className="font-mono text-amber-300">{formatRupiah(req.totalNominalSummary)}</b></>
+                        )}
+                        {req.resetBalance && (
+                          <> • <span className="text-red-400 font-bold">Reset Saldo ke Rp 0</span></>
+                        )}
+                      </>
+                    ) : req.actionType === 'adjust_balance' ? (
+                      <>
+                        {req.tipe === 'masuk' ? 'Penambahan (+)' : 'Pengurangan (-)'} Tabungan {req.jenisTabungan === 'pokok' ? 'Pokok' : 'Umum'} • Nominal: <b className="font-mono text-amber-300">{formatRupiah(req.nominal || 0)}</b> • {(req.targetIds || []).length} Anggota
+                      </>
+                    ) : (
+                      <>
+                        Bagi Hasil {req.persen}% • Tujuan: Tabungan {req.tujuanKredit === 'pokok' ? 'Pokok' : 'Umum'} • Sumber: Kas {req.bukuKasSumber} • Estimasi: <b className="font-mono text-emerald-300">{formatRupiah(req.nominal || 0)}</b>
+                      </>
+                    )}
+                  </div>
+                  <div className="p-2 bg-slate-800/80 rounded-xl border border-slate-700/80 text-[11px] text-slate-200 space-y-0.5">
+                    <div>
+                      <span className="text-slate-400 font-bold">Alasan:</span> <span className="italic">"{req.alasan}"</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Diajukan oleh: <b className="text-amber-300">{req.requestedBy}</b> ({req.requestedByRole}) • {new Date(req.requestedAt).toLocaleString('id-ID')}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                  <button
+                    type="button"
+                    onClick={() => handleApproveMutasiRequest(req, false)}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs cursor-pointer"
+                  >
+                    Tolak
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleApproveMutasiRequest(req, true)}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black rounded-xl text-xs shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Setujui & Terapkan</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* INFO PENGAJUAN MUTASI MENUNGGU OTORITAS LEBIH TINGGI (ADMIN WRITE / ADMIN APPROVAL) */}
+      {(isWriter || isApproval) && waitingMutasiRequests.length > 0 && (
+        <div className="bg-amber-950/30 border border-amber-500/30 rounded-3xl p-4 shadow-xl space-y-2">
+          <div className="flex items-center gap-2 text-amber-300 text-xs font-bold">
+            <Clock className="w-4 h-4 text-amber-400 animate-spin" />
+            <span>Pengajuan Mutasi / Penghapusan Mutasi Menunggu Persetujuan Lebih Tinggi ({waitingMutasiRequests.length})</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            {waitingMutasiRequests.map((req) => (
+              <div key={req.id} className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800 flex justify-between items-center gap-2">
+                <div className="min-w-0">
+                  <div className="font-extrabold text-white text-xs truncate">
+                    {req.actionType === 'delete_tx' ? 'Hapus Mutasi' : req.actionType === 'bagi_hasil' ? 'Bagi Hasil' : 'Koreksi Saldo'} — {req.memberNama || req.wilayah || 'Anggota'}
+                  </div>
+                  <div className="text-[10px] text-slate-400 truncate">
+                    Oleh: {req.requestedBy} ({req.requestedByRole}) • "{req.alasan}"
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                  Menunggu {getRequiredApproverLabel(req.requestedByRole)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* PENDING LOCK / BUKA TABUNGAN POKOK APPROVAL ALERT BOX (Sesuai Hierarki Role) */}
+      {actionableLockPokokMembers.length > 0 && (
         <div className="bg-gradient-to-r from-sky-950/70 via-indigo-950/60 to-slate-900 border border-sky-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2.5">
@@ -931,20 +1187,20 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               </div>
               <div>
                 <h4 className="font-black text-sm text-sky-200">
-                  Permintaan Kunci / Buka Tabungan Pokok Menunggu Persetujuan ({pendingLockPokokMembers.length} Anggota)
+                  Permintaan Kunci / Buka Tabungan Pokok Menunggu Persetujuan Anda ({actionableLockPokokMembers.length} Anggota)
                 </h4>
                 <p className="text-[11px] text-sky-300/80">
-                  Diajukan oleh Admin Write dengan alasan resmi. Memerlukan persetujuan Admin Approval / Super Admin.
+                  Pengajuan dari Admin Write disetujui Admin Approval / Super Admin; pengajuan dari Admin Approval disetujui Super Admin.
                 </p>
               </div>
             </div>
             <span className="text-[10px] font-black bg-sky-500/20 text-sky-300 border border-sky-500/40 px-2.5 py-1 rounded-full animate-pulse">
-              Persetujuan Admin Approval
+              Persetujuan Berjenjang
             </span>
           </div>
 
           <div className="space-y-2.5 pt-1">
-            {pendingLockPokokMembers.map((m) => {
+            {actionableLockPokokMembers.map((m) => {
               const req = m.lockPokokRequest!;
               const isToLock = req.action === 'lock';
               return (
@@ -1009,15 +1265,15 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         </div>
       )}
 
-      {/* PENDING LOCK / BUKA TABUNGAN POKOK INFO BOX FOR ADMIN WRITE (Req 7) */}
-      {isWriter && pendingLockPokokMembers.length > 0 && (
+      {/* PENDING LOCK / BUKA TABUNGAN POKOK INFO BOX FOR WAITING REQUESTS */}
+      {(isWriter || isApproval) && waitingLockPokokMembers.length > 0 && (
         <div className="bg-sky-950/30 border border-sky-500/30 rounded-3xl p-4 shadow-xl space-y-2">
           <div className="flex items-center gap-2 text-sky-300 text-xs font-bold">
             <Clock className="w-4 h-4 text-sky-400 animate-spin" />
-            <span>Pengajuan Kunci / Buka Tabungan Pokok Anda ({pendingLockPokokMembers.length} Menunggu Persetujuan Admin Approval)</span>
+            <span>Pengajuan Kunci / Buka Tabungan Pokok Menunggu Otoritas Lebih Tinggi ({waitingLockPokokMembers.length})</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-xs">
-            {pendingLockPokokMembers.map((m) => (
+            {waitingLockPokokMembers.map((m) => (
               <div key={m.id} className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800 flex justify-between items-center gap-2">
                 <div>
                   <div className="font-extrabold text-white text-xs">{m.nama}</div>
@@ -1026,7 +1282,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
                   m.lockPokokRequest?.action === 'lock' ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 }`}>
-                  {m.lockPokokRequest?.action === 'lock' ? 'Kunci' : 'Buka'} (Menunggu Approval)
+                  Menunggu {getRequiredApproverLabel(m.lockPokokRequest?.requestedByRole)}
                 </span>
               </div>
             ))}
@@ -1034,20 +1290,20 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         </div>
       )}
 
-      {/* PENDING FREEZE APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN KELOLA (Req 4) */}
-      {(isSuperAdmin || isKelola) && pendingFreezeMembers.length > 0 && (
+      {/* PENDING FREEZE APPROVAL ALERT BOX */}
+      {actionableFreezeMembers.length > 0 && (
         <div className="bg-amber-950/40 border border-amber-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
           <div className="flex items-center gap-2.5">
             <Snowflake className="w-5 h-5 text-amber-400" />
             <h4 className="font-black text-sm text-amber-200">
-              Permintaan Pembekuan Akun Anggota Menunggu Persetujuan ({pendingFreezeMembers.length} Akun)
+              Permintaan Pembekuan Akun Anggota Menunggu Persetujuan ({actionableFreezeMembers.length} Akun)
             </h4>
           </div>
           <p className="text-xs text-amber-300/80">
-            Diajukan oleh Admin Write. Memerlukan persetujuan dari Admin Kelola dan Super Admin sebelum akun anggota resmi dibekukan.
+            Pengajuan dari Admin Write disetujui oleh Admin Approval / Super Admin; pengajuan dari Admin Approval disetujui oleh Super Admin.
           </p>
           <div className="space-y-2 pt-1">
-            {pendingFreezeMembers.map((m) => {
+            {actionableFreezeMembers.map((m) => {
               const req = m.freezeRequest;
               return (
                 <div
@@ -1062,16 +1318,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                       No. Rekening / Anggota: <span className="font-mono text-amber-400">{m.nomorRekening || m.nomorAnggota}</span> • Wilayah: {m.wilayah}
                     </div>
                     <div className="text-[11px] text-amber-300 mt-1">
-                      Alasan: <span className="italic font-medium">"{req?.reason || 'Pelanggaran ketentuan'}"</span> • Diajukan oleh: <b>{req?.requestedByName || 'Admin Write'}</b>
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] mt-1 font-bold">
-                      <span className={req?.approvedByKelola ? 'text-emerald-400' : 'text-slate-400'}>
-                        {req?.approvedByKelola ? '✓ Disetujui Admin Kelola' : '⏳ Menunggu Admin Kelola'}
-                      </span>
-                      <span>•</span>
-                      <span className={req?.approvedBySuperAdmin ? 'text-emerald-400' : 'text-slate-400'}>
-                        {req?.approvedBySuperAdmin ? '✓ Disetujui Super Admin' : '⏳ Menunggu Super Admin'}
-                      </span>
+                      Alasan: <span className="italic font-medium">"{req?.reason || 'Pelanggaran ketentuan'}"</span> • Diajukan oleh: <b>{req?.requestedByName || 'Admin'}</b> ({req?.requestedByRole || 'admin_write'})
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -1096,20 +1343,21 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
           </div>
         </div>
       )}
-      {/* PENDING DELETION APPROVAL ALERT BOX FOR SUPER ADMIN & ADMIN KELOLA */}
-      {(isSuperAdmin || isKelola) && pendingDeleteMembers.length > 0 && (
+
+      {/* PENDING DELETION APPROVAL ALERT BOX */}
+      {actionableDeleteMembers.length > 0 && (
         <div className="bg-red-950/40 border border-red-500/50 rounded-3xl p-5 shadow-2xl space-y-3">
           <div className="flex items-center gap-2.5">
             <AlertTriangle className="w-5 h-5 text-red-400" />
             <h4 className="font-black text-sm text-red-200">
-              Permintaan Hapus Anggota Menunggu Persetujuan ({pendingDeleteMembers.length} Anggota)
+              Permintaan Hapus Anggota Menunggu Persetujuan Anda ({actionableDeleteMembers.length} Anggota)
             </h4>
           </div>
           <p className="text-xs text-red-300/80">
-            Diajukan oleh Admin Write. Jika disetujui, saldo terakhir anggota akan dicatat keluar dari Buku Kas Anggota dan masuk ke Kas Koperasi sebagai Tutup Account.
+            Jika disetujui, saldo terakhir anggota akan dicatat keluar dari Buku Kas Anggota dan masuk ke Kas Koperasi sebagai Tutup Account.
           </p>
           <div className="space-y-2 pt-1">
-            {pendingDeleteMembers.map((m) => {
+            {actionableDeleteMembers.map((m) => {
               const total = m.saldoPokok + m.saldoUmum + m.saldoZakatFitrah + m.saldoQurban;
               return (
                 <div
@@ -1125,6 +1373,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     </div>
                     <div className="text-[11px] text-amber-300 font-bold mt-0.5">
                       Sisa Saldo Terakhir: {formatRupiah(total)}
+                      {m.deleteRequest && (
+                        <span className="text-slate-400 font-normal ml-2">
+                          • Diajukan oleh: <b className="text-slate-200">{m.deleteRequest.requestedByName}</b> ({m.deleteRequest.requestedByRole})
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -1146,6 +1399,29 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {(isWriter || isApproval) && (waitingFreezeMembers.length > 0 || waitingDeleteMembers.length > 0) && (
+        <div className="bg-amber-950/25 border border-amber-500/30 rounded-3xl p-4 shadow-xl space-y-2 text-xs">
+          <div className="flex items-center gap-2 text-amber-300 font-bold">
+            <Clock className="w-4 h-4 text-amber-400 animate-spin" />
+            <span>Pengajuan Pembekuan / Hapus Anggota Menunggu Persetujuan Lebih Tinggi ({waitingFreezeMembers.length + waitingDeleteMembers.length})</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {waitingFreezeMembers.map((m) => (
+              <div key={`wait-frz-${m.id}`} className="p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 flex justify-between items-center gap-2">
+                <span className="font-bold text-white truncate">Bekukan: {m.nama}</span>
+                <span className="text-[10px] text-amber-300 font-bold shrink-0">Menunggu {getRequiredApproverLabel(m.freezeRequest?.requestedByRole)}</span>
+              </div>
+            ))}
+            {waitingDeleteMembers.map((m) => (
+              <div key={`wait-del-${m.id}`} className="p-2.5 bg-slate-900/80 rounded-xl border border-slate-800 flex justify-between items-center gap-2">
+                <span className="font-bold text-white truncate">Hapus Akun: {m.nama}</span>
+                <span className="text-[10px] text-rose-300 font-bold shrink-0">Menunggu {getRequiredApproverLabel(m.deleteRequest?.requestedByRole)}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1463,17 +1739,17 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                         </button>
                       )}
 
-                      {(isSuperAdmin || isWriter) && (
+                      {(isSuperAdmin || isWriter || isApproval) && (
                         <button
                           onClick={() => handleDeleteMember(member)}
                           className="p-1.5 bg-red-950/60 hover:bg-red-900 text-red-400 rounded-lg"
-                          title="Hapus Anggota (Pindah Saldo ke Koperasi)"
+                          title={isSuperAdmin ? 'Hapus Anggota (Pindah Saldo ke Koperasi)' : `Ajukan Hapus Anggota ke ${getRequiredApproverLabel(currentAdmin.role)}`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
 
-                      {isSuperAdmin && (
+                      {(isSuperAdmin || isApproval || isWriter) && (
                         <button
                           type="button"
                           onClick={() => {
@@ -1482,7 +1758,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                             setShowHapusTxModal(true);
                           }}
                           className="p-1.5 bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-500/40 rounded-lg transition-colors cursor-pointer"
-                          title={`Hapus Transaksi ${member.nama} (Khusus Super Admin)`}
+                          title={isSuperAdmin ? `Hapus Transaksi ${member.nama}` : `Ajukan Hapus Mutasi ${member.nama} ke ${getRequiredApproverLabel(currentAdmin.role)}`}
                         >
                           <Trash2 className="w-3.5 h-3.5 text-rose-400" />
                         </button>
@@ -2223,7 +2499,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                       <span>Mutasi Rekening Lengkap</span>
                     </button>
 
-                    {isSuperAdmin && (
+                    {(isSuperAdmin || isApproval || isWriter) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -2233,10 +2509,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                           setViewingMemberProfile(null);
                         }}
                         className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-[11px] font-bold rounded-lg border border-rose-500/40 flex items-center gap-1 transition-all"
-                        title="Buka form seleksi dan hapus mutasi anggota ini"
+                        title={isSuperAdmin ? 'Buka form seleksi dan hapus mutasi anggota ini' : `Ajukan penghapusan mutasi anggota ke ${getRequiredApproverLabel(currentAdmin.role)}`}
                       >
                         <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                        <span>Hapus Semua Mutasi</span>
+                        <span>{isSuperAdmin ? 'Hapus Semua Mutasi' : 'Ajukan Hapus Mutasi'}</span>
                       </button>
                     )}
                   </div>
@@ -2302,12 +2578,12 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                               </div>
                             </div>
 
-                            {isSuperAdmin && (
+                            {(isSuperAdmin || isApproval || isWriter) && (
                               <button
                                 type="button"
                                 onClick={() => handleDeleteSingleTx(tx)}
                                 className="p-1.5 bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-500/40 rounded-lg transition-colors cursor-pointer"
-                                title="Hapus mutasi ini (Khusus Super Admin)"
+                                title={isSuperAdmin ? 'Hapus mutasi ini' : `Ajukan hapus mutasi ini ke ${getRequiredApproverLabel(currentAdmin.role)}`}
                               >
                                 <Trash2 className="w-3.5 h-3.5 text-rose-400" />
                               </button>
@@ -2530,7 +2806,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   </div>
                 </div>
 
-                {isSuperAdmin || isApproval ? (
+                {canApproveByRole(lockPokokModalMember.lockPokokRequest.requestedByRole, currentAdmin.role) ? (
                   <div className="space-y-2 pt-2">
                     <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[10px] text-amber-300">
                       ℹ️ Sebagai <b>{isSuperAdmin ? 'Super Admin' : 'Admin Approval'}</b>, Anda berwenang mengesahkan atau menolak permohonan pembukaan/penguncian tabungan pokok ini.
@@ -2565,7 +2841,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                         Menunggu Persetujuan
                       </div>
                       <p className="text-[11px] text-slate-400">
-                        Pengajuan Anda sudah masuk ke sistem dan sedang menunggu pengesahan dari Admin Approval atau Super Admin.
+                        Pengajuan ini sedang menunggu pengesahan dari {getRequiredApproverLabel(lockPokokModalMember.lockPokokRequest.requestedByRole)}.
                       </p>
                     </div>
                     <button
@@ -2649,9 +2925,9 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </div>
 
                 <div className="p-2.5 bg-sky-500/10 border border-sky-500/30 rounded-xl text-[10px] text-sky-300">
-                  {isWriter
-                    ? 'ℹ️ Alur Persetujuan: Sebagai Admin Write, pengajuan Anda akan diteruskan ke Admin Approval untuk disahkan sebelum status tabungan pokok berubah.'
-                    : 'ℹ️ Eksekusi: Sebagai Admin Approval / Super Admin, tindakan ini akan langsung mengubah status kunci tabungan pokok anggota.'}
+                  {!isSuperAdmin
+                    ? `ℹ️ Alur Persetujuan: Pengajuan Anda akan diteruskan ke ${getRequiredApproverLabel(currentAdmin.role)} untuk disahkan sebelum status tabungan pokok berubah.`
+                    : 'ℹ️ Eksekusi: Sebagai Super Admin, tindakan ini akan langsung mengubah status kunci tabungan pokok anggota.'}
                 </div>
 
                 <div className="flex gap-2 pt-2">
@@ -2667,7 +2943,7 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     className="flex-1 py-2.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-sky-500/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     <Send className="w-3.5 h-3.5" />
-                    <span>{isWriter ? 'Kirim Pengajuan' : 'Terapkan Sekarang'}</span>
+                    <span>{!isSuperAdmin ? 'Kirim Pengajuan' : 'Terapkan Sekarang'}</span>
                   </button>
                 </div>
               </form>
@@ -2676,8 +2952,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         </div>
       )}
 
-      {/* ================= MODAL: HAPUS TRANSAKSI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}
-      {showHapusTxModal && isSuperAdmin && (
+      {/* ================= MODAL: HAPUS TRANSAKSI ANGGOTA ================= */}
+      {showHapusTxModal && (isSuperAdmin || isApproval || isWriter) && (
         <HapusTransaksiAnggotaModal
           state={state}
           updateState={updateState}
@@ -2692,8 +2968,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
         />
       )}
 
-      {/* Tombol Hapus Mutasi Admin di Bawah Kanan (Req: hapus mutasi admin ke bawah kanan) */}
-      {isSuperAdmin && (
+      {/* Tombol Hapus Mutasi Anggota di Bawah Kanan */}
+      {(isSuperAdmin || isApproval || isWriter) && (
         <div className="fixed bottom-6 right-6 z-40">
           <button
             type="button"
@@ -2703,10 +2979,10 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
               setShowHapusTxModal(true);
             }}
             className="py-3 px-4.5 bg-gradient-to-r from-rose-600 via-rose-700 to-red-800 hover:from-rose-500 hover:to-red-700 text-white text-xs font-black rounded-2xl shadow-2xl shadow-rose-950/90 border border-rose-400/50 flex items-center gap-2 transition-all hover:scale-105 active:scale-95 cursor-pointer backdrop-blur"
-            title="Khusus Super Admin: Hapus Mutasi / Reset Rekening Anggota"
+            title={isSuperAdmin ? 'Hapus Mutasi / Reset Rekening Anggota' : `Ajukan Hapus Mutasi Anggota (Disetujui ${getRequiredApproverLabel(currentAdmin.role)})`}
           >
             <Trash2 className="w-4 h-4 text-white animate-pulse" />
-            <span>Hapus Mutasi Anggota</span>
+            <span>{isSuperAdmin ? 'Hapus Mutasi Anggota' : 'Ajukan Hapus Mutasi'}</span>
           </button>
         </div>
       )}

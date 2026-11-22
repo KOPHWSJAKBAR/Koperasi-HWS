@@ -114,6 +114,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     currentAdmin?.role === 'admin_kelola' ||
     currentAdmin?.role === 'admin_laporan';
 
+  const canRequestHapusMutasi =
+    isSuperAdmin ||
+    currentAdmin?.role === 'admin_write' ||
+    currentAdmin?.role === 'admin_approval' ||
+    currentAdmin?.role === 'admin_kelola' ||
+    currentAdmin?.role === 'admin_pembukuan';
+
   // Req 1 & 8: nama berbagi bisa di ganti oleh admin write, admin aproval dan super admin terdapat dalam setingan admin
   const canEditPengaturanBerbagi =
     isSuperAdmin ||
@@ -2987,6 +2994,31 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                       </div>
                       <div className="text-[10px] text-rose-300 font-normal mt-0.5">
                         Wewenang {currentAdmin?.role === 'admin_write' ? 'Admin Write' : 'Admin Approval'}: Ubah nama {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & barcode QRIS
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-rose-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
+                </button>
+              )}
+
+              {canRequestHapusMutasi && (
+                <button
+                  type="button"
+                  onClick={() => setShowHapusTxModal(true)}
+                  className="w-full p-3.5 bg-rose-950/40 hover:bg-rose-900/60 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/40">
+                      <Trash2 className="w-5 h-5 text-rose-400" />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
+                        Ajukan Hapus Transaksi Mutasi Anggota
+                      </div>
+                      <div className="text-[10px] text-rose-300 font-normal mt-0.5">
+                        {currentAdmin?.role === 'admin_write'
+                          ? 'Pengajuan penghapusan mutasi anggota (memerlukan persetujuan Admin Approval / Super Admin)'
+                          : 'Pengajuan penghapusan mutasi anggota (memerlukan persetujuan Super Admin)'}
                       </div>
                     </div>
                   </div>
@@ -5897,8 +5929,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         onClose={() => setSubModal(null)}
       />
 
-      {/* ================= MODAL: HAPUS TRANSAKSI ANGGOTA (KHUSUS SUPER ADMIN) ================= */}
-      {showHapusTxModal && currentAdmin && isSuperAdmin && (
+      {/* ================= MODAL: HAPUS TRANSAKSI ANGGOTA ================= */}
+      {showHapusTxModal && currentAdmin && canRequestHapusMutasi && (
         <HapusTransaksiAnggotaModal
           state={state}
           updateState={updateState}
