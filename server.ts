@@ -2156,7 +2156,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
       const dedupPurged =
-        (currentState.deletedTransactionIds || []).length > beforeDelTxCount ||
+        (currentState.deletedTransactionIds || []).length !== beforeDelTxCount ||
         (currentState.deletedKasIds || []).length > beforeDelKasCount;
 
       if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated || dedupPurged) {
@@ -2724,7 +2724,12 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
       (s.jenis === 'kewajiban' || s.jenis === 'umum' || s.jenis === 'sedekah')
   );
   const approvedDepositMap = new Map<string, any>();
-  approvedAllDeposits.forEach((s: any) => approvedDepositMap.set(s.id, s));
+  approvedAllDeposits.forEach((s: any) => {
+    approvedDepositMap.set(s.id, s);
+    // Heal stale canonical deposit tx tombstones when the verified deposit itself is active & not deleted
+    const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
+    deletedTxSet.delete(isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`);
+  });
 
   // 4. Strictly filter & deduplicate memberTransactions:
   // - Deposit-sourced transactions MUST map to a verified (disetujui/approved) setoran and appear AT MOST ONCE
@@ -2754,12 +2759,6 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         return;
       }
       if (dep.memberId && dep.memberId !== 'donatur-umum' && t.memberId !== dep.memberId) {
-        recordRemovedTx(t.id);
-        return;
-      }
-      const isSedekah = dep.jenis === 'sedekah' || depRefId.startsWith('sdk-');
-      const canonicalId = isSedekah ? `tx-sdk-${depRefId}` : `tx-dep-${depRefId}`;
-      if (deletedTxSet.has(canonicalId)) {
         recordRemovedTx(t.id);
         return;
       }
@@ -2811,13 +2810,13 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     if (!m) return;
     const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
     const depTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
-    if (existingDepositRefs.has(s.id) || existingDepositRefs.has(depTxId) || deletedTxSet.has(depTxId)) return;
+    if (existingDepositRefs.has(s.id) || existingDepositRefs.has(depTxId)) return;
 
     addedTxCount++;
     const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
     const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
-    const tgl = s.tanggal || wibTime.toISOString().split('T')[0];
-    const jam = s.jam || wibTime.toISOString().split('T')[1].slice(0, 5);
+    const tgl = s.tanggal || (s.createdAt && s.createdAt.includes('T') ? s.createdAt.split('T')[0] : wibTime.toISOString().split('T')[0]);
+    const jam = s.jam || (s.createdAt && s.createdAt.includes('T') ? s.createdAt.split('T')[1].slice(0, 5) : wibTime.toISOString().split('T')[1].slice(0, 5));
 
     if (isSedekah) {
       const sdkEntry = sedekahMap.get(s.id);
@@ -2915,7 +2914,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
           u = Math.max(0, u - nom);
         }
       }
-      tx.saldoSetelah = p + u;
+      tx.saldoSetelah = p + u + z + q;
     });
 
     return {
@@ -3202,6 +3201,7 @@ let currentState = loadDatabase();
 const beforeBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}`).join('|');
 const beforeBootTxCount = (currentState.memberTransactions || []).length;
 const beforeBootKasCount = (currentState.kasList || []).length;
+const beforeBootDelTxCount = (currentState.deletedTransactionIds || []).length;
 // Auto-reconcile balances with verified deposits on server boot
 const startupRecon = reconcileBalancesWithDeposits(currentState);
 currentState = startupRecon.state;
@@ -3209,11 +3209,13 @@ const afterBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any
 const bootCbgChanged = beforeBootTxCbgDigest !== afterBootTxCbgDigest;
 const bootDedupChanged =
   (currentState.memberTransactions || []).length !== beforeBootTxCount ||
-  (currentState.kasList || []).length !== beforeBootKasCount;
+  (currentState.kasList || []).length !== beforeBootKasCount ||
+  (currentState.deletedTransactionIds || []).length !== beforeBootDelTxCount ||
+  startupRecon.addedTxCount > 0;
 const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
 if (startupMemRecon.migratedCount > 0 || bootCbgChanged || bootDedupChanged) {
-  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG normalized: ${bootCbgChanged}, Dedup cleaned: ${bootDedupChanged}.`);
+  console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG normalized: ${bootCbgChanged}, Dedup/Setoran healed: ${bootDedupChanged} (addedTx: ${startupRecon.addedTxCount}).`);
   saveDatabase(currentState, { skipFirestore: !bootCbgChanged && !bootDedupChanged });
 }
 // Enforce 10-day chat retention on startup

@@ -1781,6 +1781,9 @@ export function filterAndDeduplicateMemberTransactions(params: {
     if (!s || !s.id || delSetoranSet.has(s.id)) return;
     if (s.status !== 'disetujui' && (s as any).status !== 'approved') return;
     approvedDepositMap.set(s.id, s);
+    // Active verified deposit must never be suppressed by a stale canonical tx tombstone
+    const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
+    delTxSet.delete(isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`);
   });
 
   const removedTxIds: string[] = [];
@@ -1818,13 +1821,6 @@ export function filterAndDeduplicateMemberTransactions(params: {
         : null;
       const expectedMemberId = resolvedMember?.id || dep.memberId;
       if (expectedMemberId && expectedMemberId !== 'donatur-umum' && tx.memberId !== expectedMemberId) {
-        recordRemoved(tx.id);
-        return;
-      }
-
-      const isSedekah = dep.jenis === 'sedekah' || depRefId.startsWith('sdk-');
-      const canonicalId = isSedekah ? `tx-sdk-${depRefId}` : `tx-dep-${depRefId}`;
-      if (delTxSet.has(canonicalId)) {
         recordRemoved(tx.id);
         return;
       }
@@ -2063,6 +2059,14 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
   const setoranList = Array.from(setoranMap.values());
   const sedekahList = Array.from(sedekahMap.values());
 
+  // Heal stale canonical tx tombstones for active verified deposits (not in deletedSetoranIds)
+  setoranList.forEach((s) => {
+    if (!s || !s.id || delSetoranSet.has(s.id)) return;
+    if (s.status !== 'disetujui' && (s as any).status !== 'approved') return;
+    const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
+    delTxSet.delete(isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`);
+  });
+
   // Strictly filter & deduplicate memberTransactions against verified deposits, deleted IDs, and active members
   const txClean = filterAndDeduplicateMemberTransactions({
     transactions: Array.isArray(state.memberTransactions) ? state.memberTransactions : [],
@@ -2148,9 +2152,6 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     s.memberRekening = m.nomorRekening;
     s.memberNomorAnggota = m.nomorAnggota;
 
-    const isSedekah = s.jenis === 'sedekah';
-    const canonicalTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
-    if (delTxSet.has(canonicalTxId)) return;
     if (countedDepositIds.has(s.id)) return;
     countedDepositIds.add(s.id);
 
@@ -2270,7 +2271,6 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
 
     const isSedekah = s.jenis === 'sedekah';
     const txId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
-    if (delTxSet.has(txId)) return;
 
     const isPresent =
       existingDepositRefs.has(s.id) ||
