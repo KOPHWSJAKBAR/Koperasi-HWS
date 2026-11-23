@@ -1055,6 +1055,29 @@ function mergeServerState(current: any, incoming: any): any {
     }
   });
 
+  // Two-way terminal status sync between setoranMap and sedekahMap
+  sedekahMap.forEach((sdk: any, sdkId: string) => {
+    if (!sdk || allDeletedSetoranIds.has(sdkId)) return;
+    const setItem = setoranMap.get(sdkId);
+    if (setItem) {
+      if ((sdk.status === 'approved' || sdk.status === 'rejected') && setItem.status === 'pending') {
+        setoranMap.set(sdkId, {
+          ...setItem,
+          status: sdk.status === 'approved' ? 'disetujui' : 'ditolak',
+          verifiedBy: sdk.verifiedBy || setItem.verifiedBy,
+          verifiedAt: sdk.verifiedAt || setItem.verifiedAt,
+        });
+      } else if ((setItem.status === 'disetujui' || setItem.status === 'ditolak') && sdk.status === 'pending') {
+        sedekahMap.set(sdkId, {
+          ...sdk,
+          status: setItem.status === 'disetujui' ? 'approved' : 'rejected',
+          verifiedBy: setItem.verifiedBy || sdk.verifiedBy,
+          verifiedAt: setItem.verifiedAt || sdk.verifiedAt,
+        });
+      }
+    }
+  });
+
   // 12. Pengaturan Berbagi (Names, rekening, & QRIS Sedekah)
   const pengaturanBerbagi = {
     ...current.pengaturanBerbagi,
@@ -4498,19 +4521,28 @@ async function startServer() {
       }).formatToParts(now);
       const jam = `${wibTimeParts.find((p) => p.type === 'hour')?.value || '00'}:${wibTimeParts.find((p) => p.type === 'minute')?.value || '00'}`;
 
-      if (isApproved) {
-        // Cek apakah setoran ini sudah disetujui sebelumnya untuk mencegah double saldo & double mutasi (Req 2)
-        if (dep.status === 'disetujui') {
-          currentState = reconcileBalancesWithDeposits(currentState).state;
-          return res.json({
-            success: true,
-            message: `Setoran a/n ${targetMember?.nama || dep.memberNama} telah disetujui sebelumnya (mencegah duplikasi saldo & mutasi).`,
-            deposit: dep,
-            member: targetMember,
-            state: currentState,
-          });
-        }
+      // GUARD STATUS TERMINAL GLOBAL: Jika sudah disetujui/ditolak oleh admin lain, jangan timpa & jangan kirim notifikasi ulang
+      if (dep.status === 'disetujui' || dep.status === 'ditolak') {
+        currentState = reconcileBalancesWithDeposits(currentState).state;
+        const latestDep = (currentState.setoranList || []).find((s: any) => s.id === dep.id) || dep;
+        broadcastEvent('SETORAN_UPDATED', {
+          action: 'verify',
+          deposit: latestDep,
+          verifiedBy: latestDep.verifiedBy || 'Admin Lain',
+        });
+        return res.json({
+          success: true,
+          alreadyProcessed: true,
+          status: latestDep.status,
+          verifiedBy: latestDep.verifiedBy || 'Admin Lain',
+          message: `Setoran a/n ${targetMember?.nama || latestDep.memberNama} sudah di-${latestDep.status} sebelumnya oleh ${latestDep.verifiedBy || 'Admin Lain'}.`,
+          deposit: latestDep,
+          member: targetMember,
+          state: currentState,
+        });
+      }
 
+      if (isApproved) {
         // Cek apakah mutasi dengan referensiId atau ID deterministik sudah ada di memberTransactions
         const canonicalTxId = dep.jenis === 'sedekah' ? `tx-sdk-${dep.id}` : `tx-dep-${dep.id}`;
         const alreadyHasTx = (currentState.memberTransactions || []).some(
@@ -4520,12 +4552,21 @@ async function startServer() {
           dep.status = 'disetujui';
           dep.verifiedAt = dep.verifiedAt || now.toISOString();
           dep.verifiedBy = dep.verifiedBy || adminName || 'Admin Koperasi';
+          dep.updatedAt = now.toISOString();
           currentState.setoranList[depIndex] = dep;
           currentState = reconcileBalancesWithDeposits(currentState).state;
           saveDatabase(currentState);
-          broadcastStatePulse('updated');
+          broadcastStatePulse('setoran_verified');
+          broadcastEvent('SETORAN_UPDATED', {
+            action: 'verify',
+            deposit: dep,
+            verifiedBy: dep.verifiedBy,
+          });
           return res.json({
             success: true,
+            alreadyProcessed: true,
+            status: dep.status,
+            verifiedBy: dep.verifiedBy,
             message: `Setoran a/n ${targetMember?.nama || dep.memberNama} telah tercatat sebelumnya, status diselaraskan tanpa duplikasi.`,
             deposit: dep,
             member: targetMember,
@@ -4536,6 +4577,7 @@ async function startServer() {
         dep.status = 'disetujui';
         dep.verifiedAt = now.toISOString();
         dep.verifiedBy = adminName || 'Admin Koperasi';
+        dep.updatedAt = now.toISOString();
 
         if (dep.jenis === 'kewajiban') {
           const jlhHari = dep.jumlahHari || 1;
@@ -4789,6 +4831,7 @@ async function startServer() {
         dep.catatanAdmin = dep.alasanTolak;
         dep.verifiedAt = now.toISOString();
         dep.verifiedBy = adminName || 'Admin Koperasi';
+        dep.updatedAt = now.toISOString();
 
         if (dep.jenis === 'sedekah') {
           currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
@@ -4799,6 +4842,7 @@ async function startServer() {
                   rejectionReason: dep.catatanAdmin,
                   verifiedAt: now.toISOString(),
                   verifiedBy: adminName || 'Admin Koperasi',
+                  updatedAt: now.toISOString(),
                 }
               : sdk
           );
@@ -4838,11 +4882,46 @@ async function startServer() {
         currentState = reconResult.state;
       }
 
-      saveDatabase(currentState);
-      broadcastStatePulse('updated');
-      broadcastEvent('SETORAN_UPDATED', { action: 'verify', deposit: dep });
+      const finalDep = (currentState.setoranList || []).find((s: any) => s.id === dep.id) || dep;
 
-      // FCM Realtime Member Notification (Req 1)
+      saveDatabase(currentState);
+      broadcastStatePulse('setoran_verified');
+      broadcastEvent('SETORAN_UPDATED', {
+        action: 'verify',
+        deposit: finalDep,
+        verifiedBy: finalDep.verifiedBy || adminName || 'Admin Koperasi',
+      });
+
+      // Push instan dokumen setoran (dan sedekah bila perlu) + pulse metadata ke Firestore agar admin lain lintas origin langsung tersinkron
+      ensureServerFirestore()
+        .then(async (fsCtx) => {
+          if (!fsCtx) return;
+          const { db, doc, setDoc } = fsCtx;
+          const cleanDep = sanitizeServerDocForFirestore({ ...finalDep });
+          await setDoc(doc(db, 'setoran', finalDep.id), cleanDep, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(`setoran/${finalDep.id}`, JSON.stringify(cleanDep));
+          if (finalDep.jenis === 'sedekah') {
+            const linkedSdk = (currentState.sedekahList || []).find((sdk: any) => sdk.id === finalDep.id);
+            if (linkedSdk) {
+              const cleanSdk = sanitizeServerDocForFirestore({ ...linkedSdk });
+              await setDoc(doc(db, 'sedekah', finalDep.id), cleanSdk, { merge: true }).catch(() => {});
+              serverFirestoreHashMap.set(`sedekah/${finalDep.id}`, JSON.stringify(cleanSdk));
+            }
+          }
+          await setDoc(
+            doc(db, 'koperasi_state', 'main_database'),
+            {
+              id: 'main_database',
+              lastSynced: now.toISOString(),
+              updatedBy: SERVER_INSTANCE_ID,
+              totalSetoran: (currentState.setoranList || []).length,
+            },
+            { merge: true }
+          ).catch(() => {});
+        })
+        .catch(() => {});
+
+      // FCM Realtime Member Notification (Hanya untuk Anggota pemilik setoran, BUKAN untuk admin lain)
       const notifTitle = isApproved
         ? '✅ Verifikasi Setoran Berhasil'
         : '⚠️ Setoran Belum Disetujui';
@@ -4858,12 +4937,12 @@ async function startServer() {
         title: notifTitle,
         body: notifBody,
         type: isApproved ? 'setoran_verified' : 'info',
-        data: { depositId: dep.id, nominal: dep.nominal }
+        data: { depositId: dep.id, nominal: dep.nominal, status: finalDep.status }
       });
       res.json({
         success: true,
         message: `Setoran a/n ${targetMember?.nama || dep.memberNama} berhasil di-${isApproved ? 'setujui' : 'tolak'} secara online realtime!`,
-        deposit: dep,
+        deposit: finalDep,
         member: targetMember,
         state: currentState
       });

@@ -1125,20 +1125,55 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
+const activeBrowserNotifications = new Map<string, Notification>();
+
+export function dismissBrowserNotification(tag: string) {
+  if (typeof window === 'undefined' || !tag) return;
+  try {
+    const existing = activeBrowserNotifications.get(tag);
+    if (existing) {
+      existing.close();
+      activeBrowserNotifications.delete(tag);
+    }
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then((reg) => {
+          if (typeof reg.getNotifications === 'function') {
+            return reg.getNotifications({ tag }).then((list) => {
+              list.forEach((n) => n.close());
+            });
+          }
+        })
+        .catch(() => {});
+    }
+  } catch {}
+}
+
 export function triggerBrowserNotification(
   title: string,
   body: string,
-  onClick?: () => void
+  onClick?: () => void,
+  tag?: string
 ) {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission === 'granted') {
     try {
+      const notifTag = tag || `hws-${Date.now()}`;
+      if (tag) {
+        dismissBrowserNotification(tag);
+      }
       const notif = new Notification(title, {
         body,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        tag: `hws-${Date.now()}`,
+        tag: notifTag,
       });
+      activeBrowserNotifications.set(notifTag, notif);
+      notif.onclose = () => {
+        if (activeBrowserNotifications.get(notifTag) === notif) {
+          activeBrowserNotifications.delete(notifTag);
+        }
+      };
       if (onClick) {
         notif.onclick = () => {
           window.focus();
@@ -1667,6 +1702,22 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
           status: mappedStatus,
           verifiedBy: sdk.verifiedBy || existingSetoran.verifiedBy,
           verifiedAt: sdk.verifiedAt || existingSetoran.verifiedAt,
+        });
+      }
+    }
+  });
+
+  // Reverse sync: jika setoranMap sudah terminal (disetujui/ditolak), pastikan sedekahMap ikut tersinkron
+  setoranMap.forEach((setItem, setId) => {
+    if (!setItem || allDeletedSetoranIds.has(setId)) return;
+    if (setItem.status === 'disetujui' || setItem.status === 'ditolak') {
+      const existingSdk = sedekahMap.get(setId);
+      if (existingSdk && existingSdk.status === 'pending') {
+        sedekahMap.set(setId, {
+          ...existingSdk,
+          status: setItem.status === 'disetujui' ? 'approved' : 'rejected',
+          verifiedBy: setItem.verifiedBy || existingSdk.verifiedBy,
+          verifiedAt: setItem.verifiedAt || existingSdk.verifiedAt,
         });
       }
     }
@@ -3034,6 +3085,10 @@ let isFirestoreSyncRunning = false;
 let queuedFirestoreSyncState: AppState | null = null;
 let hasHydratedRemoteState = false;
 
+export function getHasHydratedRemoteState(): boolean {
+  return hasHydratedRemoteState;
+}
+
 // Seed known server-authoritative hashes so unchanged documents are NOT re-blasted to Firestore on every mutation
 function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>, forceOverwrite = false) {
   if (!serverData || typeof serverData !== 'object') return;
@@ -3955,7 +4010,9 @@ export function useKoperasiState() {
             const data = JSON.parse(event.data);
             if (data.type === 'STATE_SYNC_PULSE') {
               const incomingDigest = data.payload?.digest;
-              if (!incomingDigest || incomingDigest !== lastServerStateDigest) {
+              if (data.payload?.reason === 'setoran_verified') {
+                fetchStateFromServer(true);
+              } else if (!incomingDigest || incomingDigest !== lastServerStateDigest) {
                 fetchStateFromServer();
               }
             } else if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
@@ -3966,8 +4023,55 @@ export function useKoperasiState() {
                 scheduleLocalStoragePersist();
                 notifyListeners();
               }
+            } else if (data.type === 'SETORAN_UPDATED') {
+              const dep = data.payload?.deposit as SetoranVerifikasi | undefined;
+              if (dep && dep.id) {
+                const delSet = new Set(globalState.deletedSetoranIds || []);
+                if (!delSet.has(dep.id)) {
+                  const existingIdx = (globalState.setoranList || []).findIndex((s) => s.id === dep.id);
+                  let nextSetoranList = [...(globalState.setoranList || [])];
+                  if (existingIdx >= 0) {
+                    const ex = nextSetoranList[existingIdx];
+                    const isExTerminal = ex.status === 'disetujui' || ex.status === 'ditolak';
+                    nextSetoranList[existingIdx] = {
+                      ...ex,
+                      ...dep,
+                      status: isExTerminal ? ex.status : dep.status,
+                      verifiedBy: ex.verifiedBy || dep.verifiedBy,
+                      verifiedAt: ex.verifiedAt || dep.verifiedAt,
+                      buktiTransferUrl: dep.buktiTransferUrl || ex.buktiTransferUrl,
+                    };
+                  } else {
+                    nextSetoranList = [dep, ...nextSetoranList];
+                  }
+                  const nextSedekahList =
+                    dep.jenis === 'sedekah' && (dep.status === 'disetujui' || dep.status === 'ditolak')
+                      ? (globalState.sedekahList || []).map((sdk) =>
+                          sdk.id === dep.id
+                            ? {
+                                ...sdk,
+                                status: (dep.status === 'disetujui' ? 'approved' : 'rejected') as any,
+                                verifiedBy: dep.verifiedBy || sdk.verifiedBy,
+                                verifiedAt: dep.verifiedAt || sdk.verifiedAt,
+                              }
+                            : sdk
+                        )
+                      : globalState.sedekahList;
+                  globalState = {
+                    ...globalState,
+                    setoranList: nextSetoranList,
+                    sedekahList: nextSedekahList,
+                  };
+                  scheduleLocalStoragePersist();
+                  notifyListeners();
+                }
+                if (dep.status === 'disetujui' || dep.status === 'ditolak') {
+                  dismissBrowserNotification(`hws-setoran-${dep.id}`);
+                }
+              }
+              window.dispatchEvent(new CustomEvent('hws:setoran_updated', { detail: data.payload }));
+              fetchStateFromServer(true);
             } else if (
-              data.type === 'SETORAN_UPDATED' ||
               data.type === 'TRANSFER_COMPLETED' ||
               data.type === 'SYSTEM_REPAIRED' ||
               data.type === 'TRANSACTIONS_DELETED' ||
@@ -4065,6 +4169,30 @@ export function useKoperasiState() {
             } else if (data.type === 'MEMBER_NOTIFICATION') {
               const notif = data.payload;
               if (notif) {
+                let activeSession: { type?: 'member' | 'admin'; id?: string } | null = null;
+                try {
+                  const rawSession = localStorage.getItem('koperasi_hws_active_session');
+                  if (rawSession) {
+                    activeSession = JSON.parse(rawSession);
+                  }
+                } catch {}
+
+                // Hanya tampilkan notifikasi jika penerima sesuai dengan sesi pengguna yang sedang login
+                if (!activeSession || !activeSession.type || !activeSession.id) {
+                  return;
+                }
+                if (activeSession.type === 'admin') {
+                  const isTargetedToAdmin =
+                    notif.recipientId === activeSession.id || notif.recipientId === 'admin';
+                  if (!isTargetedToAdmin || notif.type === 'setoran_verified' || notif.data?.depositId) {
+                    return;
+                  }
+                } else if (activeSession.type === 'member') {
+                  if (notif.recipientId !== activeSession.id && notif.recipientId !== 'all') {
+                    return;
+                  }
+                }
+
                 if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru') {
                   playNotificationSound('deposit');
                 } else {

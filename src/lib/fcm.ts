@@ -19,6 +19,22 @@ export interface HwsNotification {
 let activeMessaging: any = null;
 let currentToken: string | null = null;
 let unsubscribeFirestoreListener: (() => void) | null = null;
+let unsubscribeFcmOnMessage: (() => void) | null = null;
+let activeUserId: string | null = null;
+let activeUserRole: 'member' | 'admin' | null = null;
+
+export function cleanupFCM() {
+  activeUserId = null;
+  activeUserRole = null;
+  if (unsubscribeFirestoreListener) {
+    unsubscribeFirestoreListener();
+    unsubscribeFirestoreListener = null;
+  }
+  if (unsubscribeFcmOnMessage) {
+    unsubscribeFcmOnMessage();
+    unsubscribeFcmOnMessage = null;
+  }
+}
 
 // Initialize FCM & Real-time Notification Listener
 export async function initFCM(
@@ -27,6 +43,9 @@ export async function initFCM(
   onNotificationReceived?: (notif: HwsNotification) => void
 ): Promise<string | null> {
   if (typeof window === 'undefined') return null;
+
+  activeUserId = userId;
+  activeUserRole = userRole;
 
   // 1. Inisialisasi Service Worker & Web Push / FCM
   try {
@@ -74,11 +93,29 @@ export async function initFCM(
         }
       }
 
+      if (unsubscribeFcmOnMessage) {
+        unsubscribeFcmOnMessage();
+        unsubscribeFcmOnMessage = null;
+      }
+
       // Foreground Message Listener
-      onMessage(activeMessaging, (payload) => {
+      unsubscribeFcmOnMessage = onMessage(activeMessaging, (payload) => {
+        if (!activeUserId || !activeUserRole) return;
         const title = payload.notification?.title || payload.data?.title || 'Notifikasi Koperasi HWS';
         const body = payload.notification?.body || payload.data?.body || 'Anda menerima pembaruan transaksi.';
         const type = (payload.data?.type as any) || 'info';
+        const recipientId = payload.data?.recipientId || userId;
+
+        if (activeUserRole === 'admin') {
+          const isForAdmin = recipientId === activeUserId || recipientId === 'admin';
+          if (!isForAdmin || type === 'setoran_verified' || payload.data?.depositId) {
+            return;
+          }
+        } else if (activeUserRole === 'member') {
+          if (recipientId !== activeUserId && recipientId !== 'all') {
+            return;
+          }
+        }
 
         if (type === 'setoran_verified' || type === 'mutasi_baru') {
           playNotificationSound('deposit');
@@ -89,7 +126,7 @@ export async function initFCM(
         triggerBrowserNotification(title, body);
 
         const notifObj: HwsNotification = {
-          recipientId: userId,
+          recipientId,
           title,
           body,
           type,
@@ -113,7 +150,7 @@ export async function initFCM(
     const notifCol = collection(db, 'notifications');
     const q = query(
       notifCol,
-      where('recipientId', 'in', [userId, 'all']),
+      where('recipientId', 'in', userRole === 'admin' ? [userId, 'admin'] : [userId, 'all']),
       limit(20)
     );
 
@@ -137,6 +174,17 @@ export async function initFCM(
             timestamp: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : (data.createdAt || new Date().toISOString()),
             data: data.data || {},
           };
+
+          if (activeUserRole === 'admin') {
+            const isForAdmin = notif.recipientId === activeUserId || notif.recipientId === 'admin';
+            if (!isForAdmin || notif.type === 'setoran_verified' || notif.data?.depositId) {
+              return;
+            }
+          } else if (activeUserRole === 'member') {
+            if (notif.recipientId !== activeUserId && notif.recipientId !== 'all') {
+              return;
+            }
+          }
 
           // Mainkan suara & browser banner
           if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru') {

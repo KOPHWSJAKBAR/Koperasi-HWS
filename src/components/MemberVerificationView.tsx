@@ -16,6 +16,7 @@ import {
   getWibDateStr,
   getWibTimeStr,
   applyAuthoritativeServerState,
+  dismissBrowserNotification,
 } from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
@@ -145,6 +146,20 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
   }, [previewBukti, rejectingDeposit, deletingDeposit, buktiSetorSuccess, isTarikModalOpen]);
+
+  // Tutup otomatis modal penolakan jika setoran sudah diverifikasi/ditolak oleh admin lain secara realtime
+  useEffect(() => {
+    if (!rejectingDeposit) return;
+    const latest = (state.setoranList || []).find((s) => s.id === rejectingDeposit.id);
+    if (latest && latest.status !== 'pending') {
+      setRejectingDeposit(null);
+      setRejectReasonInput('');
+      setActionBanner({
+        type: 'success',
+        text: `Setoran a/n ${latest.memberNama} sudah diproses (${latest.status}) sebelumnya oleh Admin ${latest.verifiedBy || 'lain'}.`,
+      });
+    }
+  }, [state.setoranList, rejectingDeposit]);
 
   // Calculations for setoran kewajiban (Req 1)
   const daysCount = parseInt(jumlahHari, 10) || 0;
@@ -663,7 +678,24 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
       if (res.ok) {
         verifySuccess = true;
-        let latestState = (await res.json())?.state;
+        const verifyData = await res.json().catch(() => null);
+        let latestState = verifyData?.state;
+
+        if (verifyData?.alreadyProcessed) {
+          if (latestState) {
+            applyAuthoritativeServerState(latestState, true);
+          } else {
+            await fetchStateFromServer(true);
+          }
+          dismissBrowserNotification(`hws-setoran-${dep.id}`);
+          window.dispatchEvent(new CustomEvent('hws:setoran_processed', { detail: { depositId: dep.id } }));
+          setActionBanner({
+            type: 'success',
+            text: `Setoran a/n ${dep.memberNama} sudah diproses (${verifyData.status || 'selesai'}) sebelumnya oleh Admin ${verifyData.verifiedBy || 'lain'}.`,
+          });
+          setApprovingId(null);
+          return;
+        }
 
         // Jika diminta otomatis menolak duplikat pengajuan lainnya dalam grup
         if (rejectOthers) {
@@ -697,7 +729,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           await fetchStateFromServer(true);
         }
 
-        // Kirim FCM & Realtime Push Notifikasi ke Anggota (Req 1)
+        dismissBrowserNotification(`hws-setoran-${dep.id}`);
+        window.dispatchEvent(new CustomEvent('hws:setoran_processed', { detail: { depositId: dep.id } }));
+
+        // Kirim FCM & Realtime Push Notifikasi ke Anggota (Hanya ke member pemilik setoran)
         sendRealtimeNotification({
           recipientId: dep.memberId,
           recipientNama: dep.memberNama,
@@ -1086,6 +1121,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         if (data?.state) {
           applyAuthoritativeServerState(data.state, true);
           serverUpdated = true;
+        }
+        dismissBrowserNotification(`hws-setoran-${dep.id}`);
+        window.dispatchEvent(new CustomEvent('hws:setoran_processed', { detail: { depositId: dep.id } }));
+        if (data?.alreadyProcessed) {
+          setActionBanner({
+            type: 'success',
+            text: `Setoran a/n ${dep.memberNama} sudah diproses (${data.status || 'selesai'}) sebelumnya oleh Admin ${data.verifiedBy || 'lain'}.`,
+          });
+          return;
         }
       }
     } catch {}

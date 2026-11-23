@@ -9,7 +9,7 @@ import {
   KasEntry,
   WilayahKoperasi,
 } from '../types';
-import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel } from '../lib/storage';
+import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel, applyAuthoritativeServerState, dismissBrowserNotification } from '../lib/storage';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { exportLaporanBerbagiPdf, exportLaporanBerbagiExcel } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
@@ -692,10 +692,18 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           }),
         });
         if (res.ok) {
-          const data = await res.json();
+          const data = await res.json().catch(() => null);
           verifyHandled = true;
-          if (data.state) {
-            await updateState(() => data.state);
+          if (data?.state) {
+            applyAuthoritativeServerState(data.state, true);
+          }
+          dismissBrowserNotification(`hws-setoran-${entry.id}`);
+          window.dispatchEvent(new CustomEvent('hws:setoran_processed', { detail: { depositId: entry.id } }));
+          if (data?.alreadyProcessed) {
+            alert(`Donasi sedekah dari ${memberNama} sudah diproses (${data.status || 'selesai'}) sebelumnya oleh Admin ${data.verifiedBy || 'lain'}.`);
+            onClose();
+            onBackToDashboard?.();
+            return;
           }
         }
       } catch {}
@@ -866,8 +874,9 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     const reason = prompt(`Masukkan alasan penolakan donasi dari ${entry.donaturNama || 'Donatur'}:`, 'Bukti pembayaran QRIS tidak valid / dana belum masuk');
     if (reason === null) return;
 
+    let serverUpdated = false;
     try {
-      await fetch('/api/setoran/verify', {
+      const res = await fetch('/api/setoran/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -877,47 +886,62 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
           alasan: reason,
         }),
       });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.state) {
+          applyAuthoritativeServerState(data.state, true);
+          serverUpdated = true;
+        }
+        dismissBrowserNotification(`hws-setoran-${entry.id}`);
+        window.dispatchEvent(new CustomEvent('hws:setoran_processed', { detail: { depositId: entry.id } }));
+        if (data?.alreadyProcessed) {
+          alert(`Donasi sedekah dari ${entry.donaturNama || 'Donatur'} sudah diproses (${data.status || 'selesai'}) sebelumnya oleh Admin ${data.verifiedBy || 'lain'}.`);
+          return;
+        }
+      }
     } catch {}
 
-    await updateState((prev) => {
-      const nowIso = new Date().toISOString();
-      const updatedSedekahList = (prev.sedekahList || []).map((s) =>
-        s.id === entry.id
-          ? {
-              ...s,
-              status: 'rejected' as const,
-              rejectionReason: reason,
-              verifiedBy: currentAdmin?.nama || 'Admin',
-              verifiedAt: nowIso,
-            }
-          : s
-      );
+    if (!serverUpdated) {
+      await updateState((prev) => {
+        const nowIso = new Date().toISOString();
+        const updatedSedekahList = (prev.sedekahList || []).map((s) =>
+          s.id === entry.id
+            ? {
+                ...s,
+                status: 'rejected' as const,
+                rejectionReason: reason,
+                verifiedBy: currentAdmin?.nama || 'Admin',
+                verifiedAt: nowIso,
+              }
+            : s
+        );
 
-      const updatedSetoranList = (prev.setoranList || []).map((st) =>
-        st.id === entry.id
-          ? {
-              ...st,
-              status: 'ditolak' as const,
-              catatanAdmin: reason,
-              verifiedBy: currentAdmin?.nama || 'Admin',
-              verifiedAt: nowIso,
-            }
-          : st
-      );
+        const updatedSetoranList = (prev.setoranList || []).map((st) =>
+          st.id === entry.id
+            ? {
+                ...st,
+                status: 'ditolak' as const,
+                catatanAdmin: reason,
+                verifiedBy: currentAdmin?.nama || 'Admin',
+                verifiedAt: nowIso,
+              }
+            : st
+        );
 
-      const audit = createAuditLog(
-        currentAdmin!,
-        'Tolak Donasi Berbagi',
-        `Admin ${currentAdmin?.nama || 'Admin'} menolak donasi senilai ${formatRupiah(entry.nominal)} dari ${entry.donaturNama || 'Donatur'}. Alasan: ${reason}`
-      );
+        const audit = createAuditLog(
+          currentAdmin!,
+          'Tolak Donasi Berbagi',
+          `Admin ${currentAdmin?.nama || 'Admin'} menolak donasi senilai ${formatRupiah(entry.nominal)} dari ${entry.donaturNama || 'Donatur'}. Alasan: ${reason}`
+        );
 
-      return {
-        ...prev,
-        sedekahList: updatedSedekahList,
-        setoranList: updatedSetoranList,
-        auditLogs: [audit, ...(prev.auditLogs || [])],
-      };
-    });
+        return {
+          ...prev,
+          sedekahList: updatedSedekahList,
+          setoranList: updatedSetoranList,
+          auditLogs: [audit, ...(prev.auditLogs || [])],
+        };
+      });
+    }
 
     alert('Donasi telah ditolak.');
   };

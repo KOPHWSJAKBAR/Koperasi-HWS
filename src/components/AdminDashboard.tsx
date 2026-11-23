@@ -8,6 +8,9 @@ import {
   playNotificationSound,
   requestNotificationPermission,
   triggerBrowserNotification,
+  dismissBrowserNotification,
+  getHasHydratedRemoteState,
+  fetchStateFromServer,
   getUnifiedSedekahList,
   canApproveByRole,
   getRequiredApproverLabel,
@@ -26,7 +29,7 @@ import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
-import { initFCM } from '../lib/fcm';
+import { initFCM, cleanupFCM } from '../lib/fcm';
 import {
   BookOpen,
   Users,
@@ -143,13 +146,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  // Hitung daftar setoran yang benar-benar masih menunggu verifikasi (belum diproses admin manapun)
+  const pendingDeposits = React.useMemo(() => {
+    const deletedSet = new Set(state.deletedSetoranIds || []);
+    const sedekahStatusById = new Map((state.sedekahList || []).map((sdk) => [sdk.id, sdk.status]));
+    return (state.setoranList || []).filter((s) => {
+      if (!s || !s.id || deletedSet.has(s.id)) return false;
+      if (s.status !== 'pending' || s.verifiedBy || s.verifiedAt) return false;
+      if (s.jenis === 'sedekah') {
+        const sdkSt = sedekahStatusById.get(s.id);
+        if (sdkSt === 'approved' || sdkSt === 'rejected') return false;
+      }
+      return true;
+    });
+  }, [state.setoranList, state.sedekahList, state.deletedSetoranIds]);
+
   const prevPendingIdsRef = useRef<Set<string>>(
-    new Set(state.setoranList.filter((s) => s.status === 'pending').map((s) => s.id))
+    new Set(pendingDeposits.map((s) => s.id))
   );
+  const notifiedDepositIdsRef = useRef<Set<string>>(new Set());
+  const processedDepositIdsRef = useRef<Set<string>>(
+    new Set(
+      (state.setoranList || [])
+        .filter((s) => s.status === 'disetujui' || s.status === 'ditolak' || Boolean(s.verifiedBy || s.verifiedAt))
+        .map((s) => s.id)
+    )
+  );
+  const hasSyncedInitialRef = useRef<boolean>(false);
   const prevChatIdsRef = useRef<Set<string>>(
     new Set(state.chatMessages.map((m) => m.id))
   );
-  const isInitialMountRef = useRef<boolean>(true);
+  const hasSyncedInitialChatRef = useRef<boolean>(false);
 
   const unreadSuratAdminCount = state.suratList.filter((s) => {
     const readList = s.readByAdminIds || [];
@@ -210,7 +237,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (currentAdmin?.id) {
       initFCM(currentAdmin.id, 'admin').catch(() => {});
     }
+    if (!getHasHydratedRemoteState()) {
+      fetchStateFromServer(true).catch(() => {});
+    }
+    return () => {
+      cleanupFCM();
+    };
   }, [currentAdmin?.id]);
+
+  // Listen immediate SSE / local verification events to prune open deposit toasts & browser notifications
+  useEffect(() => {
+    const dismissByDepositId = (depositId?: string) => {
+      if (!depositId) return;
+      processedDepositIdsRef.current.add(depositId);
+      dismissBrowserNotification(`hws-setoran-${depositId}`);
+      setToasts((prev) => prev.filter((t) => !(t.type === 'deposit' && t.targetId === depositId)));
+    };
+    const onSetoranUpdated = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      const dep = detail?.deposit;
+      if (dep?.id && (dep.status === 'disetujui' || dep.status === 'ditolak')) {
+        dismissByDepositId(dep.id);
+      }
+    };
+    const onSetoranProcessed = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      dismissByDepositId(detail?.depositId);
+    };
+    window.addEventListener('hws:setoran_updated', onSetoranUpdated);
+    window.addEventListener('hws:setoran_processed', onSetoranProcessed);
+    return () => {
+      window.removeEventListener('hws:setoran_updated', onSetoranUpdated);
+      window.removeEventListener('hws:setoran_processed', onSetoranProcessed);
+    };
+  }, []);
 
   // Save sound setting
   const toggleSound = () => {
@@ -241,45 +301,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ]);
   };
 
-  // Detection effect for incoming deposits and chats
+  // Detection effect for incoming deposits and chats (with remote hydration guard & auto-dismissal)
   useEffect(() => {
-    if (isInitialMountRef.current) {
-      isInitialMountRef.current = false;
+    // Catat semua setoran yang sudah terminal agar tidak pernah memicu notifikasi ulang
+    const currentPendingIds = new Set(pendingDeposits.map((s) => s.id));
+    (state.setoranList || []).forEach((s) => {
+      if (s && s.id && (s.status === 'disetujui' || s.status === 'ditolak' || s.verifiedBy || s.verifiedAt)) {
+        processedDepositIdsRef.current.add(s.id);
+        dismissBrowserNotification(`hws-setoran-${s.id}`);
+      }
+    });
+
+    // Otomatis tutup toast setoran masuk jika setoran tsb sudah diverifikasi oleh admin lain
+    setToasts((prev) => {
+      const filtered = prev.filter((t) => !(t.type === 'deposit' && t.targetId && !currentPendingIds.has(t.targetId)));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+
+    const isHydrated = getHasHydratedRemoteState();
+
+    // Tunggu hidrasi server/Firestore selesai sebelum membunyikan notifikasi agar cache lama tidak memicu alert palsu
+    if (!isHydrated) {
+      prevPendingIdsRef.current = currentPendingIds;
+      prevChatIdsRef.current = new Set(state.chatMessages.map((m) => m.id));
       return;
     }
 
-    // 1. Check newly added pending deposits
-    const currentPending = state.setoranList.filter((s) => s.status === 'pending');
-    const newPendingDeposits = currentPending.filter(
-      (s) => !prevPendingIdsRef.current.has(s.id)
-    );
+    // Seed awal setelah hidrasi remote pertama selesai: jangan bunyikan notif untuk data yang sudah ada di server
+    if (!hasSyncedInitialRef.current) {
+      hasSyncedInitialRef.current = true;
+      prevPendingIdsRef.current = currentPendingIds;
+      currentPendingIds.forEach((id) => notifiedDepositIdsRef.current.add(id));
+    } else {
+      // 1. Check truly new pending deposits arriving after initial sync
+      const newPendingDeposits = pendingDeposits.filter(
+        (s) =>
+          !prevPendingIdsRef.current.has(s.id) &&
+          !notifiedDepositIdsRef.current.has(s.id) &&
+          !processedDepositIdsRef.current.has(s.id)
+      );
 
-    if (newPendingDeposits.length > 0) {
-      if (soundEnabled) {
-        playNotificationSound('deposit');
+      if (newPendingDeposits.length > 0) {
+        if (soundEnabled) {
+          playNotificationSound('deposit');
+        }
+
+        newPendingDeposits.forEach((dep) => {
+          notifiedDepositIdsRef.current.add(dep.id);
+          triggerBrowserNotification(
+            '🔔 Setoran Masuk Baru - Koperasi HWS',
+            `${dep.memberNama} mengajukan setoran ${dep.jenis} sebesar Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.metode})`,
+            () => setActiveTab('verifikasi'),
+            `hws-setoran-${dep.id}`
+          );
+
+          setToasts((prev) => [
+            {
+              id: `toast-dep-${dep.id}-${Date.now()}`,
+              type: 'deposit',
+              title: 'Setoran Masuk Baru!',
+              message: `${dep.memberNama} • Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.jenis})`,
+              timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+              targetId: dep.id,
+            },
+            ...prev.slice(0, 4),
+          ]);
+        });
       }
-
-      newPendingDeposits.forEach((dep) => {
-        triggerBrowserNotification(
-          '🔔 Setoran Masuk Baru - Koperasi HWS',
-          `${dep.memberNama} mengajukan setoran ${dep.jenis} sebesar Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.metode})`,
-          () => setActiveTab('verifikasi')
-        );
-
-        setToasts((prev) => [
-          {
-            id: `toast-dep-${dep.id}-${Date.now()}`,
-            type: 'deposit',
-            title: 'Setoran Masuk Baru!',
-            message: `${dep.memberNama} • Rp ${dep.nominal.toLocaleString('id-ID')} (${dep.jenis})`,
-            timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-            targetId: dep.id,
-          },
-          ...prev.slice(0, 4),
-        ]);
-      });
+      prevPendingIdsRef.current = currentPendingIds;
     }
-    prevPendingIdsRef.current = new Set(currentPending.map((s) => s.id));
+
+    if (!hasSyncedInitialChatRef.current) {
+      hasSyncedInitialChatRef.current = true;
+      prevChatIdsRef.current = new Set(state.chatMessages.map((m) => m.id));
+      return;
+    }
 
     // 2. Check new incoming chat messages from members
     const newChatMessages = state.chatMessages.filter(
@@ -315,7 +411,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     }
     prevChatIdsRef.current = new Set(state.chatMessages.map((m) => m.id));
-  }, [state.setoranList, state.chatMessages, soundEnabled]);
+  }, [pendingDeposits, state.setoranList, state.chatMessages, soundEnabled]);
 
   // Auto-dismiss toasts after 9s
   useEffect(() => {
@@ -377,8 +473,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 3. User Req 1: Dashboard Saldo kas berjalan = total saldo anggota (pokok+Tabungan umum+Zakat+qurban) + saldo buku kas koperasi
   const saldoKasBerjalan = totalSaldoAnggota + saldoKasKoperasi;
 
-  // Pending deposits count
-  const pendingDepositsCount = state.setoranList.filter((s) => s.status === 'pending').length;
+  // Pending deposits count (hanya setoran yang benar-benar masih menunggu verifikasi)
+  const pendingDepositsCount = pendingDeposits.length;
 
   // Pending Tabungan Pokok Lock / Unlock requests yang dapat disetujui oleh role saat ini
   const pendingLockPokokCount = state.members.filter(
@@ -607,8 +703,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             Buka Semua
                           </button>
                         </div>
-                        {state.setoranList
-                          .filter((s) => s.status === 'pending')
+                        {pendingDeposits
                           .slice(0, 3)
                           .map((dep) => (
                             <div
