@@ -2155,16 +2155,6 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
         }
       }
     }
-    if (
-      k.status === 'approved' &&
-      k.referensiId &&
-      !activeTxRefsSet.has(k.referensiId) &&
-      (String(k.id).startsWith('kas-adj-') ||
-        (k.bukuKas === 'anggota' && k.memberId && !activeMemberIds.has(k.memberId)))
-    ) {
-      delKasSet.add(k.id);
-      return false;
-    }
     return true;
   });
 
@@ -2594,6 +2584,200 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
         });
       }
       existingKasRefs.add(s.id);
+    }
+  });
+
+  // Synchronize active balance adjustment mutations (tx-adj- / ADJ-) into Buku Kas Anggota (1-to-1 & per-split exact)
+  const claimedAdjKasIds = new Set<string>();
+  nextTxList.forEach((tx) => {
+    const isAdj = String(tx.id || '').startsWith('tx-adj-') || String(tx.referensiId || '').startsWith('ADJ-');
+    if (!isAdj) return;
+    if (tx.referensiId && delSetoranSet.has(tx.referensiId)) return;
+    const m = updatedMembers.find((mem) => mem.id === tx.memberId);
+    if (!m) return;
+
+    const nom = Number(tx.nominal) || 0;
+    if (nom <= 0) return;
+
+    const tsMatch = String(tx.id).match(/(\d{10,})/);
+    const tsBase = tsMatch ? Number(tsMatch[1]) : Date.now();
+    const mSuffix = m.id.slice(-4);
+    const refId = tx.referensiId || `ADJ-${String(tsBase).slice(-6)}-${m.id.slice(-3)}`;
+
+    const isPokokSplit =
+      tx.kategori === 'pokok' ||
+      String(tx.keterangan || '').toLowerCase().includes('tabungan pokok') ||
+      String(tx.keterangan || '').includes('50% Pokok');
+
+    let matchedKasRows = nextKasList.filter(
+      (k) =>
+        !claimedAdjKasIds.has(k.id) &&
+        k.bukuKas === 'anggota' &&
+        ((k.referensiId && k.referensiId === refId) ||
+          (tsMatch && String(k.id || '').includes(tsMatch[1])))
+    );
+
+    // Legacy unlinked fallback (1-to-1 only via claimedAdjKasIds)
+    if (matchedKasRows.length === 0) {
+      if (isPokokSplit) {
+        const leg = nextKasList.find(
+          (k) =>
+            !claimedAdjKasIds.has(k.id) &&
+            k.bukuKas === 'anggota' &&
+            !k.referensiId &&
+            k.memberId === m.id &&
+            k.tanggal === tx.tanggal &&
+            k.tipe === tx.tipe &&
+            k.kategori === 'Tabungan Pokok' &&
+            Number(k.nominal) === Math.floor(nom * 0.5)
+        );
+        if (leg) matchedKasRows = [leg];
+      } else {
+        const leg = nextKasList.find(
+          (k) =>
+            !claimedAdjKasIds.has(k.id) &&
+            k.bukuKas === 'anggota' &&
+            !k.referensiId &&
+            k.memberId === m.id &&
+            k.tanggal === tx.tanggal &&
+            k.tipe === tx.tipe &&
+            Number(k.nominal) === nom
+        );
+        if (leg) matchedKasRows = [leg];
+      }
+    }
+
+    matchedKasRows.forEach((k) => claimedAdjKasIds.add(k.id));
+
+    const pId = `kas-adj-p-${tsBase}-${mSuffix}`;
+    const qId = `kas-adj-q-${tsBase + 1}-${mSuffix}`;
+    const zId = `kas-adj-z-${tsBase + 2}-${mSuffix}`;
+    const uId = `kas-adj-u-${tsBase}-${mSuffix}`;
+
+    // Heal any false kas-adj tombstones (including +1..+3ms legacy offsets)
+    [pId, qId, zId, uId].forEach((id) => delKasSet.delete(id));
+    if (tsMatch) {
+      const nTs = Number(tsMatch[1]);
+      for (const delId of Array.from(delKasSet)) {
+        if (String(delId).startsWith('kas-adj-')) {
+          const dm = String(delId).match(/(\d{10,})/);
+          if (dm && Math.abs(Number(dm[1]) - nTs) <= 5 && String(delId).endsWith(`-${mSuffix}`)) {
+            delKasSet.delete(delId);
+          }
+        }
+      }
+    }
+
+    const tgl = tx.tanggal || getWibDateStr();
+    const jam = tx.jam || '09:00';
+    const createdIso = `${tgl}T${jam}:00.000Z`;
+    const cleanKet = String(tx.keterangan || 'Penyesuaian Saldo')
+      .replace(/^KOREKSI TABUNGAN POKOK\s*\([^)]*\)\s*:\s*/i, '')
+      .replace(/^KOREKSI SALDO UMUM\s*:\s*/i, '')
+      .trim() || 'Penyesuaian Saldo';
+    const hari = tx.jumlahHari || Math.max(1, Math.round(nom / (state.profile?.biayaWajibHarian || 2000)));
+    const tipeVal = tx.tipe === 'keluar' ? 'keluar' : 'masuk';
+
+    if (isPokokSplit) {
+      const pPart = Math.floor(nom * 0.5);
+      const qPart = Math.floor(nom * 0.25);
+      const zPart = nom - pPart - qPart;
+      const hasPokok = matchedKasRows.some(
+        (k) => k.kategori === 'Tabungan Pokok' || String(k.id || '').startsWith('kas-adj-p-')
+      );
+      const hasQurban = matchedKasRows.some(
+        (k) => k.kategori === 'Tabungan Qurban' || String(k.id || '').startsWith('kas-adj-q-')
+      );
+      const hasZakat = matchedKasRows.some(
+        (k) => k.kategori === 'Tabungan Zakat' || String(k.id || '').startsWith('kas-adj-z-')
+      );
+
+      if (!hasPokok) {
+        claimedAdjKasIds.add(pId);
+        nextKasList.push({
+          id: pId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Pokok',
+          keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hari} Hari): ${cleanKet}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          jumlahHari: hari,
+          tipe: tipeVal,
+          nominal: pPart,
+          saldoKasSetelah: 0,
+          inputBy: 'Admin Koperasi',
+          approvedBy: 'Super Admin',
+          status: 'approved',
+          createdAt: createdIso,
+        });
+      }
+      if (!hasQurban) {
+        claimedAdjKasIds.add(qId);
+        nextKasList.push({
+          id: qId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Qurban',
+          keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hari} Hari): ${cleanKet}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          jumlahHari: hari,
+          tipe: tipeVal,
+          nominal: qPart,
+          saldoKasSetelah: 0,
+          inputBy: 'Admin Koperasi',
+          approvedBy: 'Super Admin',
+          status: 'approved',
+          createdAt: createdIso,
+        });
+      }
+      if (!hasZakat) {
+        claimedAdjKasIds.add(zId);
+        nextKasList.push({
+          id: zId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Zakat',
+          keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hari} Hari): ${cleanKet}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          jumlahHari: hari,
+          tipe: tipeVal,
+          nominal: zPart,
+          saldoKasSetelah: 0,
+          inputBy: 'Admin Koperasi',
+          approvedBy: 'Super Admin',
+          status: 'approved',
+          createdAt: createdIso,
+        });
+      }
+    } else if (matchedKasRows.length === 0) {
+      claimedAdjKasIds.add(uId);
+      nextKasList.push({
+        id: uId,
+        bukuKas: 'anggota',
+        tanggal: tgl,
+        jam,
+        kategori: 'Tabungan Bebas',
+        keterangan: `Koreksi Saldo Umum ${tipeVal === 'keluar' ? 'Keluar' : 'Masuk'} ${m.nama}: ${cleanKet}`,
+        namaPenerima: m.nama,
+        memberId: m.id,
+        referensiId: refId,
+        tipe: tipeVal,
+        nominal: nom,
+        saldoKasSetelah: 0,
+        inputBy: 'Admin Koperasi',
+        approvedBy: 'Super Admin',
+        status: 'approved',
+        createdAt: createdIso,
+      });
     }
   });
 

@@ -2106,27 +2106,10 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       ...(currentState.deletedTransactionIds || []),
       ...(remoteSettingsPatch.deletedTransactionIds || []),
     ]);
-    const effDelKas = new Set<string>([
-      ...(currentState.deletedKasIds || []),
-      ...(remoteSettingsPatch.deletedKasIds || []),
-    ]);
     const effDelSet = new Set<string>([
       ...(currentState.deletedSetoranIds || []),
       ...(remoteSettingsPatch.deletedSetoranIds || []),
     ]);
-
-    const isStaleRemoteKas = (k: any) =>
-      !k || !k.id || effDelKas.has(k.id) || (k.referensiId && effDelSet.has(k.referensiId));
-    const filteredRemoteKas = remoteKas.filter((k) => !isStaleRemoteKas(k));
-    const staleRemoteKas = remoteKas.filter((k) => k && k.id && isStaleRemoteKas(k));
-    if (staleRemoteKas.length > 0) {
-      Promise.all(
-        staleRemoteKas.map(async (k) => {
-          await deleteDoc(doc(db, 'kas', k.id)).catch(() => {});
-          serverFirestoreHashMap.set(`deleted_kas/${k.id}`, '1');
-        })
-      ).catch(() => {});
-    }
 
     const isStaleRemoteTx = (t: any) =>
       !t || !t.id || effDelTx.has(t.id) || (t.referensiId && effDelSet.has(t.referensiId));
@@ -2137,6 +2120,52 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
         staleRemoteTx.map(async (t) => {
           await deleteDoc(doc(db, 'transactions', t.id)).catch(() => {});
           serverFirestoreHashMap.set(`deleted_tx/${t.id}`, '1');
+        })
+      ).catch(() => {});
+    }
+
+    // Collect all active tx-adj-* numeric tokens & refs so stale remote tombstones never delete active kas-adj docs
+    const activeAdjKeys: Array<{ ts: number; suffix: string; refId?: string }> = [];
+    [...(currentState.memberTransactions || []), ...filteredRemoteTx].forEach((tx: any) => {
+      if (!tx || isStaleRemoteTx(tx)) return;
+      const isAdj = String(tx.id || '').startsWith('tx-adj-') || String(tx.referensiId || '').startsWith('ADJ-');
+      if (!isAdj) return;
+      const m = String(tx.id || '').match(/(\d{10,})/);
+      if (m) {
+        activeAdjKeys.push({
+          ts: Number(m[1]),
+          suffix: String(tx.memberId || '').slice(-4),
+          refId: tx.referensiId,
+        });
+      }
+    });
+
+    const effDelKas = new Set<string>([
+      ...(currentState.deletedKasIds || []),
+      ...(remoteSettingsPatch.deletedKasIds || []),
+    ]);
+    Array.from(effDelKas).forEach((delId) => {
+      if (String(delId).startsWith('kas-adj-')) {
+        const dm = String(delId).match(/(\d{10,})/);
+        if (dm) {
+          const dTs = Number(dm[1]);
+          const matchesActiveAdj = activeAdjKeys.some(
+            (ak) => Math.abs(dTs - ak.ts) <= 5 && (!ak.suffix || String(delId).endsWith(`-${ak.suffix}`))
+          );
+          if (matchesActiveAdj) effDelKas.delete(delId);
+        }
+      }
+    });
+
+    const isStaleRemoteKas = (k: any) =>
+      !k || !k.id || effDelKas.has(k.id) || (k.referensiId && effDelSet.has(k.referensiId));
+    const filteredRemoteKas = remoteKas.filter((k) => !isStaleRemoteKas(k));
+    const staleRemoteKas = remoteKas.filter((k) => k && k.id && isStaleRemoteKas(k));
+    if (staleRemoteKas.length > 0) {
+      Promise.all(
+        staleRemoteKas.map(async (k) => {
+          await deleteDoc(doc(db, 'kas', k.id)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_kas/${k.id}`, '1');
         })
       ).catch(() => {});
     }
@@ -2237,11 +2266,18 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
         }
       });
 
+      const remoteDelKasSorted = JSON.stringify([...(remoteSettingsPatch.deletedKasIds || [])].sort());
+      const curDelKasSorted = JSON.stringify([...(currentState.deletedKasIds || [])].sort());
+      if (remoteDelKasSorted !== curDelKasSorted) {
+        serverFirestoreHashMap.delete('settings/general');
+        healedRemoteDiff = true;
+      }
+
       const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
       const dedupPurged =
         (currentState.deletedTransactionIds || []).length !== beforeDelTxCount ||
-        (currentState.deletedKasIds || []).length > beforeDelKasCount;
+        (currentState.deletedKasIds || []).length !== beforeDelKasCount;
 
       if (afterDigest !== beforeDigest || reconResult.migratedCount > 0 || cbgMigrated || dedupPurged || healedRemoteDiff) {
         console.log(`[Firestore Inbound Sync] Synchronized state & settings (Members: ${afterCount}, Chats: ${(currentState.chatMessages || []).length}, Migrated: ${reconResult.migratedCount}, CBGUpdated: ${cbgMigrated}, DedupPurged: ${dedupPurged}, HealedDiff: ${healedRemoteDiff})`);
@@ -3101,8 +3137,9 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
       k.status === 'approved' &&
       k.referensiId &&
       !activeTxRefsSet.has(k.referensiId) &&
-      (String(k.id).startsWith('kas-adj-') ||
-        (k.bukuKas === 'anggota' && k.memberId && !memberMap.has(k.memberId)))
+      k.bukuKas === 'anggota' &&
+      k.memberId &&
+      !memberMap.has(k.memberId)
     ) {
       deletedKasSet.add(k.id);
       return false;
@@ -3338,6 +3375,203 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
         });
       }
       existingKasRefs.add(s.id);
+    }
+  });
+
+  // Ensure active balance adjustment mutations (tx-adj- / ADJ-) are recorded in Buku Kas Anggota & heal false tombstones (1-to-1 & per-split exact)
+  const claimedAdjKasIds = new Set<string>();
+  nextTxList.forEach((tx: any) => {
+    const isAdj = String(tx.id || '').startsWith('tx-adj-') || String(tx.referensiId || '').startsWith('ADJ-');
+    if (!isAdj) return;
+    if (tx.referensiId && deletedSetSet.has(tx.referensiId)) return;
+    const m = memberMap.get(tx.memberId);
+    if (!m) return;
+
+    const nom = Number(tx.nominal) || 0;
+    if (nom <= 0) return;
+
+    const tsMatch = String(tx.id).match(/(\d{10,})/);
+    const tsBase = tsMatch ? Number(tsMatch[1]) : Date.now();
+    const mSuffix = m.id.slice(-4);
+    const refId = tx.referensiId || `ADJ-${String(tsBase).slice(-6)}-${m.id.slice(-3)}`;
+
+    const isPokokSplit =
+      tx.kategori === 'pokok' ||
+      String(tx.keterangan || '').toLowerCase().includes('tabungan pokok') ||
+      String(tx.keterangan || '').includes('50% Pokok');
+
+    let matchedKasRows = nextKasList.filter(
+      (k: any) =>
+        !claimedAdjKasIds.has(k.id) &&
+        k.bukuKas === 'anggota' &&
+        ((k.referensiId && k.referensiId === refId) ||
+          (tsMatch && String(k.id || '').includes(tsMatch[1])))
+    );
+
+    if (matchedKasRows.length === 0) {
+      if (isPokokSplit) {
+        const leg = nextKasList.find(
+          (k: any) =>
+            !claimedAdjKasIds.has(k.id) &&
+            k.bukuKas === 'anggota' &&
+            !k.referensiId &&
+            k.memberId === m.id &&
+            k.tanggal === tx.tanggal &&
+            k.tipe === tx.tipe &&
+            k.kategori === 'Tabungan Pokok' &&
+            Number(k.nominal) === Math.floor(nom * 0.5)
+        );
+        if (leg) matchedKasRows = [leg];
+      } else {
+        const leg = nextKasList.find(
+          (k: any) =>
+            !claimedAdjKasIds.has(k.id) &&
+            k.bukuKas === 'anggota' &&
+            !k.referensiId &&
+            k.memberId === m.id &&
+            k.tanggal === tx.tanggal &&
+            k.tipe === tx.tipe &&
+            Number(k.nominal) === nom
+        );
+        if (leg) matchedKasRows = [leg];
+      }
+    }
+
+    matchedKasRows.forEach((k: any) => claimedAdjKasIds.add(k.id));
+
+    const pId = `kas-adj-p-${tsBase}-${mSuffix}`;
+    const qId = `kas-adj-q-${tsBase + 1}-${mSuffix}`;
+    const zId = `kas-adj-z-${tsBase + 2}-${mSuffix}`;
+    const uId = `kas-adj-u-${tsBase}-${mSuffix}`;
+    [pId, qId, zId, uId].forEach((id) => deletedKasSet.delete(id));
+    if (tsMatch) {
+      const nTs = Number(tsMatch[1]);
+      for (const delId of Array.from(deletedKasSet)) {
+        if (String(delId).startsWith('kas-adj-')) {
+          const dm = String(delId).match(/(\d{10,})/);
+          if (dm && Math.abs(Number(dm[1]) - nTs) <= 5 && String(delId).endsWith(`-${mSuffix}`)) {
+            deletedKasSet.delete(delId);
+          }
+        }
+      }
+    }
+
+    const wibToday = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const tgl = tx.tanggal || wibToday;
+    const jam = tx.jam || '09:00';
+    const createdIso = `${tgl}T${jam}:00.000Z`;
+    const cleanKet =
+      String(tx.keterangan || 'Penyesuaian Saldo')
+        .replace(/^KOREKSI TABUNGAN POKOK\s*\([^)]*\)\s*:\s*/i, '')
+        .replace(/^KOREKSI SALDO UMUM\s*:\s*/i, '')
+        .trim() || 'Penyesuaian Saldo';
+    const hari = tx.jumlahHari || Math.max(1, Math.round(nom / (state.profile?.biayaWajibHarian || 2000)));
+    const tipeVal = tx.tipe === 'keluar' ? 'keluar' : 'masuk';
+
+    if (isPokokSplit) {
+      const pPart = Math.floor(nom * 0.5);
+      const qPart = Math.floor(nom * 0.25);
+      const zPart = nom - pPart - qPart;
+      const hasPokok = matchedKasRows.some(
+        (k: any) => k.kategori === 'Tabungan Pokok' || String(k.id || '').startsWith('kas-adj-p-')
+      );
+      const hasQurban = matchedKasRows.some(
+        (k: any) => k.kategori === 'Tabungan Qurban' || String(k.id || '').startsWith('kas-adj-q-')
+      );
+      const hasZakat = matchedKasRows.some(
+        (k: any) => k.kategori === 'Tabungan Zakat' || String(k.id || '').startsWith('kas-adj-z-')
+      );
+
+      if (!hasPokok) {
+        addedKasCount++;
+        claimedAdjKasIds.add(pId);
+        nextKasList.push({
+          id: pId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Pokok',
+          keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hari} Hari): ${cleanKet}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          jumlahHari: hari,
+          tipe: tipeVal,
+          nominal: pPart,
+          saldoKasSetelah: 0,
+          inputBy: 'Admin Koperasi',
+          approvedBy: 'Super Admin',
+          status: 'approved',
+          createdAt: createdIso,
+        });
+      }
+      if (!hasQurban) {
+        addedKasCount++;
+        claimedAdjKasIds.add(qId);
+        nextKasList.push({
+          id: qId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Qurban',
+          keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hari} Hari): ${cleanKet}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          jumlahHari: hari,
+          tipe: tipeVal,
+          nominal: qPart,
+          saldoKasSetelah: 0,
+          inputBy: 'Admin Koperasi',
+          approvedBy: 'Super Admin',
+          status: 'approved',
+          createdAt: createdIso,
+        });
+      }
+      if (!hasZakat) {
+        addedKasCount++;
+        claimedAdjKasIds.add(zId);
+        nextKasList.push({
+          id: zId,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Zakat',
+          keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hari} Hari): ${cleanKet}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          jumlahHari: hari,
+          tipe: tipeVal,
+          nominal: zPart,
+          saldoKasSetelah: 0,
+          inputBy: 'Admin Koperasi',
+          approvedBy: 'Super Admin',
+          status: 'approved',
+          createdAt: createdIso,
+        });
+      }
+    } else if (matchedKasRows.length === 0) {
+      addedKasCount++;
+      claimedAdjKasIds.add(uId);
+      nextKasList.push({
+        id: uId,
+        bukuKas: 'anggota',
+        tanggal: tgl,
+        jam,
+        kategori: 'Tabungan Bebas',
+        keterangan: `Koreksi Saldo Umum ${tipeVal === 'keluar' ? 'Keluar' : 'Masuk'} ${m.nama}: ${cleanKet}`,
+        namaPenerima: m.nama,
+        memberId: m.id,
+        referensiId: refId,
+        tipe: tipeVal,
+        nominal: nom,
+        saldoKasSetelah: 0,
+        inputBy: 'Admin Koperasi',
+        approvedBy: 'Super Admin',
+        status: 'approved',
+        createdAt: createdIso,
+      });
     }
   });
 
@@ -5044,13 +5278,18 @@ async function startServer() {
       currentState.deletedKasIds.push(deletedEntry.id);
     }
 
-    // Sinkronisasi deletedSetoranIds jika entri kas memiliki referensi setoran
+    // Sinkronisasi deletedSetoranIds jika entri kas memiliki referensi setoran & tidak ada split tersisa
     if (deletedEntry.referensiId) {
-      currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
-      if (!currentState.deletedSetoranIds.includes(deletedEntry.referensiId)) {
-        currentState.deletedSetoranIds.push(deletedEntry.referensiId);
+      const hasSiblingKasRef = (currentState.kasList || []).some(
+        (k: any) => k.id !== deletedEntry.id && k.referensiId === deletedEntry.referensiId
+      );
+      if (!hasSiblingKasRef) {
+        currentState.deletedSetoranIds = currentState.deletedSetoranIds || [];
+        if (!currentState.deletedSetoranIds.includes(deletedEntry.referensiId)) {
+          currentState.deletedSetoranIds.push(deletedEntry.referensiId);
+        }
+        currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== deletedEntry.referensiId);
       }
-      currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== deletedEntry.referensiId);
     }
 
     const cleanPenerima = String(deletedEntry.namaPenerima || '').trim().toLowerCase();
@@ -6077,10 +6316,14 @@ async function startServer() {
       } else {
         const mTx = (currentState.memberTransactions || [])
           .filter((tx: any) => tx.memberId === mId)
-          .sort((a: any, b: any) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+          .sort(compareMemberTransactionsChronoServer);
 
         let p = 0, u = 0, z = 0, q = 0;
         mTx.forEach((tx: any) => {
+          if (tx.kategori === 'sedekah') {
+            tx.saldoSetelah = p + u + z + q;
+            return;
+          }
           const nom = Number(tx.nominal) || 0;
           const isKewajibanSplit =
             tx.kategori === 'pokok' ||
@@ -6119,7 +6362,7 @@ async function startServer() {
               u = Math.max(0, u - nom);
             }
           }
-          tx.saldoSetelah = p + u;
+          tx.saldoSetelah = p + u + z + q;
         });
 
         mem.saldoPokok = p;
@@ -6140,21 +6383,30 @@ async function startServer() {
     jenisTabungan: string;
     jumlahHari?: number;
     keterangan: string;
+    tanggal?: string;
+    bukuKasTarget?: 'anggota' | 'koperasi' | 'keduanya';
     inputBy: string;
     approvedBy: string;
   }) => {
-    const { targetIds, nominalNum, tipe, jenisTabungan, jumlahHari, keterangan, inputBy, approvedBy } = params;
+    const { targetIds, nominalNum, tipe, jenisTabungan, jumlahHari, keterangan, tanggal, bukuKasTarget, inputBy, approvedBy } = params;
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const wibNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const wibToday = wibNow.toISOString().split('T')[0];
+    const tgl = tanggal && /^\d{4}-\d{2}-\d{2}$/.test(String(tanggal).trim()) ? String(tanggal).trim() : wibToday;
+    const jam = wibNow.toISOString().split('T')[1].slice(0, 5);
+    const createdAtIso = tgl === wibToday ? now.toISOString() : `${tgl}T${jam}:00.000Z`;
     const targetIdSet = new Set(targetIds);
     const newTransactions: any[] = [];
+    const newKasEntries: any[] = [];
+    const adjustedMemberIds: string[] = [];
     let totalDana = 0;
+    let idxCounter = 0;
     const hari = jumlahHari || Math.max(1, Math.round(nominalNum / (currentState.profile?.biayaWajibHarian || 2000)));
     const tipeVal = tipe === 'masuk' ? 'masuk' : 'keluar';
 
     currentState.members = (currentState.members || []).map((m: any) => {
       if (!targetIdSet.has(m.id)) return m;
+      adjustedMemberIds.push(m.id);
 
       let p = Number(m.saldoPokok) || 0;
       let u = Number(m.saldoUmum) || 0;
@@ -6182,8 +6434,11 @@ async function startServer() {
 
       totalDana += nominalNum;
       const totalSimpanan = p + u + z + q;
-      const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
-      const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
+      const baseTs = Date.now() + idxCounter * 10;
+      idxCounter++;
+      const mSuffix = m.id.slice(-4);
+      const txId = `tx-adj-${baseTs}-${mSuffix}`;
+      const refId = `ADJ-${String(baseTs).slice(-6)}-${m.id.slice(-3)}`;
 
       newTransactions.push({
         id: txId,
@@ -6197,11 +6452,114 @@ async function startServer() {
         cbg: jenisTabungan === 'pokok' ? '93907' : '93740',
         tipe: tipeVal,
         nominal: nominalNum,
-        saldoSetelah: p + u,
+        saldoSetelah: totalSimpanan,
         kategori: jenisTabungan === 'pokok' ? 'pokok' : 'umum',
         referensiId: refId,
         jumlahHari: jenisTabungan === 'pokok' ? hari : undefined,
       });
+
+      const ketClean = keterangan || 'Penyesuaian Saldo';
+      if (jenisTabungan === 'pokok') {
+        newKasEntries.push(
+          {
+            id: `kas-adj-p-${baseTs}-${mSuffix}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            jam,
+            kategori: 'Tabungan Pokok',
+            keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hari} Hari): ${ketClean}`,
+            namaPenerima: m.nama,
+            memberId: m.id,
+            referensiId: refId,
+            jumlahHari: hari,
+            tipe: tipeVal,
+            nominal: pNom,
+            saldoKasSetelah: 0,
+            inputBy,
+            approvedBy,
+            status: 'approved',
+            createdAt: createdAtIso,
+          },
+          {
+            id: `kas-adj-q-${baseTs + 1}-${mSuffix}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            jam,
+            kategori: 'Tabungan Qurban',
+            keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hari} Hari): ${ketClean}`,
+            namaPenerima: m.nama,
+            memberId: m.id,
+            referensiId: refId,
+            jumlahHari: hari,
+            tipe: tipeVal,
+            nominal: qNom,
+            saldoKasSetelah: 0,
+            inputBy,
+            approvedBy,
+            status: 'approved',
+            createdAt: createdAtIso,
+          },
+          {
+            id: `kas-adj-z-${baseTs + 2}-${mSuffix}`,
+            bukuKas: 'anggota',
+            tanggal: tgl,
+            jam,
+            kategori: 'Tabungan Zakat',
+            keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hari} Hari): ${ketClean}`,
+            namaPenerima: m.nama,
+            memberId: m.id,
+            referensiId: refId,
+            jumlahHari: hari,
+            tipe: tipeVal,
+            nominal: zNom,
+            saldoKasSetelah: 0,
+            inputBy,
+            approvedBy,
+            status: 'approved',
+            createdAt: createdAtIso,
+          }
+        );
+      } else {
+        // Selalu catat ke Buku Kas Anggota agar mutasi & buku kas anggota selalu sinkron
+        newKasEntries.push({
+          id: `kas-adj-u-${baseTs}-${mSuffix}`,
+          bukuKas: 'anggota',
+          tanggal: tgl,
+          jam,
+          kategori: 'Tabungan Bebas',
+          keterangan: `Koreksi Saldo Umum ${tipeVal === 'masuk' ? 'Masuk' : 'Keluar'} ${m.nama}: ${ketClean}`,
+          namaPenerima: m.nama,
+          memberId: m.id,
+          referensiId: refId,
+          tipe: tipeVal,
+          nominal: nominalNum,
+          saldoKasSetelah: 0,
+          inputBy,
+          approvedBy,
+          status: 'approved',
+          createdAt: createdAtIso,
+        });
+        if (bukuKasTarget === 'koperasi' || bukuKasTarget === 'keduanya') {
+          newKasEntries.push({
+            id: `kas-adj-kop-${baseTs + 3}-${mSuffix}`,
+            bukuKas: 'koperasi',
+            tanggal: tgl,
+            jam,
+            kategori: 'Penyesuaian Tabungan Umum',
+            keterangan: `Penyesuaian Tabungan Umum ${m.nama}: ${ketClean}`,
+            namaPenerima: m.nama,
+            memberId: m.id,
+            referensiId: refId,
+            tipe: tipeVal,
+            nominal: nominalNum,
+            saldoKasSetelah: 0,
+            inputBy,
+            approvedBy,
+            status: 'approved',
+            createdAt: createdAtIso,
+          });
+        }
+      }
 
       return {
         ...m,
@@ -6215,92 +6573,17 @@ async function startServer() {
     });
 
     currentState.memberTransactions = [...newTransactions, ...(currentState.memberTransactions || [])];
+    currentState.kasList = [...newKasEntries, ...(currentState.kasList || [])];
 
-    const kasId = `kas-adj-${Date.now()}`;
-    currentState.kasList = currentState.kasList || [];
-    const singleMember = targetIds.length === 1 ? (currentState.members || []).find((m: any) => m.id === targetIds[0]) : null;
-    const targetLabel = singleMember ? singleMember.nama : `Koreksi Saldo Massal (${targetIds.length} Anggota)`;
-    const ketPrefix = singleMember ? `a/n ${singleMember.nama}` : `(${targetIds.length} Anggota)`;
-
-    if (jenisTabungan === 'pokok') {
-      const totalPokokKas = Math.floor(totalDana * 0.5);
-      const totalQurbanKas = Math.floor(totalDana * 0.25);
-      const totalZakatKas = totalDana - totalPokokKas - totalQurbanKas;
-
-      currentState.kasList.unshift(
-        {
-          id: `${kasId}-p`,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          jam,
-          kategori: 'Tabungan Pokok',
-          keterangan: `Koreksi Tabungan Pokok 50% ${ketPrefix}: ${keterangan || ''}`,
-          namaPenerima: targetLabel,
-          memberId: singleMember?.id,
-          tipe: tipeVal,
-          nominal: totalPokokKas,
-          saldoKasSetelah: 0,
-          inputBy,
-          approvedBy,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        },
-        {
-          id: `${kasId}-q`,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          jam,
-          kategori: 'Tabungan Qurban',
-          keterangan: `Koreksi Tabungan Qurban 25% ${ketPrefix}: ${keterangan || ''}`,
-          namaPenerima: targetLabel,
-          memberId: singleMember?.id,
-          tipe: tipeVal,
-          nominal: totalQurbanKas,
-          saldoKasSetelah: 0,
-          inputBy,
-          approvedBy,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        },
-        {
-          id: `${kasId}-z`,
-          bukuKas: 'anggota',
-          tanggal: tgl,
-          jam,
-          kategori: 'Tabungan Zakat',
-          keterangan: `Koreksi Tabungan Zakat 25% ${ketPrefix}: ${keterangan || ''}`,
-          namaPenerima: targetLabel,
-          memberId: singleMember?.id,
-          tipe: tipeVal,
-          nominal: totalZakatKas,
-          saldoKasSetelah: 0,
-          inputBy,
-          approvedBy,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        }
-      );
-    } else {
-      currentState.kasList.unshift({
-        id: kasId,
-        bukuKas: 'anggota',
-        tanggal: tgl,
-        jam,
-        kategori: 'Tabungan Bebas',
-        keterangan: `Koreksi Saldo ${tipeVal === 'masuk' ? 'Masuk' : 'Keluar'} ${ketPrefix}: ${keterangan || ''}`,
-        namaPenerima: targetLabel,
-        memberId: singleMember?.id,
-        tipe: tipeVal,
-        nominal: totalDana,
-        saldoKasSetelah: 0,
-        inputBy,
-        approvedBy,
-        status: 'approved',
-        createdAt: now.toISOString(),
-      });
+    // Recalculate chronological saldoSetelah (crucial if custom/backdated tanggal was selected)
+    if (adjustedMemberIds.length > 0) {
+      syncMemberBalancesAndRunningHistoryServer(adjustedMemberIds, false);
     }
-
+    currentState.memberTransactions.sort(compareMemberTransactionsDescServer);
+    currentState.kasList.sort((a: any, b: any) => `${b.tanggal} ${b.createdAt || ''}`.localeCompare(`${a.tanggal} ${a.createdAt || ''}`));
     recomputeKasRunningBalancesServer();
+
+    const kasId = newKasEntries[0]?.id || `kas-adj-${Date.now()}`;
     return { kasId, totalDana, count: newTransactions.length };
   };
 
@@ -6311,23 +6594,29 @@ async function startServer() {
     bukuKasSumber: 'anggota' | 'koperasi';
     tujuanKredit: 'umum' | 'pokok';
     keterangan: string;
+    tanggal?: string;
     inputBy: string;
     approvedBy: string;
   }) => {
-    const { targetIds, persen, bukuKasSumber, tujuanKredit, keterangan, inputBy, approvedBy } = params;
+    const { targetIds, persen, bukuKasSumber, tujuanKredit, keterangan, tanggal, inputBy, approvedBy } = params;
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const wibNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const wibToday = wibNow.toISOString().split('T')[0];
+    const tgl = tanggal && /^\d{4}-\d{2}-\d{2}$/.test(String(tanggal).trim()) ? String(tanggal).trim() : wibToday;
+    const jam = wibNow.toISOString().split('T')[1].slice(0, 5);
+    const createdAtIso = tgl === wibToday ? now.toISOString() : `${tgl}T${jam}:00.000Z`;
     const targetSet = new Set(targetIds);
     const sumber = bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi';
     const tujuan = tujuanKredit === 'pokok' ? 'pokok' : 'umum';
-    const shuRefId = `SHU-${Date.now().toString().slice(-6)}`;
+    const shuBaseTs = Date.now();
+    const shuRefId = `SHU-${String(shuBaseTs).slice(-6)}`;
     const cbgCode =
       tujuan === 'umum'
         ? (sumber === 'anggota' ? '114114' : '114117')
         : (sumber === 'anggota' ? '114514' : '114517');
 
     const newTxs: any[] = [];
+    const adjustedMemberIds: string[] = [];
     let totalBagi = 0;
 
     currentState.members = (currentState.members || []).map((m: any) => {
@@ -6335,10 +6624,12 @@ async function startServer() {
       const part = Math.round((Number(m.saldoPokok) || 0) * (persen / 100));
       if (part <= 0) return m;
       totalBagi += part;
+      adjustedMemberIds.push(m.id);
       const upP = tujuan === 'pokok' ? (Number(m.saldoPokok) || 0) + part : (Number(m.saldoPokok) || 0);
       const upU = tujuan === 'umum' ? (Number(m.saldoUmum) || 0) + part : (Number(m.saldoUmum) || 0);
+      const totalSimpanan = upP + upU + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0);
       newTxs.push({
-        id: `tx-shu-${Date.now()}-${m.id.slice(-4)}`,
+        id: `tx-shu-${shuBaseTs}-${m.id.slice(-4)}`,
         memberId: m.id,
         tanggal: tgl,
         jam,
@@ -6346,7 +6637,7 @@ async function startServer() {
         cbg: cbgCode,
         tipe: 'masuk',
         nominal: part,
-        saldoSetelah: upP + upU,
+        saldoSetelah: totalSimpanan,
         kategori: tujuan,
         referensiId: shuRefId,
       });
@@ -6354,16 +6645,17 @@ async function startServer() {
         ...m,
         saldoPokok: upP,
         saldoUmum: upU,
-        totalSimpanan: upP + upU + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0),
+        totalSimpanan,
         jumlahHariPokok: Math.floor(upP / (currentState.profile?.pembagianPokokHarian || 1000)),
       };
     });
 
+    const kasShuId = `kas-shu-${shuBaseTs}`;
     if (totalBagi > 0) {
       currentState.memberTransactions = [...newTxs, ...(currentState.memberTransactions || [])];
       currentState.kasList = [
         {
-          id: `kas-shu-${Date.now()}`,
+          id: kasShuId,
           bukuKas: sumber,
           tanggal: tgl,
           jam,
@@ -6377,13 +6669,18 @@ async function startServer() {
           inputBy,
           approvedBy,
           status: 'approved',
-          createdAt: now.toISOString(),
+          createdAt: createdAtIso,
         },
         ...(currentState.kasList || []),
       ];
+      if (adjustedMemberIds.length > 0) {
+        syncMemberBalancesAndRunningHistoryServer(adjustedMemberIds, false);
+      }
+      currentState.memberTransactions.sort(compareMemberTransactionsDescServer);
+      currentState.kasList.sort((a: any, b: any) => `${b.tanggal} ${b.createdAt || ''}`.localeCompare(`${a.tanggal} ${a.createdAt || ''}`));
       recomputeKasRunningBalancesServer();
     }
-    return { count: newTxs.length, totalBagi };
+    return { count: newTxs.length, totalBagi, kasId: kasShuId };
   };
 
   // Helper: Eksekusi Penghapusan Mutasi Selektif + Sinkronisasi Saldo & Buku Kas
@@ -6532,7 +6829,7 @@ async function startServer() {
   // Dedicated Koreksi Saldo / Balance Adjustment Endpoint (Eksekusi langsung hanya Super Admin)
   app.post('/api/balance/adjust', (req: Request, res: Response) => {
     try {
-      const { targetIds, nominal, tipe, jenisTabungan, jumlahHari, keterangan, adminName, adminRole, password, isDirectApproval = true } = req.body;
+      const { targetIds, nominal, tipe, jenisTabungan, jumlahHari, keterangan, tanggal, bukuKasTarget, adminName, adminRole, password, isDirectApproval = true } = req.body;
       const nominalNum = Number(nominal);
       if (!Array.isArray(targetIds) || targetIds.length === 0 || !nominalNum || nominalNum <= 0) {
         return res.status(400).json({ error: 'Parameter koreksi saldo tidak lengkap atau nominal tidak valid' });
@@ -6574,6 +6871,8 @@ async function startServer() {
         jenisTabungan,
         jumlahHari,
         keterangan,
+        tanggal,
+        bukuKasTarget,
         inputBy: adminName || 'Super Admin',
         approvedBy: adminName || 'Super Admin',
       });
@@ -6586,7 +6885,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Koreksi Saldo Anggota',
-        detail: `Koreksi saldo ${tipe} (${jenisTabungan}) senilai Rp ${nominalNum.toLocaleString('id-ID')} ke ${targetIds.length} anggota. Ket: "${keterangan}"`,
+        detail: `Koreksi saldo ${tipe} (${jenisTabungan}) senilai Rp ${nominalNum.toLocaleString('id-ID')} ke ${targetIds.length} anggota${tanggal ? ` (Tgl: ${tanggal})` : ''}. Ket: "${keterangan}"`,
         targetId: result.kasId,
       });
 
@@ -6596,6 +6895,76 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error in /api/balance/adjust:', err);
       res.status(500).json({ error: 'Gagal memproses koreksi saldo: ' + (err.message || 'Server error') });
+    }
+  });
+
+  // Dedicated Bagi Hasil (SHU) Endpoint (Eksekusi langsung hanya Super Admin)
+  app.post('/api/balance/bagi-hasil', (req: Request, res: Response) => {
+    try {
+      const { targetIds, persen, bukuKasSumber, tujuanKredit, keterangan, tanggal, adminName, adminRole, password, isDirectApproval = true } = req.body;
+      const persenNum = Number(persen);
+      if (!Array.isArray(targetIds) || targetIds.length === 0 || !persenNum || persenNum <= 0) {
+        return res.status(400).json({ error: 'Parameter pembagian hasil tidak lengkap atau persentase tidak valid' });
+      }
+
+      if (adminRole && !isDirectExecutionRoleServer(adminRole)) {
+        return res.status(403).json({
+          error: 'Akses Ditolak: Pembagian hasil oleh Admin Write / Admin Approval harus diajukan melalui antrean persetujuan.',
+        });
+      }
+      if (!isDirectApproval) {
+        return res.status(403).json({
+          error: 'Akses Ditolak: Gunakan alur pengajuan persetujuan untuk pembagian hasil non-langsung.',
+        });
+      }
+
+      if (password) {
+        const superAdmins = (currentState.admins || []).filter((a: any) => a.role === 'super_admin');
+        const validPasswords = new Set(
+          [
+            ...superAdmins.map((a: any) => a.password),
+            ...currentState.admins.map((a: any) => a.password),
+            'Abieza88',
+            'ciganea',
+            'admin123',
+            'superadmin',
+          ].filter(Boolean)
+        );
+
+        if (!validPasswords.has(password.trim())) {
+          return res.status(403).json({ error: 'Password Super Admin salah!' });
+        }
+      }
+
+      const result = executeBagiHasilServer({
+        targetIds,
+        persen: persenNum,
+        bukuKasSumber: bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi',
+        tujuanKredit: tujuanKredit === 'pokok' ? 'pokok' : 'umum',
+        keterangan: keterangan || 'Pembagian Hasil Usaha',
+        tanggal,
+        inputBy: adminName || 'Super Admin',
+        approvedBy: adminName || 'Super Admin',
+      });
+
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift({
+        id: `log-shu-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        adminId: 'super_admin',
+        adminNama: adminName || 'Super Admin',
+        adminRole: 'super_admin',
+        action: 'Pembagian Hasil Anggota',
+        detail: `Pembagian hasil ${persenNum}% ke ${result.count} anggota senilai Rp ${result.totalBagi.toLocaleString('id-ID')} (${bukuKasSumber === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi'}${tanggal ? ` • Tgl: ${tanggal}` : ''}).`,
+        targetId: result.kasId,
+      });
+
+      saveDatabase(currentState);
+      broadcastStatePulse('updated');
+      res.json({ success: true, count: result.count, totalBagi: result.totalBagi, state: currentState });
+    } catch (err: any) {
+      console.error('Error in /api/balance/bagi-hasil:', err);
+      res.status(500).json({ error: 'Gagal memproses pembagian hasil: ' + (err.message || 'Server error') });
     }
   });
 
@@ -6935,6 +7304,7 @@ async function startServer() {
             jenisTabungan: reqItem.jenisTabungan || 'umum',
             jumlahHari: reqItem.jumlahHari,
             keterangan: reqItem.keterangan || reqItem.alasan || 'Penyesuaian Saldo',
+            tanggal: reqItem.tanggal,
             inputBy: reqItem.requestedBy || adminName || 'Admin',
             approvedBy: adminName || 'Admin Approval',
           });
@@ -6945,6 +7315,7 @@ async function startServer() {
             bukuKasSumber: reqItem.bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi',
             tujuanKredit: reqItem.tujuanKredit === 'pokok' ? 'pokok' : 'umum',
             keterangan: reqItem.keterangan || reqItem.alasan || 'Pembagian Hasil Usaha',
+            tanggal: reqItem.tanggal,
             inputBy: reqItem.requestedBy || adminName || 'Admin',
             approvedBy: adminName || 'Admin Approval',
           });

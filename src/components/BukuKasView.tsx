@@ -927,12 +927,18 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       });
     }
 
-    const nextDeletedSetoranIds = deletedEntry.referensiId
-      ? Array.from(new Set([...(prev.deletedSetoranIds || []), deletedEntry.referensiId]))
-      : (prev.deletedSetoranIds || []);
-    const nextSetoranList = deletedEntry.referensiId
-      ? (prev.setoranList || []).filter((s) => s.id !== deletedEntry.referensiId)
-      : (prev.setoranList || []);
+    const hasSiblingKasRef =
+      Boolean(deletedEntry.referensiId) &&
+      remainingKas.some((k) => k.referensiId === deletedEntry.referensiId);
+
+    const nextDeletedSetoranIds =
+      deletedEntry.referensiId && !hasSiblingKasRef
+        ? Array.from(new Set([...(prev.deletedSetoranIds || []), deletedEntry.referensiId]))
+        : (prev.deletedSetoranIds || []);
+    const nextSetoranList =
+      deletedEntry.referensiId && !hasSiblingKasRef
+        ? (prev.setoranList || []).filter((s) => s.id !== deletedEntry.referensiId)
+        : (prev.setoranList || []);
 
     const updatedMembers = prev.members.map((m) => {
       if (!matchedMemberIds.has(m.id)) return m;

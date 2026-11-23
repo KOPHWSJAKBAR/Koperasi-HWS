@@ -15,6 +15,10 @@ import {
   sortMembersDesc,
   getUnifiedSedekahList,
   reconcileBalancesWithDeposits,
+  getWibDateStr,
+  getWibTimeStr,
+  compareMemberTransactionsChrono,
+  compareMemberTransactionsDesc,
 } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
@@ -569,6 +573,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [adjKategoriTabungan, setAdjKategoriTabungan] = useState<'umum' | 'pokok'>('umum');
   const [adjBukuKasTarget, setAdjBukuKasTarget] = useState<'anggota' | 'koperasi' | 'keduanya'>('anggota');
   const [adjTipe, setAdjTipe] = useState<'tambah' | 'tarik'>('tambah');
+  const [adjTanggal, setAdjTanggal] = useState(() => getWibDateStr());
   const [adjJumlahHari, setAdjJumlahHari] = useState('');
   const [adjNominal, setAdjNominal] = useState('');
   const [adjKeterangan, setAdjKeterangan] = useState('');
@@ -2019,7 +2024,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Penyesuaian Saldo Anggota (Req 5: Penyesuaian saldo anggota terinput di kas anggota)
+  // Penyesuaian Saldo Anggota (Selalu tercatat di Mutasi Anggota & Buku Kas Anggota)
   const handlePenyesuaianSaldoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentAdmin) return;
@@ -2036,115 +2041,183 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
 
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const wibToday = getWibDateStr(now);
+    const tgl = /^\d{4}-\d{2}-\d{2}$/.test(adjTanggal) ? adjTanggal : wibToday;
+    const jam = getWibTimeStr(now);
+    const createdAtIso = tgl === wibToday ? now.toISOString() : `${tgl}T${jam}:00.000Z`;
+    const tipeVal: 'masuk' | 'keluar' = adjTipe === 'tambah' ? 'masuk' : 'keluar';
+    const hariNum =
+      adjKategoriTabungan === 'pokok'
+        ? parseInt(adjJumlahHari.replace(/\D/g, ''), 10) ||
+          Math.max(1, Math.round(amount / (state.profile?.biayaWajibHarian || 2000)))
+        : undefined;
 
     const labelKategori = adjKategoriTabungan === 'pokok' ? 'Tabungan Pokok' : 'Tabungan Umum';
-    const ketEntry = `Penyesuaian ${labelKategori} ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim();
+    const ketClean = adjKeterangan.trim() || `Penyesuaian ${labelKategori}`;
+    const effectiveKasTarget: 'anggota' | 'koperasi' | 'keduanya' =
+      adjKategoriTabungan === 'pokok'
+        ? 'anggota'
+        : adjBukuKasTarget === 'koperasi' || adjBukuKasTarget === 'keduanya'
+        ? 'keduanya'
+        : 'anggota';
 
-    const pokokPortion = Math.floor(amount * 0.5);
-    const qurbanPortion = Math.floor(amount * 0.25);
-    const zakatPortion = amount - pokokPortion - qurbanPortion;
+    // 1. Authoritative Backend Sync first (prevents duplicate IDs & guarantees Firestore/Buku Kas parity)
+    let serverAdjusted = false;
+    try {
+      const res = await fetch('/api/balance/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetIds: [targetMember.id],
+          nominal: amount,
+          tipe: tipeVal,
+          jenisTabungan: adjKategoriTabungan,
+          jumlahHari: hariNum,
+          keterangan: ketClean,
+          tanggal: tgl,
+          bukuKasTarget: effectiveKasTarget,
+          adminName: currentAdmin?.nama || 'Super Admin',
+          adminRole: currentAdmin?.role || 'super_admin',
+          isDirectApproval: true,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.state) {
+          serverAdjusted = true;
+          await updateState(() => data.state);
+        }
+      }
+    } catch {}
 
-    await updateState((prev) => {
-      let updatedKasList = [...prev.kasList];
-      let newTxs = [...prev.memberTransactions];
+    // 2. Offline Fallback only if backend is unreachable
+    if (!serverAdjusted) {
+      const baseTs = Date.now();
+      const mSuffix = targetMember.id.slice(-4);
+      const refId = `ADJ-${String(baseTs).slice(-6)}-${targetMember.id.slice(-3)}`;
+      const txId = `tx-adj-${baseTs}-${mSuffix}`;
 
-      if (adjBukuKasTarget === 'anggota' || adjBukuKasTarget === 'keduanya') {
+      const pokokPortion = Math.floor(amount * 0.5);
+      const qurbanPortion = Math.floor(amount * 0.25);
+      const zakatPortion = amount - pokokPortion - qurbanPortion;
+
+      await updateState((prev) => {
+        const updatedKasList = [...prev.kasList];
+
         if (adjKategoriTabungan === 'pokok') {
           updatedKasList.unshift(
             {
-              id: `kas-adj-p-${Date.now()}`,
+              id: `kas-adj-p-${baseTs}-${mSuffix}`,
               bukuKas: 'anggota',
               tanggal: tgl,
+              jam,
               kategori: 'Tabungan Pokok',
-              keterangan: `Penyesuaian Tabungan Pokok 50% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+              keterangan: `Koreksi Tabungan Pokok 50% ${targetMember.nama} (${hariNum} Hari): ${ketClean}`,
               namaPenerima: targetMember.nama,
-              tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+              memberId: targetMember.id,
+              referensiId: refId,
+              jumlahHari: hariNum,
+              tipe: tipeVal,
               nominal: pokokPortion,
               saldoKasSetelah: 0,
               inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              approvedBy: currentAdmin?.nama || 'Super Admin',
               status: 'approved',
-              createdAt: now.toISOString(),
+              createdAt: createdAtIso,
             },
             {
-              id: `kas-adj-z-${Date.now() + 1}`,
+              id: `kas-adj-q-${baseTs + 1}-${mSuffix}`,
               bukuKas: 'anggota',
               tanggal: tgl,
-              kategori: 'Tabungan Zakat',
-              keterangan: `Penyesuaian Tabungan Zakat 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
-              namaPenerima: targetMember.nama,
-              tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-              nominal: zakatPortion,
-              saldoKasSetelah: 0,
-              inputBy: currentAdmin?.nama || 'Admin Koperasi',
-              status: 'approved',
-              createdAt: now.toISOString(),
-            },
-            {
-              id: `kas-adj-q-${Date.now() + 2}`,
-              bukuKas: 'anggota',
-              tanggal: tgl,
+              jam,
               kategori: 'Tabungan Qurban',
-              keterangan: `Penyesuaian Tabungan Qurban 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
+              keterangan: `Koreksi Tabungan Qurban 25% ${targetMember.nama} (${hariNum} Hari): ${ketClean}`,
               namaPenerima: targetMember.nama,
-              tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+              memberId: targetMember.id,
+              referensiId: refId,
+              jumlahHari: hariNum,
+              tipe: tipeVal,
               nominal: qurbanPortion,
               saldoKasSetelah: 0,
               inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              approvedBy: currentAdmin?.nama || 'Super Admin',
               status: 'approved',
-              createdAt: now.toISOString(),
+              createdAt: createdAtIso,
+            },
+            {
+              id: `kas-adj-z-${baseTs + 2}-${mSuffix}`,
+              bukuKas: 'anggota',
+              tanggal: tgl,
+              jam,
+              kategori: 'Tabungan Zakat',
+              keterangan: `Koreksi Tabungan Zakat 25% ${targetMember.nama} (${hariNum} Hari): ${ketClean}`,
+              namaPenerima: targetMember.nama,
+              memberId: targetMember.id,
+              referensiId: refId,
+              jumlahHari: hariNum,
+              tipe: tipeVal,
+              nominal: zakatPortion,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              approvedBy: currentAdmin?.nama || 'Super Admin',
+              status: 'approved',
+              createdAt: createdAtIso,
             }
           );
         } else {
           updatedKasList.unshift({
-            id: `kas-adj-ang-${Date.now()}`,
+            id: `kas-adj-u-${baseTs}-${mSuffix}`,
             bukuKas: 'anggota',
             tanggal: tgl,
-            kategori: `Penyesuaian ${labelKategori}`,
-            keterangan: ketEntry,
+            jam,
+            kategori: 'Tabungan Bebas',
+            keterangan: `Koreksi Saldo Umum ${tipeVal === 'masuk' ? 'Masuk' : 'Keluar'} ${targetMember.nama}: ${ketClean}`,
             namaPenerima: targetMember.nama,
-            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
+            memberId: targetMember.id,
+            referensiId: refId,
+            tipe: tipeVal,
             nominal: amount,
             saldoKasSetelah: 0,
             inputBy: currentAdmin?.nama || 'Admin Koperasi',
+            approvedBy: currentAdmin?.nama || 'Super Admin',
             status: 'approved',
-            createdAt: now.toISOString(),
+            createdAt: createdAtIso,
           });
+          if (effectiveKasTarget === 'keduanya') {
+            updatedKasList.unshift({
+              id: `kas-adj-kop-${baseTs + 3}-${mSuffix}`,
+              bukuKas: 'koperasi',
+              tanggal: tgl,
+              jam,
+              kategori: 'Penyesuaian Tabungan Umum',
+              keterangan: `Penyesuaian Tabungan Umum ${targetMember.nama}: ${ketClean}`,
+              namaPenerima: targetMember.nama,
+              memberId: targetMember.id,
+              referensiId: refId,
+              tipe: tipeVal,
+              nominal: amount,
+              saldoKasSetelah: 0,
+              inputBy: currentAdmin?.nama || 'Admin Koperasi',
+              approvedBy: currentAdmin?.nama || 'Super Admin',
+              status: 'approved',
+              createdAt: createdAtIso,
+            });
+          }
         }
-      }
 
-      if (adjBukuKasTarget === 'koperasi' || adjBukuKasTarget === 'keduanya') {
-        updatedKasList.unshift({
-          id: `kas-adj-kop-${Date.now() + 3}`,
-          bukuKas: 'koperasi',
-          tanggal: tgl,
-          kategori: `Penyesuaian ${labelKategori}`,
-          keterangan: ketEntry,
-          namaPenerima: targetMember.nama,
-          tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-          nominal: amount,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin?.nama || 'Admin Koperasi',
-          status: 'approved',
-          createdAt: now.toISOString(),
-        });
-      }
-
-      // Update Saldo Anggota yang bersangkutan
-      const updatedMembers = prev.members.map((m) => {
-        if (m.id === targetMember.id) {
+        const updatedMembers = prev.members.map((m) => {
+          if (m.id !== targetMember.id) return m;
           let sPokok = Number(m.saldoPokok) || 0;
           let sZakat = Number(m.saldoZakatFitrah) || 0;
           let sQurban = Number(m.saldoQurban) || 0;
           let sUmum = Number(m.saldoUmum) || 0;
 
           if (adjKategoriTabungan === 'pokok') {
-            sPokok = adjTipe === 'tambah' ? sPokok + pokokPortion : Math.max(0, sPokok - pokokPortion);
-            sZakat = adjTipe === 'tambah' ? sZakat + zakatPortion : Math.max(0, sZakat - zakatPortion);
-            sQurban = adjTipe === 'tambah' ? sQurban + qurbanPortion : Math.max(0, sQurban - qurbanPortion);
+            sPokok = tipeVal === 'masuk' ? sPokok + pokokPortion : Math.max(0, sPokok - pokokPortion);
+            sZakat = tipeVal === 'masuk' ? sZakat + zakatPortion : Math.max(0, sZakat - zakatPortion);
+            sQurban = tipeVal === 'masuk' ? sQurban + qurbanPortion : Math.max(0, sQurban - qurbanPortion);
           } else {
-            sUmum = adjTipe === 'tambah' ? sUmum + amount : Math.max(0, sUmum - amount);
+            sUmum = tipeVal === 'masuk' ? sUmum + amount : Math.max(0, sUmum - amount);
           }
 
           return {
@@ -2156,136 +2229,61 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             totalSimpanan: sPokok + sZakat + sQurban + sUmum,
             jumlahHariPokok: Math.floor(sPokok / (prev.profile?.pembagianPokokHarian || 1000)),
           };
-        }
-        return m;
+        });
+
+        const targetAfter = updatedMembers.find((m) => m.id === targetMember.id);
+        const newTxs = [
+          {
+            id: txId,
+            memberId: targetMember.id,
+            tanggal: tgl,
+            jam,
+            keterangan:
+              adjKategoriTabungan === 'pokok'
+                ? `KOREKSI TABUNGAN POKOK (${hariNum} Hari • 50% Pokok, 25% Qurban, 25% Zakat): ${ketClean}`
+                : `KOREKSI SALDO UMUM: ${ketClean}`,
+            cbg: adjKategoriTabungan === 'pokok' ? '93907' : '93740',
+            tipe: tipeVal,
+            nominal: amount,
+            saldoSetelah: targetAfter?.totalSimpanan || 0,
+            kategori: adjKategoriTabungan,
+            referensiId: refId,
+            jumlahHari: hariNum,
+          },
+          ...prev.memberTransactions,
+        ];
+
+        let run = 0;
+        newTxs
+          .filter((t) => t.memberId === targetMember.id)
+          .sort(compareMemberTransactionsChrono)
+          .forEach((t) => {
+            if (t.kategori !== 'sedekah') run = t.tipe === 'masuk' ? run + t.nominal : Math.max(0, run - t.nominal);
+            t.saldoSetelah = run;
+          });
+        newTxs.sort(compareMemberTransactionsDesc);
+
+        const audit = createAuditLog(
+          currentAdmin,
+          'Penyesuaian Saldo Anggota',
+          `${adjTipe === 'tambah' ? 'Menambah' : 'Menarik'} ${formatRupiah(amount)} pada ${labelKategori} a/n ${targetMember.nama} (Tgl: ${tgl}). Keterangan: ${ketClean}`,
+          targetMember.id
+        );
+
+        return {
+          ...prev,
+          members: updatedMembers,
+          memberTransactions: newTxs,
+          kasList: updatedKasList,
+          auditLogs: [audit, ...prev.auditLogs],
+        };
       });
+    }
 
-      // Hitung saldo setelah untuk mutasi anggota
-      const targetAfter = updatedMembers.find((m) => m.id === targetMember.id);
-      const saldoAkhir =
-        adjKategoriTabungan === 'pokok'
-          ? (targetAfter?.saldoPokok || 0)
-          : (targetAfter?.saldoUmum || 0);
-
-      newTxs.unshift({
-        id: `tx-adj-${Date.now()}`,
-        memberId: targetMember.id,
-        tanggal: tgl,
-        jam,
-        keterangan: ketEntry,
-        cbg: adjKategoriTabungan === 'pokok' ? '93907' : '93740',
-        tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-        nominal: amount,
-        saldoSetelah: saldoAkhir,
-        kategori: adjKategoriTabungan,
-        referensiId: `ADJ-${Date.now().toString().slice(-6)}`,
-      });
-
-      const audit = createAuditLog(
-        currentAdmin,
-        'Penyesuaian Saldo Anggota',
-        `${adjTipe === 'tambah' ? 'Menambah' : 'Menarik'} ${formatRupiah(amount)} pada ${labelKategori} a/n ${targetMember.nama}. Keterangan: ${ketEntry}`,
-        targetMember.id
-      );
-
-      return {
-        ...prev,
-        members: updatedMembers,
-        memberTransactions: newTxs,
-        kasList: updatedKasList,
-        auditLogs: [audit, ...prev.auditLogs],
-      };
-    });
-
-    // 1. Authoritative Backend Sync
-    try {
-      fetch('/api/balance/adjust', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetIds: [targetMember.id],
-          nominal: amount,
-          tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-          jenisTabungan: adjKategoriTabungan,
-          keterangan: adjKeterangan || ketEntry,
-          adminName: currentAdmin?.nama || 'Admin Koperasi',
-        }),
-      }).catch(() => {});
-    } catch {}
-
-    // 2. Direct Firestore Sync
-    try {
-      const { db } = await import('../lib/firebase');
-      const { doc, updateDoc } = await import('firebase/firestore');
-      const updatedMem = state.members.find((m) => m.id === targetMember.id);
-      if (updatedMem) {
-        const sPokok = adjTipe === 'tambah' ? (updatedMem.saldoPokok || 0) + pokokPortion : Math.max(0, (updatedMem.saldoPokok || 0) - pokokPortion);
-        const sZakat = adjTipe === 'tambah' ? (updatedMem.saldoZakatFitrah || 0) + zakatPortion : Math.max(0, (updatedMem.saldoZakatFitrah || 0) - zakatPortion);
-        const sQurban = adjTipe === 'tambah' ? (updatedMem.saldoQurban || 0) + qurbanPortion : Math.max(0, (updatedMem.saldoQurban || 0) - qurbanPortion);
-        const sUmum = adjKategoriTabungan === 'umum' ? (adjTipe === 'tambah' ? (updatedMem.saldoUmum || 0) + amount : Math.max(0, (updatedMem.saldoUmum || 0) - amount)) : (updatedMem.saldoUmum || 0);
-
-        await updateDoc(doc(db, 'members', targetMember.id), {
-          saldoPokok: adjKategoriTabungan === 'pokok' ? sPokok : updatedMem.saldoPokok,
-          saldoZakatFitrah: adjKategoriTabungan === 'pokok' ? sZakat : updatedMem.saldoZakatFitrah,
-          saldoQurban: adjKategoriTabungan === 'pokok' ? sQurban : updatedMem.saldoQurban,
-          saldoUmum: sUmum,
-          totalSimpanan: (adjKategoriTabungan === 'pokok' ? sPokok + sZakat + sQurban : (updatedMem.saldoPokok || 0) + (updatedMem.saldoZakatFitrah || 0) + (updatedMem.saldoQurban || 0)) + sUmum,
-          jumlahHariPokok: Math.floor(sPokok / 1000),
-          updatedAt: new Date().toISOString(),
-        }).catch(() => {});
-
-        // Direct Firestore write for the 3 separate Buku Kas Anggota entries (Pokok, Zakat, Qurban)
-        if (adjKategoriTabungan === 'pokok') {
-          const ts = Date.now();
-          const { setDoc } = await import('firebase/firestore');
-          await setDoc(doc(db, 'kas', `kas-adj-p-${ts}`), {
-            id: `kas-adj-p-${ts}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Pokok',
-            keterangan: `Penyesuaian Tabungan Pokok 50% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
-            namaPenerima: targetMember.nama,
-            memberId: targetMember.id,
-            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-            nominal: pokokPortion,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          }).catch(() => {});
-
-          await setDoc(doc(db, 'kas', `kas-adj-z-${ts + 1}`), {
-            id: `kas-adj-z-${ts + 1}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Zakat',
-            keterangan: `Penyesuaian Tabungan Zakat 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
-            namaPenerima: targetMember.nama,
-            memberId: targetMember.id,
-            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-            nominal: zakatPortion,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          }).catch(() => {});
-
-          await setDoc(doc(db, 'kas', `kas-adj-q-${ts + 2}`), {
-            id: `kas-adj-q-${ts + 2}`,
-            bukuKas: 'anggota',
-            tanggal: tgl,
-            kategori: 'Tabungan Qurban',
-            keterangan: `Penyesuaian Tabungan Qurban 25% ${targetMember.nama}${adjKeterangan ? ' - ' + adjKeterangan : ''}`.trim(),
-            namaPenerima: targetMember.nama,
-            memberId: targetMember.id,
-            tipe: adjTipe === 'tambah' ? 'masuk' : 'keluar',
-            nominal: qurbanPortion,
-            status: 'approved',
-            createdAt: now.toISOString(),
-          }).catch(() => {});
-        }
-      }
-    } catch {}
-
-    alert(`✓ Penyesuaian saldo ${labelKategori} a/n ${targetMember.nama} senilai ${formatRupiah(amount)} berhasil disimpan & otomatis terinput di Kas Anggota.`);
+    alert(`✓ Penyesuaian saldo ${labelKategori} a/n ${targetMember.nama} senilai ${formatRupiah(amount)} (Tgl: ${tgl}) berhasil disimpan & otomatis tercatat di Buku Kas Anggota.`);
     setSubModal(null);
     setAdjNominal('');
+    setAdjJumlahHari('');
     setAdjKeterangan('');
   };
 
@@ -5009,7 +5007,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 ) : (
                   <div>
                     <label className="block font-bold text-slate-300 mb-1">
-                      Pencatatan Buku Kas (Pilih Buku Kas Tujuan) *
+                      Pencatatan Buku Kas *
                     </label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
@@ -5022,19 +5020,19 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                         }`}
                       >
                         <div>Kas Anggota</div>
-                        <div className="text-[9px] text-slate-400 font-normal">Default Rekomendasi</div>
+                        <div className="text-[9px] text-slate-400 font-normal">Default Wajib Sinkron</div>
                       </button>
                       <button
                         type="button"
-                        onClick={() => setAdjBukuKasTarget('koperasi')}
+                        onClick={() => setAdjBukuKasTarget('keduanya')}
                         className={`p-2 rounded-xl text-center border text-xs font-bold transition-all ${
-                          adjBukuKasTarget === 'koperasi'
+                          adjBukuKasTarget === 'keduanya' || adjBukuKasTarget === 'koperasi'
                             ? 'bg-sky-500/20 border-sky-500 text-sky-300 ring-1 ring-sky-500'
                             : 'bg-slate-800 border-slate-700 text-slate-400'
                         }`}
                       >
-                        <div>Kas Koperasi</div>
-                        <div className="text-[9px] text-slate-400 font-normal">Buku Kas Operasional</div>
+                        <div>Kas Anggota + Koperasi</div>
+                        <div className="text-[9px] text-slate-400 font-normal">Catat di Kedua Buku Kas</div>
                       </button>
                     </div>
                   </div>
@@ -5122,6 +5120,29 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   />
                 </div>
               )}
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">Tanggal Pencatatan *</label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Calendar className="w-3.5 h-3.5 text-amber-400 absolute left-3 top-2.5 pointer-events-none" />
+                    <input
+                      type="date"
+                      required
+                      value={adjTanggal}
+                      onChange={(e) => setAdjTanggal(e.target.value)}
+                      className="w-full pl-8 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAdjTanggal(getWibDateStr())}
+                    className="px-2.5 py-2 bg-slate-800 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-[11px] font-bold shrink-0"
+                  >
+                    Hari Ini
+                  </button>
+                </div>
+              </div>
 
               <div>
                 <label className="block font-bold text-slate-300 mb-1">Keterangan / Alasan</label>

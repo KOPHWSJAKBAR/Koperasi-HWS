@@ -18,6 +18,8 @@ import {
   canApproveByRole,
   getRequiredApproverLabel,
   isApprovalRole,
+  compareMemberTransactionsChrono,
+  compareMemberTransactionsDesc,
 } from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
 import {
@@ -72,6 +74,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const [koreksiJenisTabungan, setKoreksiJenisTabungan] = useState<'pokok' | 'umum'>('umum');
   const [koreksiJumlahHari, setKoreksiJumlahHari] = useState<string>('');
   const [koreksiNominal, setKoreksiNominal] = useState<string>('');
+  const [koreksiTanggal, setKoreksiTanggal] = useState<string>(() => getWibDateStr());
   const [koreksiKeterangan, setKoreksiKeterangan] = useState<string>('');
   const [isSubmittingKoreksi, setIsSubmittingKoreksi] = useState(false);
 
@@ -88,6 +91,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
   const [bagiHasilPersen, setBagiHasilPersen] = useState<string>('5');
   const [bagiHasilBukuKas, setBagiHasilBukuKas] = useState<'koperasi' | 'anggota'>('koperasi');
   const [bagiHasilTujuanKredit, setBagiHasilTujuanKredit] = useState<'umum' | 'pokok'>('umum');
+  const [bagiHasilTanggal, setBagiHasilTanggal] = useState<string>(() => getWibDateStr());
   const [bagiHasilKeterangan, setBagiHasilKeterangan] = useState<string>(
     `Pembagian Hasil Usaha Koperasi Tahun ${getWibDateStr().slice(0, 4)}`
   );
@@ -172,8 +176,10 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     // Offline fallback
     await updateState((prev) => {
       const nowIso = new Date().toISOString();
-      const tgl = getWibDateStr();
+      const wibToday = getWibDateStr();
+      const tgl = reqItem.tanggal && /^\d{4}-\d{2}-\d{2}$/.test(reqItem.tanggal) ? reqItem.tanggal : wibToday;
       const jam = getWibTimeStr();
+      const createdAtIso = tgl === wibToday ? nowIso : `${tgl}T${jam}:00.000Z`;
       let nextMembers = [...prev.members];
       let nextTxs = [...(prev.memberTransactions || [])];
       let nextKas = [...(prev.kasList || [])];
@@ -187,6 +193,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
           const hari = reqItem.jumlahHari || Math.max(1, Math.round(nom / (prev.profile?.biayaWajibHarian || 2000)));
           const newTxs: MemberTransaction[] = [];
           const newKas: KasEntry[] = [];
+          let idxCounter = 0;
 
           nextMembers = nextMembers.map((m) => {
             if (!targetSet.has(m.id)) return m;
@@ -204,9 +211,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               if (tipe === 'masuk') u += nom;
               else u = Math.max(0, u - nom);
             }
-            const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
+            const baseTs = Date.now() + idxCounter * 10;
+            idxCounter++;
+            const mSuffix = m.id.slice(-4);
+            const refId = `ADJ-${String(baseTs).slice(-6)}-${m.id.slice(-3)}`;
             newTxs.push({
-              id: `tx-adj-${Date.now()}-${m.id.slice(-4)}`,
+              id: `tx-adj-${baseTs}-${mSuffix}`,
               memberId: m.id,
               tanggal: tgl,
               jam,
@@ -216,30 +226,40 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               cbg: jenis === 'pokok' ? '93907' : '93740',
               tipe,
               nominal: nom,
-              saldoSetelah: p + u,
+              saldoSetelah: p + u + z + q,
               kategori: jenis === 'pokok' ? 'pokok' : 'umum',
               referensiId: refId,
               jumlahHari: hari,
             });
             if (jenis === 'pokok') {
               newKas.push(
-                { id: `kas-adj-p-${Date.now()}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Pokok', keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: pPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso },
-                { id: `kas-adj-q-${Date.now() + 1}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Qurban', keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: qPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso },
-                { id: `kas-adj-z-${Date.now() + 2}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Zakat', keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: zPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso }
+                { id: `kas-adj-p-${baseTs}-${mSuffix}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Pokok', keterangan: `Koreksi Tabungan Pokok 50% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: pPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: createdAtIso },
+                { id: `kas-adj-q-${baseTs + 1}-${mSuffix}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Qurban', keterangan: `Koreksi Tabungan Qurban 25% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: qPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: createdAtIso },
+                { id: `kas-adj-z-${baseTs + 2}-${mSuffix}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Zakat', keterangan: `Koreksi Tabungan Zakat 25% ${m.nama} (${hari} Hari): ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, jumlahHari: hari, tipe, nominal: zPart, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: createdAtIso }
               );
             } else {
-              newKas.push({ id: `kas-adj-u-${Date.now()}-${m.id.slice(-4)}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Bebas', keterangan: `Koreksi Saldo Umum ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} ${m.nama}: ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, tipe, nominal: nom, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: nowIso });
+              newKas.push({ id: `kas-adj-u-${baseTs}-${mSuffix}`, bukuKas: 'anggota', tanggal: tgl, jam, kategori: 'Tabungan Bebas', keterangan: `Koreksi Saldo Umum ${tipe === 'masuk' ? 'Masuk' : 'Keluar'} ${m.nama}: ${reqItem.alasan}`, namaPenerima: m.nama, memberId: m.id, referensiId: refId, tipe, nominal: nom, saldoKasSetelah: 0, inputBy: reqItem.requestedBy, approvedBy: currentAdmin.nama, status: 'approved', createdAt: createdAtIso });
             }
             return { ...m, saldoPokok: p, saldoUmum: u, saldoZakatFitrah: z, saldoQurban: q, totalSimpanan: p + u + z + q, jumlahHariPokok: Math.floor(p / (prev.profile?.pembagianPokokHarian || 1000)) };
           });
           nextTxs = [...newTxs, ...nextTxs];
+          nextMembers.forEach((m) => {
+            if (!targetSet.has(m.id)) return;
+            let run = 0;
+            nextTxs.filter((t) => t.memberId === m.id).sort(compareMemberTransactionsChrono).forEach((t) => {
+              if (t.kategori !== 'sedekah') run = t.tipe === 'masuk' ? run + t.nominal : Math.max(0, run - t.nominal);
+              t.saldoSetelah = run;
+            });
+          });
+          nextTxs.sort(compareMemberTransactionsDesc);
           nextKas = [...newKas, ...nextKas];
         } else if (reqItem.actionType === 'bagi_hasil') {
           const targetSet = new Set(reqItem.targetIds || []);
           const pct = Number(reqItem.persen) || 0;
           const sumber = reqItem.bukuKasSumber === 'anggota' ? 'anggota' : 'koperasi';
           const tujuan = reqItem.tujuanKredit === 'pokok' ? 'pokok' : 'umum';
-          const shuRefId = `SHU-${Date.now().toString().slice(-6)}`;
+          const shuBaseTs = Date.now();
+          const shuRefId = `SHU-${String(shuBaseTs).slice(-6)}`;
           const cbgCode = tujuan === 'umum' ? (sumber === 'anggota' ? '114114' : '114117') : (sumber === 'anggota' ? '114514' : '114517');
           const newTxs: MemberTransaction[] = [];
           let totalBagi = 0;
@@ -252,7 +272,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             const upP = tujuan === 'pokok' ? m.saldoPokok + part : m.saldoPokok;
             const upU = tujuan === 'umum' ? m.saldoUmum + part : m.saldoUmum;
             newTxs.push({
-              id: `tx-shu-${Date.now()}-${m.id.slice(-4)}`,
+              id: `tx-shu-${shuBaseTs}-${m.id.slice(-4)}`,
               memberId: m.id,
               tanggal: tgl,
               jam,
@@ -260,7 +280,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               cbg: cbgCode,
               tipe: 'masuk',
               nominal: part,
-              saldoSetelah: upP + upU,
+              saldoSetelah: upP + upU + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0),
               kategori: tujuan,
               referensiId: shuRefId,
             });
@@ -268,9 +288,18 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
           });
           if (totalBagi > 0) {
             nextTxs = [...newTxs, ...nextTxs];
+            nextMembers.forEach((m) => {
+              if (!targetSet.has(m.id)) return;
+              let run = 0;
+              nextTxs.filter((t) => t.memberId === m.id).sort(compareMemberTransactionsChrono).forEach((t) => {
+                if (t.kategori !== 'sedekah') run = t.tipe === 'masuk' ? run + t.nominal : Math.max(0, run - t.nominal);
+                t.saldoSetelah = run;
+              });
+            });
+            nextTxs.sort(compareMemberTransactionsDesc);
             nextKas = [
               {
-                id: `kas-shu-${Date.now()}`,
+                id: `kas-shu-${shuBaseTs}`,
                 bukuKas: sumber,
                 tanggal: tgl,
                 jam,
@@ -284,7 +313,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 inputBy: reqItem.requestedBy,
                 approvedBy: currentAdmin.nama,
                 status: 'approved',
-                createdAt: nowIso,
+                createdAt: createdAtIso,
               },
               ...nextKas,
             ];
@@ -368,6 +397,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       return;
     }
 
+    const now = new Date();
+    const wibToday = getWibDateStr(now);
+    const tgl = /^\d{4}-\d{2}-\d{2}$/.test(koreksiTanggal) ? koreksiTanggal : wibToday;
+    const jam = getWibTimeStr(now);
+    const createdAtIso = tgl === wibToday ? now.toISOString() : `${tgl}T${jam}:00.000Z`;
+
     const hariNum = koreksiJenisTabungan === 'pokok'
       ? (parseInt(koreksiJumlahHari.replace(/\D/g, ''), 10) || Math.max(1, Math.round(nominalNum / (state.profile?.biayaWajibHarian || 2000))))
       : undefined;
@@ -375,6 +410,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     const totalDana = nominalNum * targetMembersKoreksi.length;
     const confirmMsg =
       `Konfirmasi ${isDirectApproval ? 'Koreksi Saldo' : `Pengajuan Koreksi Saldo (${isApproval ? 'Admin Approval' : 'Admin Write'})`}:\n` +
+      `- Tanggal Transaksi: ${formatWibDateShort(tgl)}\n` +
       `- Tipe: ${koreksiTipe === 'masuk' ? 'Penambahan / Pemasukan (+)' : 'Pengurangan / Pengeluaran (-)'}\n` +
       `- Tabungan: ${koreksiJenisTabungan === 'pokok' ? `Tabungan Pokok (50% Pokok, 25% Qurban, 25% Zakat)` : 'Tabungan Umum'}\n` +
       (koreksiJenisTabungan === 'pokok' ? `- Jumlah Hari: ${hariNum} Hari\n` : '') +
@@ -383,15 +419,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       `- Total Dana: ${formatRupiah(totalDana)}\n` +
       `- Keterangan: ${koreksiKeterangan}\n\n` +
       (isDirectApproval
-        ? 'Apakah Anda yakin ingin memproses transaksi ini dan langsung mengkoreksi saldo anggota?'
+        ? 'Apakah Anda yakin ingin memproses transaksi ini dan langsung mengkoreksi saldo anggota serta mencatatnya ke Buku Kas Anggota?'
         : `Apakah Anda yakin ingin mengirim pengajuan koreksi saldo ini ke ${requiredApproverLabel}? Saldo belum berubah sebelum disetujui.`);
 
     if (!confirm(confirmMsg)) return;
 
     setIsSubmittingKoreksi(true);
-    const now = new Date();
-    const tgl = getWibDateStr(now);
-    const jam = getWibTimeStr(now);
 
     try {
       const targetIds = targetMembersKoreksi.map((m) => m.id);
@@ -418,6 +451,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
           jenisTabungan: koreksiJenisTabungan,
           jumlahHari: hariNum,
           keterangan: koreksiKeterangan.trim(),
+          tanggal: tgl,
           totalDana,
         };
 
@@ -441,7 +475,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             const audit = createAuditLog(
               currentAdmin,
               'Pengajuan Koreksi Saldo',
-              `${currentAdmin.nama} (${isApproval ? 'Admin Approval' : 'Admin Write'}) mengajukan koreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Menunggu persetujuan ${requiredApproverLabel}. Ket: ${koreksiKeterangan}`,
+              `${currentAdmin.nama} (${isApproval ? 'Admin Approval' : 'Admin Write'}) mengajukan koreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota (Tgl: ${tgl}). Menunggu persetujuan ${requiredApproverLabel}. Ket: ${koreksiKeterangan}`,
               newReq.id
             );
             return {
@@ -476,6 +510,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             jenisTabungan: koreksiJenisTabungan,
             jumlahHari: hariNum,
             keterangan: koreksiKeterangan.trim(),
+            tanggal: tgl,
             adminName: currentAdmin.nama,
             adminRole: currentAdmin.role,
             isDirectApproval: true,
@@ -498,6 +533,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       if (!serverAdjusted) {
         const newTransactions: MemberTransaction[] = [];
         const newKasEntries: KasEntry[] = [];
+        let idxCounter = 0;
 
         await updateState((prev) => {
           const updatedMembers = prev.members.map((m) => {
@@ -528,8 +564,11 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             }
 
             const totalSimpanan = updatedPokok + updatedUmum + updatedZakat + updatedQurban;
-            const refId = `ADJ-${Date.now().toString().slice(-6)}-${m.id.slice(-3)}`;
-            const txId = `tx-adj-${Date.now()}-${m.id.slice(-4)}`;
+            const baseTs = Date.now() + idxCounter * 10;
+            idxCounter++;
+            const mSuffix = m.id.slice(-4);
+            const refId = `ADJ-${String(baseTs).slice(-6)}-${m.id.slice(-3)}`;
+            const txId = `tx-adj-${baseTs}-${mSuffix}`;
 
             newTransactions.push({
               id: txId,
@@ -542,7 +581,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
               cbg: koreksiJenisTabungan === 'pokok' ? '93907' : '93740',
               tipe: koreksiTipe === 'masuk' ? 'masuk' : 'keluar',
               nominal: nominalNum,
-              saldoSetelah: updatedPokok + updatedUmum,
+              saldoSetelah: totalSimpanan,
               kategori: koreksiJenisTabungan === 'pokok' ? 'pokok' : 'umum',
               referensiId: refId,
               jumlahHari: hariNum,
@@ -551,7 +590,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             if (koreksiJenisTabungan === 'pokok') {
               newKasEntries.push(
                 {
-                  id: `kas-adj-p-${Date.now()}-${m.id.slice(-4)}`,
+                  id: `kas-adj-p-${baseTs}-${mSuffix}`,
                   bukuKas: 'anggota',
                   tanggal: tgl,
                   jam,
@@ -567,10 +606,10 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   inputBy: currentAdmin.nama,
                   approvedBy: currentAdmin.nama,
                   status: 'approved',
-                  createdAt: now.toISOString(),
+                  createdAt: createdAtIso,
                 },
                 {
-                  id: `kas-adj-q-${Date.now() + 1}-${m.id.slice(-4)}`,
+                  id: `kas-adj-q-${baseTs + 1}-${mSuffix}`,
                   bukuKas: 'anggota',
                   tanggal: tgl,
                   jam,
@@ -586,10 +625,10 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   inputBy: currentAdmin.nama,
                   approvedBy: currentAdmin.nama,
                   status: 'approved',
-                  createdAt: now.toISOString(),
+                  createdAt: createdAtIso,
                 },
                 {
-                  id: `kas-adj-z-${Date.now() + 2}-${m.id.slice(-4)}`,
+                  id: `kas-adj-z-${baseTs + 2}-${mSuffix}`,
                   bukuKas: 'anggota',
                   tanggal: tgl,
                   jam,
@@ -605,12 +644,12 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                   inputBy: currentAdmin.nama,
                   approvedBy: currentAdmin.nama,
                   status: 'approved',
-                  createdAt: now.toISOString(),
+                  createdAt: createdAtIso,
                 }
               );
             } else {
               newKasEntries.push({
-                id: `kas-adj-u-${Date.now()}-${m.id.slice(-4)}`,
+                id: `kas-adj-u-${baseTs}-${mSuffix}`,
                 bukuKas: 'anggota',
                 tanggal: tgl,
                 jam,
@@ -625,7 +664,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 inputBy: currentAdmin.nama,
                 approvedBy: currentAdmin.nama,
                 status: 'approved',
-                createdAt: now.toISOString(),
+                createdAt: createdAtIso,
               });
             }
 
@@ -642,17 +681,31 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             };
           });
 
+          const allNextTxs = [...newTransactions, ...(prev.memberTransactions || [])];
+          updatedMembers.forEach((m) => {
+            if (!targetIdsSet.has(m.id)) return;
+            let run = 0;
+            allNextTxs
+              .filter((t) => t.memberId === m.id)
+              .sort(compareMemberTransactionsChrono)
+              .forEach((t) => {
+                if (t.kategori !== 'sedekah') run = t.tipe === 'masuk' ? run + t.nominal : Math.max(0, run - t.nominal);
+                t.saldoSetelah = run;
+              });
+          });
+          allNextTxs.sort(compareMemberTransactionsDesc);
+
           const audit = createAuditLog(
             currentAdmin,
             'Koreksi Saldo Anggota',
-            `${currentAdmin.nama} (Super Admin) mengkoreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota. Ket: ${koreksiKeterangan}`,
+            `${currentAdmin.nama} (Super Admin) mengkoreksi saldo (${koreksiTipe.toUpperCase()} [${koreksiJenisTabungan.toUpperCase()}]) sebesar ${formatRupiah(nominalNum)} ke ${targetMembersKoreksi.length} anggota (Tgl: ${tgl}). Ket: ${koreksiKeterangan}`,
             newKasEntries[0]?.id
           );
 
           return {
             ...prev,
             members: updatedMembers,
-            memberTransactions: [...newTransactions, ...(prev.memberTransactions || [])],
+            memberTransactions: allNextTxs,
             kasList: [...newKasEntries, ...(prev.kasList || [])],
             auditLogs: [audit, ...(prev.auditLogs || [])],
           };
@@ -724,8 +777,15 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
       return;
     }
 
+    const now = new Date();
+    const wibToday = getWibDateStr(now);
+    const tgl = /^\d{4}-\d{2}-\d{2}$/.test(bagiHasilTanggal) ? bagiHasilTanggal : wibToday;
+    const jam = getWibTimeStr(now);
+    const createdAtIso = tgl === wibToday ? now.toISOString() : `${tgl}T${jam}:00.000Z`;
+
     const confirmMsg =
       `Konfirmasi ${isDirectApproval ? 'Pembagian Hasil (Bagi Hasil / SHU)' : `Pengajuan Pembagian Hasil (${isApproval ? 'Admin Approval' : 'Admin Write'})`}:\n` +
+      `- Tanggal Transaksi: ${formatWibDateShort(tgl)}\n` +
       `- Persentase: ${persenNum}% dari Tabungan Pokok\n` +
       `- Jumlah Anggota Penerima: ${targetMembersBagiHasil.length} Anggota\n` +
       `- Total Tabungan Pokok Dasar: ${formatRupiah(totalPokokTarget)}\n` +
@@ -741,14 +801,13 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
 
     if (!isDirectApproval) {
       setIsSubmittingBagiHasil(true);
-      const nowReq = new Date();
       const newReq: PendingMutasiActionRequest = {
         id: `mutreq-shu-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         actionType: 'bagi_hasil',
         status: 'pending',
         requestedBy: currentAdmin.nama,
         requestedByRole: currentAdmin.role,
-        requestedAt: nowReq.toISOString(),
+        requestedAt: now.toISOString(),
         alasan: bagiHasilKeterangan.trim(),
         targetIds: targetMembersBagiHasil.map((m) => m.id),
         targetNames: targetMembersBagiHasil.slice(0, 5).map((m) => m.nama),
@@ -757,6 +816,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
         bukuKasSumber: bagiHasilBukuKas,
         tujuanKredit: bagiHasilTujuanKredit,
         keterangan: bagiHasilKeterangan.trim(),
+        tanggal: tgl,
         totalDana: totalBagiHasilEstimasi,
       };
       try {
@@ -781,7 +841,7 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
             const audit = createAuditLog(
               currentAdmin,
               'Pengajuan Pembagian Hasil',
-              `${currentAdmin.nama} mengajukan bagi hasil ${persenNum}% (${formatRupiah(totalBagiHasilEstimasi)}) untuk ${targetMembersBagiHasil.length} anggota. Menunggu persetujuan ${requiredApproverLabel}.`,
+              `${currentAdmin.nama} mengajukan bagi hasil ${persenNum}% (${formatRupiah(totalBagiHasilEstimasi)}) untuk ${targetMembersBagiHasil.length} anggota (Tgl: ${tgl}). Menunggu persetujuan ${requiredApproverLabel}.`,
               newReq.id
             );
             return {
@@ -801,95 +861,141 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
     }
 
     setIsSubmittingBagiHasil(true);
-    const now = new Date();
-    const tgl = getWibDateStr(now);
-    const jam = getWibTimeStr(now);
 
     try {
-      const newTransactions: MemberTransaction[] = [];
-      let totalBagiHasilTerkredit = 0;
+      const targetIds = targetMembersBagiHasil.map((m) => m.id);
+      const targetIdSet = new Set(targetIds);
+      let serverProcessed = false;
+      let totalBagiHasilTerkredit = totalBagiHasilEstimasi;
 
-      const shuRefId = `SHU-${Date.now().toString().slice(-6)}`;
-      const bagiHasilCbgCode =
-        bagiHasilTujuanKredit === 'umum'
-          ? (bagiHasilBukuKas === 'anggota' ? '114114' : '114117')
-          : (bagiHasilBukuKas === 'anggota' ? '114514' : '114517');
-
-      await updateState((prev) => {
-        const updatedMembers = prev.members.map((m) => {
-          const isTarget = targetMembersBagiHasil.some((t) => t.id === m.id);
-          if (!isTarget || m.saldoPokok <= 0) return m;
-
-          const bagianAnggota = Math.round(m.saldoPokok * (persenNum / 100));
-          if (bagianAnggota <= 0) return m;
-
-          totalBagiHasilTerkredit += bagianAnggota;
-
-          let updatedPokok = m.saldoPokok;
-          let updatedUmum = m.saldoUmum;
-
-          if (bagiHasilTujuanKredit === 'umum') {
-            updatedUmum += bagianAnggota;
-          } else {
-            updatedPokok += bagianAnggota;
-          }
-
-          const txId = `tx-shu-${Date.now()}-${m.id.slice(-4)}`;
-          newTransactions.push({
-            id: txId,
-            memberId: m.id,
+      try {
+        const res = await fetch('/api/balance/bagi-hasil', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetIds,
+            persen: persenNum,
+            bukuKasSumber: bagiHasilBukuKas,
+            tujuanKredit: bagiHasilTujuanKredit,
+            keterangan: bagiHasilKeterangan.trim(),
             tanggal: tgl,
-            jam,
-            keterangan: `BAGI HASIL ${persenNum}% DARI POKOK (${formatRupiah(m.saldoPokok)}): ${bagiHasilKeterangan}`,
-            cbg: bagiHasilCbgCode,
-            tipe: 'masuk',
-            nominal: bagianAnggota,
-            saldoSetelah: updatedPokok + updatedUmum,
-            kategori: bagiHasilTujuanKredit === 'umum' ? 'umum' : 'pokok',
-            referensiId: shuRefId,
+            adminName: currentAdmin.nama,
+            adminRole: currentAdmin.role,
+            isDirectApproval: true,
+            password: adminPasswordInput.trim() || undefined,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.state) {
+            serverProcessed = true;
+            if (typeof data.totalBagi === 'number') totalBagiHasilTerkredit = data.totalBagi;
+            await updateState(() => data.state);
+          }
+        }
+      } catch {}
+
+      if (!serverProcessed) {
+        const newTransactions: MemberTransaction[] = [];
+        totalBagiHasilTerkredit = 0;
+
+        const shuBaseTs = Date.now();
+        const shuRefId = `SHU-${String(shuBaseTs).slice(-6)}`;
+        const bagiHasilCbgCode =
+          bagiHasilTujuanKredit === 'umum'
+            ? (bagiHasilBukuKas === 'anggota' ? '114114' : '114117')
+            : (bagiHasilBukuKas === 'anggota' ? '114514' : '114517');
+
+        await updateState((prev) => {
+          const updatedMembers = prev.members.map((m) => {
+            if (!targetIdSet.has(m.id) || m.saldoPokok <= 0) return m;
+
+            const bagianAnggota = Math.round(m.saldoPokok * (persenNum / 100));
+            if (bagianAnggota <= 0) return m;
+
+            totalBagiHasilTerkredit += bagianAnggota;
+
+            let updatedPokok = m.saldoPokok;
+            let updatedUmum = m.saldoUmum;
+
+            if (bagiHasilTujuanKredit === 'umum') {
+              updatedUmum += bagianAnggota;
+            } else {
+              updatedPokok += bagianAnggota;
+            }
+
+            const txId = `tx-shu-${shuBaseTs}-${m.id.slice(-4)}`;
+            newTransactions.push({
+              id: txId,
+              memberId: m.id,
+              tanggal: tgl,
+              jam,
+              keterangan: `BAGI HASIL ${persenNum}% DARI POKOK (${formatRupiah(m.saldoPokok)}): ${bagiHasilKeterangan}`,
+              cbg: bagiHasilCbgCode,
+              tipe: 'masuk',
+              nominal: bagianAnggota,
+              saldoSetelah: updatedPokok + updatedUmum + (m.saldoZakatFitrah || 0) + (m.saldoQurban || 0),
+              kategori: bagiHasilTujuanKredit === 'umum' ? 'umum' : 'pokok',
+              referensiId: shuRefId,
+            });
+
+            return {
+              ...m,
+              saldoPokok: updatedPokok,
+              saldoUmum: updatedUmum,
+            };
           });
 
+          const allNextTxs = [...newTransactions, ...(prev.memberTransactions || [])];
+          updatedMembers.forEach((m) => {
+            if (!targetIdSet.has(m.id)) return;
+            let run = 0;
+            allNextTxs
+              .filter((t) => t.memberId === m.id)
+              .sort(compareMemberTransactionsChrono)
+              .forEach((t) => {
+                if (t.kategori !== 'sedekah') run = t.tipe === 'masuk' ? run + t.nominal : Math.max(0, run - t.nominal);
+                t.saldoSetelah = run;
+              });
+          });
+          allNextTxs.sort(compareMemberTransactionsDesc);
+
+          // Entri Pengeluaran di Buku Kas yang dipilih
+          const kasEntryId = `kas-shu-${shuBaseTs}`;
+          const newKasEntry: KasEntry = {
+            id: kasEntryId,
+            bukuKas: bagiHasilBukuKas,
+            tanggal: tgl,
+            jam,
+            kategori: 'Penyaluran Bagi Hasil / SHU',
+            keterangan: `Pembagian Hasil ${persenNum}% Tabungan Pokok ke ${targetMembersBagiHasil.length} Anggota: ${bagiHasilKeterangan}`,
+            namaPenerima: `Bagi Hasil ${targetMembersBagiHasil.length} Anggota Koperasi`,
+            referensiId: shuRefId,
+            tipe: 'keluar',
+            nominal: totalBagiHasilTerkredit,
+            saldoKasSetelah: 0,
+            inputBy: currentAdmin.nama,
+            approvedBy: currentAdmin.nama,
+            status: 'approved',
+            createdAt: createdAtIso,
+          };
+
+          const audit = createAuditLog(
+            currentAdmin,
+            'Pembagian Hasil Anggota',
+            `Memproses pembagian hasil ${persenNum}% tabungan pokok ke ${targetMembersBagiHasil.length} anggota senilai ${formatRupiah(totalBagiHasilTerkredit)} dibebankan pada Buku Kas ${bagiHasilBukuKas.toUpperCase()} (Tgl: ${tgl}). Tujuan kredit: Tabungan ${bagiHasilTujuanKredit.toUpperCase()}`,
+            kasEntryId
+          );
+
           return {
-            ...m,
-            saldoPokok: updatedPokok,
-            saldoUmum: updatedUmum,
+            ...prev,
+            members: updatedMembers,
+            memberTransactions: allNextTxs,
+            kasList: [newKasEntry, ...(prev.kasList || [])],
+            auditLogs: [audit, ...(prev.auditLogs || [])],
           };
         });
-
-        // Entri Pengeluaran di Buku Kas yang dipilih
-        const kasEntryId = `kas-shu-${Date.now()}`;
-        const newKasEntry: KasEntry = {
-          id: kasEntryId,
-          bukuKas: bagiHasilBukuKas,
-          tanggal: tgl,
-          jam,
-          kategori: 'Penyaluran Bagi Hasil / SHU',
-          keterangan: `Pembagian Hasil ${persenNum}% Tabungan Pokok ke ${targetMembersBagiHasil.length} Anggota: ${bagiHasilKeterangan}`,
-          namaPenerima: `Bagi Hasil ${targetMembersBagiHasil.length} Anggota Koperasi`,
-          referensiId: shuRefId,
-          tipe: 'keluar',
-          nominal: totalBagiHasilTerkredit,
-          saldoKasSetelah: 0,
-          inputBy: currentAdmin.nama,
-          status: 'approved',
-          createdAt: now.toISOString(),
-        };
-
-        const audit = createAuditLog(
-          currentAdmin,
-          'Pembagian Hasil Anggota',
-          `Memproses pembagian hasil ${persenNum}% tabungan pokok ke ${targetMembersBagiHasil.length} anggota senilai ${formatRupiah(totalBagiHasilTerkredit)} dibebankan pada Buku Kas ${bagiHasilBukuKas.toUpperCase()}. Tujuan kredit: Tabungan ${bagiHasilTujuanKredit.toUpperCase()}`,
-          kasEntryId
-        );
-
-        return {
-          ...prev,
-          members: updatedMembers,
-          memberTransactions: [...newTransactions, ...(prev.memberTransactions || [])],
-          kasList: [newKasEntry, ...(prev.kasList || [])],
-          auditLogs: [audit, ...(prev.auditLogs || [])],
-        };
-      });
+      }
 
       // Kirim Real-time FCM Notification ke masing-masing anggota target
       targetMembersBagiHasil.forEach((m) => {
@@ -1006,7 +1112,9 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                         </span>
                       </div>
                       <div className="text-[11px] text-slate-300">
-                        Total: <span className="font-mono font-bold text-amber-300">{formatRupiah(req.totalDana || req.nominal || 0)}</span> • Ket: {req.alasan}
+                        Total: <span className="font-mono font-bold text-amber-300">{formatRupiah(req.totalDana || req.nominal || 0)}</span>
+                        {req.tanggal && <> • Tgl Transaksi: <span className="font-semibold text-sky-300">{formatWibDateShort(req.tanggal)}</span></>}
+                        {' '}• Ket: {req.alasan}
                       </div>
                       <div className="text-[10px] text-slate-400">
                         Diajukan oleh <b>{req.requestedBy}</b> • {new Date(req.requestedAt).toLocaleString('id-ID')}
@@ -1377,10 +1485,39 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 </div>
               </div>
 
+              {/* Input Tanggal Transaksi */}
+              <div className="space-y-1.5">
+                <label className="block font-bold text-slate-300">
+                  5. Tanggal Pencatatan Transaksi (Mutasi &amp; Buku Kas Anggota) *
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Calendar className="w-4 h-4 text-amber-400 absolute left-3 top-2.5 pointer-events-none" />
+                    <input
+                      type="date"
+                      required
+                      value={koreksiTanggal}
+                      onChange={(e) => setKoreksiTanggal(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl font-mono text-xs font-bold text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setKoreksiTanggal(getWibDateStr())}
+                    className="px-3 py-2 bg-slate-800 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-[11px] font-bold shrink-0 cursor-pointer"
+                  >
+                    Hari Ini (WIB)
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  Otomatis tercatat di Mutasi Rekening Anggota dan Buku Kas Anggota sesuai tanggal yang dipilih.
+                </p>
+              </div>
+
               {/* Input Keterangan */}
               <div className="space-y-1.5">
                 <label className="block font-bold text-slate-300">
-                  5. Keterangan Resmi Koreksi Saldo *
+                  6. Keterangan Resmi Koreksi Saldo *
                 </label>
                 <textarea
                   required
@@ -1708,10 +1845,36 @@ export const PenyesuaianSaldoView: React.FC<PenyesuaianSaldoViewProps> = ({
                 </div>
               </div>
 
+              {/* Input Tanggal Pembagian Hasil */}
+              <div className="space-y-1.5">
+                <label className="block font-bold text-slate-300">
+                  5. Tanggal Pencatatan Pembagian Hasil *
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Calendar className="w-4 h-4 text-amber-400 absolute left-3 top-2.5 pointer-events-none" />
+                    <input
+                      type="date"
+                      required
+                      value={bagiHasilTanggal}
+                      onChange={(e) => setBagiHasilTanggal(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl font-mono text-xs font-bold text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBagiHasilTanggal(getWibDateStr())}
+                    className="px-3 py-2 bg-slate-800 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-[11px] font-bold shrink-0 cursor-pointer"
+                  >
+                    Hari Ini (WIB)
+                  </button>
+                </div>
+              </div>
+
               {/* Input Keterangan Bagi Hasil */}
               <div className="space-y-1.5">
                 <label className="block font-bold text-slate-300">
-                  5. Keterangan Resmi Pembagian Hasil *
+                  6. Keterangan Resmi Pembagian Hasil *
                 </label>
                 <input
                   type="text"

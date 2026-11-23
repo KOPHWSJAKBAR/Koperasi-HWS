@@ -421,6 +421,7 @@ export interface PendingMutasiActionRequest {
   bukuKasSumber?: 'anggota' | 'koperasi';
   tujuanKredit?: 'umum' | 'pokok';
   keterangan?: string;
+  tanggal?: string;
   totalDana?: number;
 }
 
