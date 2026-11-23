@@ -973,11 +973,33 @@ function scheduleLocalStoragePersist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
     } catch {}
-  }, 300);
+  }, 150);
+}
+
+function flushLocalStoragePersist() {
+  if (typeof window === 'undefined') return;
+  if (storagePersistTimer) {
+    clearTimeout(storagePersistTimer);
+    storagePersistTimer = null;
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(globalState));
+  } catch {}
 }
 
 let lastServerStateDigest = '';
 let inFlightServerFetch: Promise<AppState> | null = null;
+let activeFetchAbortController: AbortController | null = null;
+
+function abortInFlightServerFetch() {
+  if (activeFetchAbortController) {
+    try {
+      activeFetchAbortController.abort();
+    } catch {}
+    activeFetchAbortController = null;
+  }
+  inFlightServerFetch = null;
+}
 
 function notifyListeners() {
   if (debounceNotifyTimer) {
@@ -3555,19 +3577,19 @@ export async function syncShardedToFirestore(state: AppState) {
     const nextQueued = queuedFirestoreSyncState;
     queuedFirestoreSyncState = null;
     if (nextQueued) {
-      scheduleShardedFirestoreSync(nextQueued, 300);
+      scheduleShardedFirestoreSync(nextQueued, 80);
     }
   }
 }
 
-export function scheduleShardedFirestoreSync(state: AppState, delay = 600) {
+export function scheduleShardedFirestoreSync(state: AppState, delay = 80) {
   clearTimeout(shardedTimer);
   shardedTimer = setTimeout(() => {
     syncShardedToFirestore(state);
   }, delay);
 }
 
-// Sync to backend & Firebase Firestore (with sharded data protection)
+// Sync to backend & Firebase Firestore (parallelized for sub-100ms multi-device sync)
 export async function syncStateToServer(state: AppState) {
   try {
     const now = new Date().toISOString();
@@ -3588,34 +3610,40 @@ export async function syncStateToServer(state: AppState) {
     scheduleLocalStoragePersist();
     notifyListeners();
 
-    // 1. Post to Express realtime backend only when internet connection is active
+    // 1. Post to Express realtime backend + Firestore in parallel when internet connection is active
     if (!getIsInternetConnected()) {
       queuedFirestoreSyncState = globalState;
       return;
     }
 
+    scheduleShardedFirestoreSync(globalState, 60);
+
     try {
-      const res = await fetch('/api/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(globalState),
-      });
-      if (res.ok) {
-        const d = await res.json().catch(() => null);
-        if (d?.digest) {
-          lastServerStateDigest = String(d.digest);
+      const postController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const postTimeout = postController ? setTimeout(() => postController.abort(), 10000) : null;
+      try {
+        const res = await fetch('/api/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(globalState),
+          signal: postController?.signal,
+        });
+        if (res.ok) {
+          const d = await res.json().catch(() => null);
+          if (d?.digest) {
+            lastServerStateDigest = String(d.digest);
+          }
         }
+      } finally {
+        if (postTimeout) clearTimeout(postTimeout);
       }
     } catch {}
-
-    // 2. Sharded sync to Google Cloud Firestore (Never exceeds 1MB!)
-    scheduleShardedFirestoreSync(globalState);
   } catch (err) {
     // State is safely cached in localStorage
   }
 }
 
-// Load from server on startup / realtime pulse (with digest short-circuit & single-flight dedupe)
+// Load from server on startup / realtime pulse (with digest short-circuit, timeout protection & single-flight dedupe)
 export async function fetchStateFromServer(forceFull = false): Promise<AppState> {
   if (!getIsInternetConnected()) {
     return globalState;
@@ -3623,12 +3651,19 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
   if (!forceFull && inFlightServerFetch) {
     return inFlightServerFetch;
   }
+  if (forceFull && activeFetchAbortController) {
+    abortInFlightServerFetch();
+  }
 
   const runFetch = async (): Promise<AppState> => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    activeFetchAbortController = controller;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
     try {
       const digestParam = !forceFull && lastServerStateDigest ? `&digest=${encodeURIComponent(lastServerStateDigest)}` : '';
       const res = await fetch(`/api/state?_t=${Date.now()}${digestParam}`, {
         cache: 'no-store',
+        signal: controller?.signal,
         headers: {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
@@ -3751,6 +3786,11 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
       }
     } catch {
       // Graceful offline fallback to local cached state without console noise
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (activeFetchAbortController === controller) {
+        activeFetchAbortController = null;
+      }
     }
 
     // Full multi-collection direct Firestore fallback if backend /api/state is unreachable on mobile APK / standalone device
@@ -3953,362 +3993,470 @@ export function useKoperasiState() {
       fetchStateFromServer();
     }
 
-    // Foregrounding & network re-sync handlers so app always stays connected to internet when open
+    // Foregrounding & network re-sync handlers so Android, iOS, Web, PC & AI Studio stay instantly synced
     const handleDeviceResume = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        flushLocalStoragePersist();
+        return;
+      }
       if ((document.visibilityState === 'visible' || navigator.onLine) && getIsInternetConnected()) {
         import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
+        if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+          try {
+            wsClient.send(JSON.stringify({ type: 'REQUEST_SYNC' }));
+          } catch {}
+        } else {
+          connectWebSocket();
+        }
         fetchStateFromServer();
       }
     };
+    const handlePageHide = () => {
+      flushLocalStoragePersist();
+    };
     const handleNetworkRestored = () => {
+      lastServerStateDigest = '';
+      abortInFlightServerFetch();
       import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
       if (queuedFirestoreSyncState) {
         const pending = queuedFirestoreSyncState;
         queuedFirestoreSyncState = null;
         syncStateToServer(pending).catch(() => {});
       }
-      fetchStateFromServer();
-      connectSSE();
+      fetchStateFromServer(true);
+      connectWebSocket();
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('visibilitychange', handleDeviceResume);
       window.addEventListener('online', handleNetworkRestored);
       window.addEventListener('focus', handleDeviceResume);
       window.addEventListener('pageshow', handleDeviceResume);
+      window.addEventListener('pagehide', handlePageHide);
       window.addEventListener('hws:network_restored', handleNetworkRestored);
       window.addEventListener('hws:firestore_stream_recovered', handleDeviceResume);
     }
 
-    // Smart conditional polling fallback every 10 seconds (transfers ~100 bytes if digest unchanged) + 45s Firestore keepalive
+    // Fast conditional digest check every 3.5s when active (~100 bytes if unchanged) + 30s Firestore keepalive
     const pollInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (getIsInternetConnected()) {
         fetchStateFromServer();
       }
-    }, 10000);
+    }, 3500);
     const firestoreKeepAliveInterval = setInterval(() => {
       if (getIsInternetConnected()) {
         import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
       }
-    }, 45000);
+    }, 30000);
 
-    // Resilient SSE Realtime Connection with Auto-Reconnect
+    // Primary WebSocket (/api/ws) + Resilient SSE (/api/events) Fallback Realtime Engine
+    let wsClient: WebSocket | null = null;
+    let wsPingTimer: any = null;
+    let wsReconnectTimer: any = null;
+    let wsReconnectAttempts = 0;
     let eventSource: EventSource | null = null;
-    let reconnectTimeout: any = null;
+    let sseReconnectTimeout: any = null;
+    const recentEventDedupe = new Map<string, number>();
 
-    function connectSSE() {
-      if (!isMounted || !getIsInternetConnected()) return;
+    function handleRealtimePayload(data: any) {
       try {
-        if (eventSource) {
-          eventSource.close();
+        if (!data || typeof data !== 'object') return;
+        const evType = String(data.type || '');
+        if (evType === 'PONG' || evType === 'CONNECTED') {
+          const remoteDigest = data.payload?.digest;
+          if (remoteDigest && remoteDigest !== lastServerStateDigest) {
+            fetchStateFromServer();
+          }
+          return;
         }
-        eventSource = new EventSource('/api/events');
-        eventSource.onopen = () => {
-          // Connected to realtime database event stream
-        };
-        eventSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'STATE_SYNC_PULSE') {
-              const incomingDigest = data.payload?.digest;
-              if (data.payload?.reason === 'setoran_verified') {
-                fetchStateFromServer(true);
-              } else if (!incomingDigest || incomingDigest !== lastServerStateDigest) {
-                fetchStateFromServer();
-              }
-            } else if (data.type === 'STATE_UPDATED' || data.type === 'STATE_RESET') {
-              if (data.payload) {
-                hasHydratedRemoteState = true;
-                seedFirestoreSyncedHashesFromServer(data.payload, true);
-                globalState = mergeStates(globalState, data.payload);
-                scheduleLocalStoragePersist();
-                notifyListeners();
-              }
-            } else if (data.type === 'SETORAN_UPDATED') {
-              const dep = data.payload?.deposit as SetoranVerifikasi | undefined;
-              if (dep && dep.id) {
-                const delSet = new Set(globalState.deletedSetoranIds || []);
-                if (!delSet.has(dep.id)) {
-                  const existingIdx = (globalState.setoranList || []).findIndex((s) => s.id === dep.id);
-                  let nextSetoranList = [...(globalState.setoranList || [])];
-                  if (existingIdx >= 0) {
-                    const ex = nextSetoranList[existingIdx];
-                    const isExTerminal = ex.status === 'disetujui' || ex.status === 'ditolak';
-                    nextSetoranList[existingIdx] = {
-                      ...ex,
-                      ...dep,
-                      status: isExTerminal ? ex.status : dep.status,
-                      verifiedBy: ex.verifiedBy || dep.verifiedBy,
-                      verifiedAt: ex.verifiedAt || dep.verifiedAt,
-                      buktiTransferUrl: dep.buktiTransferUrl || ex.buktiTransferUrl,
-                    };
-                  } else {
-                    nextSetoranList = [dep, ...nextSetoranList];
-                  }
-                  const nextSedekahList =
-                    dep.jenis === 'sedekah' && (dep.status === 'disetujui' || dep.status === 'ditolak')
-                      ? (globalState.sedekahList || []).map((sdk) =>
-                          sdk.id === dep.id
-                            ? {
-                                ...sdk,
-                                status: (dep.status === 'disetujui' ? 'approved' : 'rejected') as any,
-                                verifiedBy: dep.verifiedBy || sdk.verifiedBy,
-                                verifiedAt: dep.verifiedAt || sdk.verifiedAt,
-                              }
-                            : sdk
-                        )
-                      : globalState.sedekahList;
-                  globalState = {
-                    ...globalState,
-                    setoranList: nextSetoranList,
-                    sedekahList: nextSedekahList,
-                  };
-                  scheduleLocalStoragePersist();
-                  notifyListeners();
-                }
-                if (dep.status === 'disetujui' || dep.status === 'ditolak') {
-                  dismissBrowserNotification(`hws-setoran-${dep.id}`);
-                }
-              }
-              window.dispatchEvent(new CustomEvent('hws:setoran_updated', { detail: data.payload }));
-              fetchStateFromServer(true);
-            } else if (
-              data.type === 'TRANSFER_COMPLETED' ||
-              data.type === 'SYSTEM_REPAIRED' ||
-              data.type === 'TRANSACTIONS_DELETED' ||
-              data.type === 'KAS_DELETED'
-            ) {
-              fetchStateFromServer();
-            } else if (data.type === 'MEMBER_REGISTERED') {
-              const regMem = data.payload?.member as MemberUser | undefined;
-              if (regMem && regMem.id) {
-                const delSet = new Set(globalState.deletedMemberIds || []);
-                if (!delSet.has(regMem.id)) {
-                  const cleanRegName = normalizeMemberName(regMem.nama);
-                  const cleanRegNik = normalizeNik(regMem.nik);
-                  const cleanRegHp = normalizePhoneIndonesia(regMem.whatsapp);
-                  const existing = globalState.members.find(
-                    (m) =>
-                      m.id === regMem.id ||
-                      (cleanRegName && normalizeMemberName(m.nama) === cleanRegName) ||
-                      (cleanRegNik && normalizeNik(m.nik) === cleanRegNik) ||
-                      (cleanRegHp && normalizePhoneIndonesia(m.whatsapp) === cleanRegHp)
-                  );
-                  if (!existing) {
-                    globalState = {
-                      ...globalState,
-                      members: deduplicateMembersClient(
-                        [...globalState.members, regMem],
-                        globalState.deletedMemberIds || []
-                      ),
-                      usedAccountNumbers: sanitizeUsedUnifiedNumbersClient(
-                        [...(globalState.usedAccountNumbers || []), regMem.nomorRekening].filter(Boolean),
-                        [...globalState.members, regMem]
-                      ),
-                      usedMemberNumbers: sanitizeUsedUnifiedNumbersClient(
-                        [...(globalState.usedMemberNumbers || []), regMem.nomorRekening || regMem.nomorAnggota].filter(Boolean),
-                        [...globalState.members, regMem]
-                      ),
-                    };
-                    scheduleLocalStoragePersist();
-                    notifyListeners();
-                  }
-                }
-              }
-              window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: data.payload }));
-              fetchStateFromServer();
-            } else if (data.type === 'NEW_CHAT_MESSAGE') {
-              const msg = data.payload;
-              const delChatSet = new Set<string>(globalState.deletedChatIds || []);
-              if (
-                msg &&
-                !isChatMessageClearedClient(msg, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember) &&
-                !globalState.chatMessages.find((m) => m.id === msg.id)
-              ) {
-                globalState = {
-                  ...globalState,
-                  chatMessages: [...globalState.chatMessages, msg],
-                };
-                scheduleLocalStoragePersist();
-                notifyListeners();
-              }
-            } else if (data.type === 'CHAT_DELETED') {
-              const delId = data.payload?.messageId;
-              if (delId) {
-                const delChatSet = new Set<string>([...(globalState.deletedChatIds || []), delId]);
-                globalState = {
-                  ...globalState,
-                  chatMessages: (globalState.chatMessages || []).filter((m) => m.id !== delId),
-                  deletedChatIds: Array.from(delChatSet),
-                };
-                scheduleLocalStoragePersist();
-                notifyListeners();
-              }
-            } else if (data.type === 'CHAT_CLEARED') {
-              const p = data.payload || {};
-              const clearedAt = p.clearedAt || new Date().toISOString();
-              if (p.clearAll) {
-                globalState = {
-                  ...globalState,
-                  chatMessages: [],
-                  chatClearedAt: maxIsoTsClient(globalState.chatClearedAt, clearedAt),
-                  chatClearedBeforeByMember: {},
-                };
-              } else if (p.memberId) {
-                const prevByMember = globalState.chatClearedBeforeByMember || {};
-                globalState = {
-                  ...globalState,
-                  chatMessages: (globalState.chatMessages || []).filter((m) => m.memberId !== p.memberId),
-                  chatClearedBeforeByMember: {
-                    ...prevByMember,
-                    [p.memberId]: maxIsoTsClient(prevByMember[p.memberId], clearedAt),
-                  },
-                };
-              }
-              scheduleLocalStoragePersist();
-              notifyListeners();
-            } else if (data.type === 'MEMBER_NOTIFICATION') {
-              const notif = data.payload;
-              if (notif) {
-                let activeSession: { type?: 'member' | 'admin'; id?: string } | null = null;
-                try {
-                  const rawSession = localStorage.getItem('koperasi_hws_active_session');
-                  if (rawSession) {
-                    activeSession = JSON.parse(rawSession);
-                  }
-                } catch {}
+        const dedupeKey = `${evType}:${data.timestamp || ''}:${data.payload?.deposit?.id || data.payload?.id || data.payload?.surat?.id || data.payload?.digest || ''}`;
+        const nowTs = Date.now();
+        if (recentEventDedupe.has(dedupeKey) && nowTs - (recentEventDedupe.get(dedupeKey) || 0) < 250) {
+          return;
+        }
+        recentEventDedupe.set(dedupeKey, nowTs);
+        if (recentEventDedupe.size > 100) {
+          for (const [k, ts] of recentEventDedupe.entries()) {
+            if (nowTs - ts > 5000) recentEventDedupe.delete(k);
+          }
+        }
 
-                // Hanya tampilkan notifikasi jika penerima sesuai dengan sesi pengguna yang sedang login
-                if (!activeSession || !activeSession.type || !activeSession.id) {
-                  return;
-                }
-                if (activeSession.type === 'admin') {
-                  const isTargetedToAdmin =
-                    notif.recipientId === activeSession.id || notif.recipientId === 'admin';
-                  if (!isTargetedToAdmin || notif.type === 'setoran_verified' || notif.data?.depositId) {
-                    return;
-                  }
-                } else if (activeSession.type === 'member') {
-                  if (notif.recipientId !== activeSession.id && notif.recipientId !== 'all') {
-                    return;
-                  }
-                }
-
-                if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru') {
-                  playNotificationSound('deposit');
-                } else {
-                  playNotificationSound('chat');
-                }
-                triggerBrowserNotification(notif.title || 'Notifikasi Koperasi HWS', notif.body || '');
-                window.dispatchEvent(new CustomEvent('hws:realtime_notification', { detail: notif }));
-              }
-            } else if (data.type === 'NEW_SURAT') {
-              playNotificationSound('chat');
-              const s = data.payload?.surat as SuratResmi | undefined;
-              const delSuratSet = new Set<string>(globalState.deletedSuratIds || []);
-              if (s && s.id && !isSuratDeletedClient(s, delSuratSet, globalState.suratResetAt)) {
-                if (!globalState.suratList.some((ex) => ex.id === s.id)) {
-                  globalState = {
-                    ...globalState,
-                    suratList: [s, ...(globalState.suratList || [])],
-                  };
-                  scheduleLocalStoragePersist();
-                  notifyListeners();
-                }
-              }
-              triggerBrowserNotification('📬 Surat Baru Koperasi HWS', s?.perihal || 'Ada surat masuk baru');
-              window.dispatchEvent(new CustomEvent('hws:new_surat', { detail: data.payload }));
-            } else if (data.type === 'SURAT_READ') {
-              const p = data.payload;
-              if (p && p.readerId) {
-                globalState = {
-                  ...globalState,
-                  suratList: (globalState.suratList || []).map((s) => {
-                    let shouldMark = false;
-                    if (p.markAll) {
-                      shouldMark = p.readerType === 'member' ? s.tujuanTipe === 'semua' || s.targetMemberId === p.readerId : true;
-                    } else if (Array.isArray(p.suratIds) && p.suratIds.length > 0) {
-                      shouldMark = p.suratIds.includes(s.id);
-                    } else if (p.suratId) {
-                      shouldMark = s.id === p.suratId;
-                    }
-                    if (!shouldMark) return s;
-                    const memberSet = new Set(s.readByMemberIds || []);
-                    const adminSet = new Set(s.readByAdminIds || []);
-                    if (p.readerType === 'member') memberSet.add(p.readerId);
-                    else adminSet.add(p.readerId);
-                    return { ...s, readByMemberIds: Array.from(memberSet), readByAdminIds: Array.from(adminSet) };
-                  }),
+        if (evType === 'STATE_SYNC_PULSE') {
+          const incomingDigest = data.payload?.digest;
+          if (data.payload?.reason === 'setoran_verified') {
+            fetchStateFromServer(true);
+          } else if (!incomingDigest || incomingDigest !== lastServerStateDigest) {
+            fetchStateFromServer();
+          }
+        } else if (evType === 'STATE_UPDATED' || evType === 'STATE_RESET') {
+          if (data.payload) {
+            hasHydratedRemoteState = true;
+            seedFirestoreSyncedHashesFromServer(data.payload, true);
+            globalState = mergeStates(globalState, data.payload);
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
+        } else if (evType === 'SETORAN_UPDATED') {
+          const dep = data.payload?.deposit as SetoranVerifikasi | undefined;
+          if (dep && dep.id) {
+            const delSet = new Set(globalState.deletedSetoranIds || []);
+            if (!delSet.has(dep.id)) {
+              const existingIdx = (globalState.setoranList || []).findIndex((s) => s.id === dep.id);
+              let nextSetoranList = [...(globalState.setoranList || [])];
+              if (existingIdx >= 0) {
+                const ex = nextSetoranList[existingIdx];
+                const isExTerminal = ex.status === 'disetujui' || ex.status === 'ditolak';
+                nextSetoranList[existingIdx] = {
+                  ...ex,
+                  ...dep,
+                  status: isExTerminal ? ex.status : dep.status,
+                  verifiedBy: ex.verifiedBy || dep.verifiedBy,
+                  verifiedAt: ex.verifiedAt || dep.verifiedAt,
+                  buktiTransferUrl: dep.buktiTransferUrl || ex.buktiTransferUrl,
                 };
-                scheduleLocalStoragePersist();
-                notifyListeners();
+              } else {
+                nextSetoranList = [dep, ...nextSetoranList];
               }
-            } else if (data.type === 'SURAT_DELETED') {
-              const delId = data.payload?.suratId;
-              if (delId) {
-                const delSuratSet = new Set<string>([...(globalState.deletedSuratIds || []), delId]);
-                globalState = {
-                  ...globalState,
-                  suratList: (globalState.suratList || []).filter((s) => s.id !== delId),
-                  deletedSuratIds: Array.from(delSuratSet),
-                };
-                scheduleLocalStoragePersist();
-                notifyListeners();
-              }
-            } else if (data.type === 'SURAT_RESET') {
-              const resetAt = data.payload?.resetAt || new Date().toISOString();
+              const nextSedekahList =
+                dep.jenis === 'sedekah' && (dep.status === 'disetujui' || dep.status === 'ditolak')
+                  ? (globalState.sedekahList || []).map((sdk) =>
+                      sdk.id === dep.id
+                        ? {
+                            ...sdk,
+                            status: (dep.status === 'disetujui' ? 'approved' : 'rejected') as any,
+                            verifiedBy: dep.verifiedBy || sdk.verifiedBy,
+                            verifiedAt: dep.verifiedAt || sdk.verifiedAt,
+                          }
+                        : sdk
+                    )
+                  : globalState.sedekahList;
               globalState = {
                 ...globalState,
-                suratList: [],
-                suratResetAt: maxIsoTsClient(globalState.suratResetAt, resetAt),
+                setoranList: nextSetoranList,
+                sedekahList: nextSedekahList,
               };
               scheduleLocalStoragePersist();
               notifyListeners();
-            } else if (data.type === 'CHAT_READ') {
-              const p = data.payload;
-              if (p) {
+            }
+            if (dep.status === 'disetujui' || dep.status === 'ditolak') {
+              dismissBrowserNotification(`hws-setoran-${dep.id}`);
+            }
+          }
+          window.dispatchEvent(new CustomEvent('hws:setoran_updated', { detail: data.payload }));
+          fetchStateFromServer(true);
+        } else if (
+          evType === 'TRANSFER_COMPLETED' ||
+          evType === 'SYSTEM_REPAIRED' ||
+          evType === 'TRANSACTIONS_DELETED' ||
+          evType === 'KAS_DELETED'
+        ) {
+          fetchStateFromServer();
+        } else if (evType === 'MEMBER_REGISTERED') {
+          const regMem = data.payload?.member as MemberUser | undefined;
+          if (regMem && regMem.id) {
+            const delSet = new Set(globalState.deletedMemberIds || []);
+            if (!delSet.has(regMem.id)) {
+              const cleanRegName = normalizeMemberName(regMem.nama);
+              const cleanRegNik = normalizeNik(regMem.nik);
+              const cleanRegHp = normalizePhoneIndonesia(regMem.whatsapp);
+              const existing = globalState.members.find(
+                (m) =>
+                  m.id === regMem.id ||
+                  (cleanRegName && normalizeMemberName(m.nama) === cleanRegName) ||
+                  (cleanRegNik && normalizeNik(m.nik) === cleanRegNik) ||
+                  (cleanRegHp && normalizePhoneIndonesia(m.whatsapp) === cleanRegHp)
+              );
+              if (!existing) {
                 globalState = {
                   ...globalState,
-                  chatMessages: globalState.chatMessages.map((m) => {
-                    const matches = p.markAll ? true : p.memberId ? m.memberId === p.memberId : false;
-                    if (matches) {
-                      return {
-                        ...m,
-                        isReadByAdmin: p.readBy === 'admin' ? true : m.isReadByAdmin,
-                        isReadByMember: p.readBy === 'member' ? true : m.isReadByMember,
-                      };
-                    }
-                    return m;
-                  }),
+                  members: deduplicateMembersClient(
+                    [...globalState.members, regMem],
+                    globalState.deletedMemberIds || []
+                  ),
+                  usedAccountNumbers: sanitizeUsedUnifiedNumbersClient(
+                    [...(globalState.usedAccountNumbers || []), regMem.nomorRekening].filter(Boolean),
+                    [...globalState.members, regMem]
+                  ),
+                  usedMemberNumbers: sanitizeUsedUnifiedNumbersClient(
+                    [...(globalState.usedMemberNumbers || []), regMem.nomorRekening || regMem.nomorAnggota].filter(Boolean),
+                    [...globalState.members, regMem]
+                  ),
                 };
                 scheduleLocalStoragePersist();
                 notifyListeners();
               }
             }
-          } catch (e) {
-            console.error('Error handling SSE event', e);
           }
+          window.dispatchEvent(new CustomEvent('hws:member_registered', { detail: data.payload }));
+          fetchStateFromServer();
+        } else if (evType === 'NEW_CHAT_MESSAGE') {
+          const msg = data.payload;
+          const delChatSet = new Set<string>(globalState.deletedChatIds || []);
+          if (
+            msg &&
+            !isChatMessageClearedClient(msg, delChatSet, globalState.chatClearedAt, globalState.chatClearedBeforeByMember) &&
+            !globalState.chatMessages.find((m) => m.id === msg.id)
+          ) {
+            globalState = {
+              ...globalState,
+              chatMessages: [...globalState.chatMessages, msg],
+            };
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
+        } else if (evType === 'CHAT_DELETED') {
+          const delId = data.payload?.messageId;
+          if (delId) {
+            const delChatSet = new Set<string>([...(globalState.deletedChatIds || []), delId]);
+            globalState = {
+              ...globalState,
+              chatMessages: (globalState.chatMessages || []).filter((m) => m.id !== delId),
+              deletedChatIds: Array.from(delChatSet),
+            };
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
+        } else if (evType === 'CHAT_CLEARED') {
+          const p = data.payload || {};
+          const clearedAt = p.clearedAt || new Date().toISOString();
+          if (p.clearAll) {
+            globalState = {
+              ...globalState,
+              chatMessages: [],
+              chatClearedAt: maxIsoTsClient(globalState.chatClearedAt, clearedAt),
+              chatClearedBeforeByMember: {},
+            };
+          } else if (p.memberId) {
+            const prevByMember = globalState.chatClearedBeforeByMember || {};
+            globalState = {
+              ...globalState,
+              chatMessages: (globalState.chatMessages || []).filter((m) => m.memberId !== p.memberId),
+              chatClearedBeforeByMember: {
+                ...prevByMember,
+                [p.memberId]: maxIsoTsClient(prevByMember[p.memberId], clearedAt),
+              },
+            };
+          }
+          scheduleLocalStoragePersist();
+          notifyListeners();
+        } else if (evType === 'MEMBER_NOTIFICATION') {
+          const notif = data.payload;
+          if (notif) {
+            let activeSession: { type?: 'member' | 'admin'; id?: string } | null = null;
+            try {
+              const rawSession = localStorage.getItem('koperasi_hws_active_session');
+              if (rawSession) {
+                activeSession = JSON.parse(rawSession);
+              }
+            } catch {}
+
+            if (!activeSession || !activeSession.type || !activeSession.id) {
+              return;
+            }
+            if (activeSession.type === 'admin') {
+              const isTargetedToAdmin =
+                notif.recipientId === activeSession.id || notif.recipientId === 'admin';
+              if (!isTargetedToAdmin || notif.type === 'setoran_verified' || notif.data?.depositId) {
+                return;
+              }
+            } else if (activeSession.type === 'member') {
+              if (notif.recipientId !== activeSession.id && notif.recipientId !== 'all') {
+                return;
+              }
+            }
+
+            if (notif.type === 'setoran_verified' || notif.type === 'mutasi_baru') {
+              playNotificationSound('deposit');
+            } else {
+              playNotificationSound('chat');
+            }
+            triggerBrowserNotification(notif.title || 'Notifikasi Koperasi HWS', notif.body || '');
+            window.dispatchEvent(new CustomEvent('hws:realtime_notification', { detail: notif }));
+          }
+        } else if (evType === 'NEW_SURAT') {
+          playNotificationSound('chat');
+          const s = data.payload?.surat as SuratResmi | undefined;
+          const delSuratSet = new Set<string>(globalState.deletedSuratIds || []);
+          if (s && s.id && !isSuratDeletedClient(s, delSuratSet, globalState.suratResetAt)) {
+            if (!globalState.suratList.some((ex) => ex.id === s.id)) {
+              globalState = {
+                ...globalState,
+                suratList: [s, ...(globalState.suratList || [])],
+              };
+              scheduleLocalStoragePersist();
+              notifyListeners();
+            }
+          }
+          triggerBrowserNotification('📬 Surat Baru Koperasi HWS', s?.perihal || 'Ada surat masuk baru');
+          window.dispatchEvent(new CustomEvent('hws:new_surat', { detail: data.payload }));
+        } else if (evType === 'SURAT_READ') {
+          const p = data.payload;
+          if (p && p.readerId) {
+            globalState = {
+              ...globalState,
+              suratList: (globalState.suratList || []).map((s) => {
+                let shouldMark = false;
+                if (p.markAll) {
+                  shouldMark = p.readerType === 'member' ? s.tujuanTipe === 'semua' || s.targetMemberId === p.readerId : true;
+                } else if (Array.isArray(p.suratIds) && p.suratIds.length > 0) {
+                  shouldMark = p.suratIds.includes(s.id);
+                } else if (p.suratId) {
+                  shouldMark = s.id === p.suratId;
+                }
+                if (!shouldMark) return s;
+                const memberSet = new Set(s.readByMemberIds || []);
+                const adminSet = new Set(s.readByAdminIds || []);
+                if (p.readerType === 'member') memberSet.add(p.readerId);
+                else adminSet.add(p.readerId);
+                return { ...s, readByMemberIds: Array.from(memberSet), readByAdminIds: Array.from(adminSet) };
+              }),
+            };
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
+        } else if (evType === 'SURAT_DELETED') {
+          const delId = data.payload?.suratId;
+          if (delId) {
+            const delSuratSet = new Set<string>([...(globalState.deletedSuratIds || []), delId]);
+            globalState = {
+              ...globalState,
+              suratList: (globalState.suratList || []).filter((s) => s.id !== delId),
+              deletedSuratIds: Array.from(delSuratSet),
+            };
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
+        } else if (evType === 'SURAT_RESET') {
+          const resetAt = data.payload?.resetAt || new Date().toISOString();
+          globalState = {
+            ...globalState,
+            suratList: [],
+            suratResetAt: maxIsoTsClient(globalState.suratResetAt, resetAt),
+          };
+          scheduleLocalStoragePersist();
+          notifyListeners();
+        } else if (evType === 'CHAT_READ') {
+          const p = data.payload;
+          if (p) {
+            globalState = {
+              ...globalState,
+              chatMessages: globalState.chatMessages.map((m) => {
+                const matches = p.markAll ? true : p.memberId ? m.memberId === p.memberId : false;
+                if (matches) {
+                  return {
+                    ...m,
+                    isReadByAdmin: p.readBy === 'admin' ? true : m.isReadByAdmin,
+                    isReadByMember: p.readBy === 'member' ? true : m.isReadByMember,
+                  };
+                }
+                return m;
+              }),
+            };
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
+        }
+      } catch (e) {
+        console.error('Error handling realtime event', e);
+      }
+    }
+
+    function connectSSE() {
+      if (!isMounted || !getIsInternetConnected()) return;
+      if (wsClient && wsClient.readyState === WebSocket.OPEN) return;
+      try {
+        if (eventSource) {
+          eventSource.close();
+        }
+        eventSource = new EventSource('/api/events');
+        eventSource.onmessage = (event) => {
+          try {
+            handleRealtimePayload(JSON.parse(event.data));
+          } catch {}
         };
         eventSource.onerror = () => {
           if (eventSource) {
             eventSource.close();
             eventSource = null;
           }
-          if (isMounted && getIsInternetConnected()) {
-            clearTimeout(reconnectTimeout);
-            reconnectTimeout = setTimeout(connectSSE, 3000);
+          if (isMounted && getIsInternetConnected() && (!wsClient || wsClient.readyState !== WebSocket.OPEN)) {
+            clearTimeout(sseReconnectTimeout);
+            sseReconnectTimeout = setTimeout(connectSSE, 1500);
           }
         };
-      } catch (err) {
-        if (isMounted && getIsInternetConnected()) {
-          clearTimeout(reconnectTimeout);
-          reconnectTimeout = setTimeout(connectSSE, 3000);
+      } catch {
+        if (isMounted && getIsInternetConnected() && (!wsClient || wsClient.readyState !== WebSocket.OPEN)) {
+          clearTimeout(sseReconnectTimeout);
+          sseReconnectTimeout = setTimeout(connectSSE, 1500);
         }
       }
     }
 
-    connectSSE();
+    function connectWebSocket() {
+      if (!isMounted || !getIsInternetConnected() || typeof window === 'undefined' || typeof WebSocket === 'undefined') {
+        connectSSE();
+        return;
+      }
+      if (wsClient && (wsClient.readyState === WebSocket.OPEN || wsClient.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+      try {
+        clearTimeout(wsReconnectTimer);
+        clearInterval(wsPingTimer);
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/api/ws`;
+        const socket = new WebSocket(wsUrl);
+        wsClient = socket;
 
-    // 3. Sharded Realtime Cloud Firestore Listeners
+        socket.onopen = () => {
+          if (wsClient !== socket) return;
+          wsReconnectAttempts = 0;
+          // Close SSE fallback once bidirectional WebSocket is active to eliminate duplicate socket overhead
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+          }
+          clearTimeout(sseReconnectTimeout);
+          clearInterval(wsPingTimer);
+          wsPingTimer = setInterval(() => {
+            if (socket.readyState === WebSocket.OPEN) {
+              try {
+                socket.send(JSON.stringify({ type: 'PING' }));
+              } catch {}
+            }
+          }, 15000);
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            handleRealtimePayload(JSON.parse(String(event.data)));
+          } catch {}
+        };
+
+        const scheduleWsReconnect = () => {
+          if (wsClient === socket) wsClient = null;
+          clearInterval(wsPingTimer);
+          if (!isMounted || !getIsInternetConnected()) return;
+          // Engage SSE immediately as zero-gap fallback while WebSocket reconnects
+          connectSSE();
+          wsReconnectAttempts = Math.min(wsReconnectAttempts + 1, 5);
+          const delay = Math.min(500 * wsReconnectAttempts, 2500);
+          clearTimeout(wsReconnectTimer);
+          wsReconnectTimer = setTimeout(connectWebSocket, delay);
+        };
+
+        socket.onerror = () => {
+          try { socket.close(); } catch {}
+        };
+        socket.onclose = scheduleWsReconnect;
+      } catch {
+        connectSSE();
+      }
+    }
+
+    connectWebSocket();
+
+    // 3. Sharded Realtime Cloud Firestore Listeners (with O(1) hash echo-skip & 16ms crisp notification)
     const firestoreUnsubscribers: (() => void)[] = [];
     const confirmedRemoteIds: Record<string, Set<string>> = {
       members: new Set(),
@@ -4342,6 +4490,22 @@ export function useKoperasiState() {
       return removed;
     };
 
+    const hasRealSnapshotDelta = (colPrefix: string, snapshot: any, removedIds: string[]): boolean => {
+      if (removedIds.length > 0 || !hasHydratedRemoteState) return true;
+      const changes = typeof snapshot?.docChanges === 'function' ? snapshot.docChanges() : [];
+      if (changes.length === 0) return false;
+      for (const change of changes) {
+        if (change.type === 'removed') return true;
+        const docId = change.doc?.id;
+        if (!docId) continue;
+        const cleanDoc = sanitizeForFirestore({ ...(change.doc.data() || {}) });
+        if (lastWrittenMap.get(`${colPrefix}/${docId}`) !== JSON.stringify(cleanDoc)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     try {
       import('./firebase').then(({ db }) => {
         import('firebase/firestore').then(({ collection, doc, onSnapshot, query, orderBy, limit }) => {
@@ -4363,12 +4527,13 @@ export function useKoperasiState() {
           );
           firestoreUnsubscribers.push(unsubMainPulse);
 
-          // A. Members Collection (Debounced UI sync, strictly skip legacy -dup- artifacts, propagates remote deletions)
+          // A. Members Collection
           const unsubMembers = onSnapshot(
             collection(db, 'members'),
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('members', snapshot);
               if (snapshot.empty && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('members', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delSet = new Set([...(globalState.deletedMemberIds || []), ...removedIds]);
               const remoteMembers = snapshot.docs
@@ -4383,18 +4548,19 @@ export function useKoperasiState() {
                 },
                 { ...globalState, members: remoteMembers, deletedMemberIds: Array.from(delSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'members')
           );
           firestoreUnsubscribers.push(unsubMembers);
 
-          // B. Setoran Collection (Propagates remote approvals/rejections/deletions across all Admin & Member devices)
+          // B. Setoran Collection
           const unsubSetoran = onSnapshot(
             collection(db, 'setoran'),
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('setoran', snapshot);
               if (snapshot.empty && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('setoran', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delSet = new Set([...(globalState.deletedSetoranIds || []), ...removedIds]);
               const remoteSetoran = snapshot.docs
@@ -4409,7 +4575,7 @@ export function useKoperasiState() {
                 },
                 { ...globalState, setoranList: remoteSetoran, deletedSetoranIds: Array.from(delSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'setoran')
           );
@@ -4421,6 +4587,7 @@ export function useKoperasiState() {
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('kas', snapshot);
               if (snapshot.empty && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('kas', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delSet = new Set([...(globalState.deletedKasIds || []), ...removedIds]);
               const remoteKas = snapshot.docs
@@ -4435,7 +4602,7 @@ export function useKoperasiState() {
                 },
                 { ...globalState, kasList: remoteKas, deletedKasIds: Array.from(delSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'kas')
           );
@@ -4447,6 +4614,7 @@ export function useKoperasiState() {
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('transactions', snapshot);
               if (snapshot.empty && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('transactions', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delSet = new Set([...(globalState.deletedTransactionIds || []), ...removedIds]);
               const remoteTx = snapshot.docs
@@ -4461,18 +4629,19 @@ export function useKoperasiState() {
                 },
                 { ...globalState, memberTransactions: remoteTx, deletedTransactionIds: Array.from(delSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'transactions')
           );
           firestoreUnsubscribers.push(unsubTx);
 
-          // E. Chats Collection (Propagates remote deletes & clears too!)
+          // E. Chats Collection
           const unsubChats = onSnapshot(
             collection(db, 'chats'),
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('chats', snapshot);
               if (snapshot.empty && snapshot.metadata.fromCache && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('chats', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delChatSet = new Set<string>([...(globalState.deletedChatIds || []), ...removedIds]);
               const remoteChats = snapshot.docs
@@ -4495,13 +4664,13 @@ export function useKoperasiState() {
                 },
                 { ...globalState, chatMessages: remoteChats, deletedChatIds: Array.from(delChatSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'chats')
           );
           firestoreUnsubscribers.push(unsubChats);
 
-          // F. Settings / General Document
+          // F. Settings / General Document (includes pendingMutasiRequests)
           const unsubGeneral = onSnapshot(
             doc(db, 'settings', 'general'),
             (snap) => {
@@ -4523,6 +4692,7 @@ export function useKoperasiState() {
                     pengaturanBerbagi: data.pengaturanBerbagi || globalState.pengaturanBerbagi,
                     sedekahList: data.sedekahList || globalState.sedekahList,
                     penyaluranList: data.penyaluranList || globalState.penyaluranList,
+                    pendingMutasiRequests: data.pendingMutasiRequests || globalState.pendingMutasiRequests,
                     maintenanceLock: data.maintenanceLock || globalState.maintenanceLock,
                     accountNumberSchemaVersion: data.accountNumberSchemaVersion || globalState.accountNumberSchemaVersion || 2,
                     lastRunningNumber: data.lastRunningNumber || globalState.lastRunningNumber,
@@ -4550,7 +4720,7 @@ export function useKoperasiState() {
                       ...globalState,
                       ...generalSnapshotState,
                     });
-                    scheduleDebouncedNotify(80, false);
+                    scheduleDebouncedNotify(16, false);
                   }
                 }
               }
@@ -4578,7 +4748,7 @@ export function useKoperasiState() {
                     ...globalState,
                     ...admSlice,
                   });
-                  scheduleDebouncedNotify(80, false);
+                  scheduleDebouncedNotify(16, false);
                 }
               }
             },
@@ -4591,6 +4761,7 @@ export function useKoperasiState() {
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('admins', snapshot);
               if (snapshot.empty && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('admins', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delAdmSet = new Set([...((globalState as any).deletedAdminIds || []), ...removedIds]);
               const remoteAdmins = snapshot.docs
@@ -4606,7 +4777,7 @@ export function useKoperasiState() {
                   } as any,
                   { ...globalState, admins: remoteAdmins, deletedAdminIds: Array.from(delAdmSet) } as any
                 );
-                scheduleDebouncedNotify(80, false);
+                scheduleDebouncedNotify(16, false);
               }
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'admins')
@@ -4619,6 +4790,7 @@ export function useKoperasiState() {
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('sedekah', snapshot);
               if (snapshot.empty && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('sedekah', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delSet = new Set([...(globalState.deletedSetoranIds || []), ...removedIds]);
               const remoteSedekah = snapshot.docs
@@ -4633,7 +4805,7 @@ export function useKoperasiState() {
                 },
                 { ...globalState, sedekahList: remoteSedekah, deletedSetoranIds: Array.from(delSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'sedekah')
           );
@@ -4659,18 +4831,19 @@ export function useKoperasiState() {
                 };
               });
               globalState = mergeStates(globalState, { ...globalState, auditLogs: remoteLogs });
-              scheduleDebouncedNotify(100, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'logs')
           );
           firestoreUnsubscribers.push(unsubLogs);
 
-          // J. Realtime Surat Menyurat Collection (Propagates remote deletes & resets too!)
+          // J. Realtime Surat Menyurat Collection
           const unsubSurat = onSnapshot(
             collection(db, 'surat'),
             (snapshot) => {
               const removedIds = getRemovedConfirmedIds('surat', snapshot);
               if (snapshot.empty && snapshot.metadata.fromCache && removedIds.length === 0) return;
+              if (!hasRealSnapshotDelta('surat', snapshot, removedIds)) return;
               hasHydratedRemoteState = true;
               const delSuratSet = new Set<string>([...(globalState.deletedSuratIds || []), ...removedIds]);
               const remoteSurat = snapshot.docs
@@ -4693,7 +4866,7 @@ export function useKoperasiState() {
                 },
                 { ...globalState, suratList: remoteSurat, deletedSuratIds: Array.from(delSuratSet) }
               );
-              scheduleDebouncedNotify(80, false);
+              scheduleDebouncedNotify(16, false);
             },
             (err) => handleFirestoreError(err, OperationType.LIST, 'surat')
           );
@@ -4707,8 +4880,17 @@ export function useKoperasiState() {
       listeners.delete(handler);
       clearInterval(pollInterval);
       clearInterval(firestoreKeepAliveInterval);
-      clearTimeout(reconnectTimeout);
-      if (eventSource) eventSource.close();
+      clearInterval(wsPingTimer);
+      clearTimeout(wsReconnectTimer);
+      clearTimeout(sseReconnectTimeout);
+      if (wsClient) {
+        try { wsClient.close(); } catch {}
+        wsClient = null;
+      }
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
       firestoreUnsubscribers.forEach((unsub) => {
         try { unsub(); } catch {}
       });
@@ -4717,6 +4899,7 @@ export function useKoperasiState() {
         window.removeEventListener('online', handleNetworkRestored);
         window.removeEventListener('focus', handleDeviceResume);
         window.removeEventListener('pageshow', handleDeviceResume);
+        window.removeEventListener('pagehide', handlePageHide);
         window.removeEventListener('hws:network_restored', handleNetworkRestored);
         window.removeEventListener('hws:firestore_stream_recovered', handleDeviceResume);
       }

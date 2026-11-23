@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import { WebSocketServer, WebSocket } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1207,8 +1208,9 @@ function mergeServerState(current: any, incoming: any): any {
   return reconcileBalancesWithDeposits(mergedStateObj).state;
 }
 
-// SSE (Server-Sent Events) clients for instant cross-device realtime sync (Declared before saveDatabase to prevent ReferenceError)
+// SSE & WebSocket clients for instant cross-device realtime sync (Declared before saveDatabase to prevent ReferenceError)
 const sseClients = new Set<Response>();
+const wsClients = new Set<WebSocket>();
 
 // Connected Devices & Online Users Presence Store (Req 1 & 19)
 interface ConnectedDevicePresence {
@@ -1315,13 +1317,30 @@ function rebuildStateHttpCache(state: any) {
 }
 
 function broadcastEvent(type: string, payload: any) {
-  if (!sseClients || sseClients.size === 0) return;
+  const hasSse = sseClients && sseClients.size > 0;
+  const hasWs = wsClients && wsClients.size > 0;
+  if (!hasSse && !hasWs) return;
   const data = JSON.stringify({ type, payload, timestamp: new Date().toISOString() });
-  for (const client of sseClients) {
-    try {
-      client.write(`data: ${data}\n\n`);
-    } catch {
-      sseClients.delete(client);
+  if (hasSse) {
+    for (const client of sseClients) {
+      try {
+        client.write(`data: ${data}\n\n`);
+      } catch {
+        sseClients.delete(client);
+      }
+    }
+  }
+  if (hasWs) {
+    for (const wsClient of wsClients) {
+      try {
+        if (wsClient.readyState === WebSocket.OPEN) {
+          wsClient.send(data);
+        } else if (wsClient.readyState === WebSocket.CLOSED || wsClient.readyState === WebSocket.CLOSING) {
+          wsClients.delete(wsClient);
+        }
+      } catch {
+        wsClients.delete(wsClient);
+      }
     }
   }
 }
@@ -2322,13 +2341,330 @@ async function initServerFirestoreRealtimeWatchers() {
     const fsCtx = await ensureServerFirestore();
     if (!fsCtx) return;
     serverFirestoreWatchersInitialized = true;
-    const { db, doc, collection, onSnapshot } = fsCtx;
+    const { db, doc, collection, onSnapshot, query, orderBy, limit } = fsCtx;
 
-    const triggerDebouncedPull = () => {
+    const triggerDebouncedPull = (delay = 600) => {
       if (serverFirestorePullTimer) clearTimeout(serverFirestorePullTimer);
       serverFirestorePullTimer = setTimeout(() => {
         pullFromFirestoreServer().catch(() => {});
-      }, 250);
+      }, delay);
+    };
+
+    const applyDeltaCollection = (colName: string, snapshot: any) => {
+      try {
+        const changes = typeof snapshot?.docChanges === 'function' ? snapshot.docChanges() : [];
+        if (changes.length === 0) return;
+
+        const isServerAuthoritativeSnapshot = !snapshot.metadata?.fromCache && !snapshot.metadata?.hasPendingWrites;
+        let hasActualMutation = false;
+        let needsFinancialReconcile = false;
+        let membersMutated = false;
+        const broadcastQueue: Array<{ type: string; payload: any }> = [];
+
+        const delMemSet = new Set<string>(currentState.deletedMemberIds || []);
+        const delAdminSet = new Set<string>(currentState.deletedAdminIds || []);
+        const delSetoranSet = new Set<string>(currentState.deletedSetoranIds || []);
+        const delKasSet = new Set<string>(currentState.deletedKasIds || []);
+        const delTxSet = new Set<string>(currentState.deletedTransactionIds || []);
+        const delChatSet = new Set<string>(currentState.deletedChatIds || []);
+        const delSuratSet = new Set<string>(currentState.deletedSuratIds || []);
+
+        const upsertById = (arr: any[], item: any) => {
+          const idx = arr.findIndex((x: any) => x && x.id === item.id);
+          if (idx >= 0) {
+            arr[idx] = item;
+          } else {
+            arr.unshift(item);
+          }
+        };
+
+        for (const change of changes) {
+          const docId = change.doc?.id;
+          if (!docId) continue;
+          const rawData = change.doc.data();
+
+          if (change.type === 'removed') {
+            if (!isServerAuthoritativeSnapshot) continue;
+            if (colName === 'members') {
+              if (!delMemSet.has(docId) && (currentState.members || []).some((m: any) => m.id === docId)) {
+                delMemSet.add(docId);
+                currentState.members = (currentState.members || []).filter((m: any) => m.id !== docId);
+                serverFirestoreHashMap.set(`deleted_members/${docId}`, '1');
+                serverFirestoreHashMap.delete(`members/${docId}`);
+                hasActualMutation = true;
+                needsFinancialReconcile = true;
+              }
+            } else if (colName === 'admins') {
+              if (!delAdminSet.has(docId) && (currentState.admins || []).some((a: any) => a.id === docId)) {
+                delAdminSet.add(docId);
+                currentState.admins = (currentState.admins || []).filter((a: any) => a.id !== docId);
+                serverFirestoreHashMap.set(`deleted_admins/${docId}`, '1');
+                serverFirestoreHashMap.delete(`admins/${docId}`);
+                hasActualMutation = true;
+              }
+            } else if (colName === 'setoran') {
+              if (!delSetoranSet.has(docId) && (currentState.setoranList || []).some((s: any) => s.id === docId)) {
+                delSetoranSet.add(docId);
+                currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== docId);
+                serverFirestoreHashMap.set(`deleted_setoran/${docId}`, '1');
+                serverFirestoreHashMap.delete(`setoran/${docId}`);
+                hasActualMutation = true;
+                needsFinancialReconcile = true;
+              }
+            } else if (colName === 'kas') {
+              if (!delKasSet.has(docId) && (currentState.kasList || []).some((k: any) => k.id === docId)) {
+                delKasSet.add(docId);
+                currentState.kasList = (currentState.kasList || []).filter((k: any) => k.id !== docId);
+                serverFirestoreHashMap.set(`deleted_kas/${docId}`, '1');
+                serverFirestoreHashMap.delete(`kas/${docId}`);
+                hasActualMutation = true;
+                needsFinancialReconcile = true;
+              }
+            } else if (colName === 'transactions') {
+              if (!delTxSet.has(docId) && (currentState.memberTransactions || []).some((t: any) => t.id === docId)) {
+                delTxSet.add(docId);
+                currentState.memberTransactions = (currentState.memberTransactions || []).filter((t: any) => t.id !== docId);
+                serverFirestoreHashMap.set(`deleted_tx/${docId}`, '1');
+                serverFirestoreHashMap.delete(`transactions/${docId}`);
+                hasActualMutation = true;
+                needsFinancialReconcile = true;
+              }
+            } else if (colName === 'sedekah') {
+              if ((currentState.sedekahList || []).some((s: any) => s.id === docId)) {
+                currentState.sedekahList = (currentState.sedekahList || []).filter((s: any) => s.id !== docId);
+                serverFirestoreHashMap.delete(`sedekah/${docId}`);
+                hasActualMutation = true;
+                needsFinancialReconcile = true;
+              }
+            } else if (colName === 'chats') {
+              if (!delChatSet.has(docId) && (currentState.chatMessages || []).some((c: any) => c.id === docId)) {
+                delChatSet.add(docId);
+                currentState.chatMessages = (currentState.chatMessages || []).filter((c: any) => c.id !== docId);
+                serverFirestoreHashMap.set(`deleted_chats/${docId}`, '1');
+                serverFirestoreHashMap.delete(`chats/${docId}`);
+                hasActualMutation = true;
+                broadcastQueue.push({ type: 'CHAT_DELETED', payload: { messageId: docId } });
+              }
+            } else if (colName === 'surat') {
+              if (!delSuratSet.has(docId) && (currentState.suratList || []).some((sr: any) => sr.id === docId)) {
+                delSuratSet.add(docId);
+                currentState.suratList = (currentState.suratList || []).filter((sr: any) => sr.id !== docId);
+                serverFirestoreHashMap.set(`deleted_surat/${docId}`, '1');
+                serverFirestoreHashMap.delete(`surat/${docId}`);
+                hasActualMutation = true;
+                broadcastQueue.push({ type: 'SURAT_DELETED', payload: { suratId: docId } });
+              }
+            }
+            continue;
+          }
+
+          if (!rawData || typeof rawData !== 'object') continue;
+          const cleanDoc = sanitizeServerDocForFirestore({ ...rawData });
+          if (colName === 'members' || colName === 'admins') {
+            delete cleanDoc.biometricActive;
+          }
+          const hashKey = `${colName}/${docId}`;
+          const cleanStr = JSON.stringify(cleanDoc);
+          if (serverFirestoreHashMap.get(hashKey) === cleanStr) {
+            continue; // Echo of our own write or already identical
+          }
+
+          if (colName === 'members') {
+            const mId = cleanDoc.id || docId;
+            if (!mId || String(mId).includes('-dup-') || delMemSet.has(mId)) continue;
+            currentState.members = currentState.members || [];
+            const ex = currentState.members.find((m: any) => m.id === mId);
+            const mergedMem = ex
+              ? {
+                  ...ex,
+                  ...cleanDoc,
+                  fotoProfilUrl: cleanDoc.fotoProfilUrl || ex.fotoProfilUrl,
+                  dokumenKtpUrl: cleanDoc.dokumenKtpUrl || ex.dokumenKtpUrl,
+                }
+              : cleanDoc;
+            upsertById(currentState.members, mergedMem);
+            serverFirestoreHashMap.set(`members/${mId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedMem)));
+            hasActualMutation = true;
+            membersMutated = true;
+            needsFinancialReconcile = true;
+          } else if (colName === 'admins') {
+            const aId = cleanDoc.id || docId;
+            if (!aId || delAdminSet.has(aId)) continue;
+            currentState.admins = currentState.admins || [];
+            const ex = currentState.admins.find((a: any) => a.id === aId);
+            const keepName = ex && ex.nama && ex.nama !== 'Abzqar' && cleanDoc.nama === 'Abzqar';
+            const mergedAdm = ex
+              ? {
+                  ...ex,
+                  ...cleanDoc,
+                  nama: keepName ? ex.nama : (cleanDoc.nama || ex.nama),
+                  password: cleanDoc.password || ex.password,
+                }
+              : cleanDoc;
+            upsertById(currentState.admins, mergedAdm);
+            serverFirestoreHashMap.set(`admins/${aId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedAdm)));
+            hasActualMutation = true;
+          } else if (colName === 'setoran') {
+            const sId = cleanDoc.id || docId;
+            if (!sId || delSetoranSet.has(sId)) continue;
+            currentState.setoranList = currentState.setoranList || [];
+            const ex = currentState.setoranList.find((s: any) => s.id === sId);
+            const isExTerminal = ex && (ex.status === 'disetujui' || ex.status === 'ditolak');
+            const finalStatus = isExTerminal ? ex.status : (cleanDoc.status || ex?.status || 'pending');
+            const mergedSet = ex
+              ? {
+                  ...ex,
+                  ...cleanDoc,
+                  status: finalStatus,
+                  verifiedBy: ex.verifiedBy || cleanDoc.verifiedBy,
+                  verifiedAt: ex.verifiedAt || cleanDoc.verifiedAt,
+                  buktiTransferUrl: cleanDoc.buktiTransferUrl || ex.buktiTransferUrl,
+                }
+              : cleanDoc;
+            upsertById(currentState.setoranList, mergedSet);
+            if (mergedSet.jenis === 'sedekah' && (mergedSet.status === 'disetujui' || mergedSet.status === 'ditolak')) {
+              currentState.sedekahList = (currentState.sedekahList || []).map((sdk: any) =>
+                sdk.id === mergedSet.id
+                  ? {
+                      ...sdk,
+                      status: mergedSet.status === 'disetujui' ? 'approved' : 'rejected',
+                      verifiedBy: mergedSet.verifiedBy || sdk.verifiedBy,
+                      verifiedAt: mergedSet.verifiedAt || sdk.verifiedAt,
+                    }
+                  : sdk
+              );
+            }
+            serverFirestoreHashMap.set(`setoran/${sId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedSet)));
+            hasActualMutation = true;
+            needsFinancialReconcile = true;
+            broadcastQueue.push({ type: 'SETORAN_UPDATED', payload: { deposit: mergedSet } });
+          } else if (colName === 'kas') {
+            const kId = cleanDoc.id || docId;
+            if (!kId || delKasSet.has(kId) || (cleanDoc.referensiId && delSetoranSet.has(cleanDoc.referensiId))) continue;
+            currentState.kasList = currentState.kasList || [];
+            const ex = currentState.kasList.find((k: any) => k.id === kId);
+            let mergedKas = cleanDoc;
+            if (ex) {
+              const isIncomingPending = cleanDoc.status === 'pending_approval' && (cleanDoc.pendingAction === 'delete' || cleanDoc.pendingAction === 'update');
+              const isResolving = ex.status === 'pending_approval' && (cleanDoc.status === 'approved' || cleanDoc.status === 'rejected');
+              const isTerminal = ex.status === 'approved' || ex.status === 'rejected';
+              const finalStatus = isIncomingPending || isResolving ? cleanDoc.status : isTerminal ? ex.status : (cleanDoc.status || ex.status);
+              mergedKas = {
+                ...ex,
+                ...cleanDoc,
+                status: finalStatus,
+                approvedBy: isResolving ? cleanDoc.approvedBy : (ex.approvedBy || cleanDoc.approvedBy),
+              };
+            }
+            upsertById(currentState.kasList, mergedKas);
+            serverFirestoreHashMap.set(`kas/${kId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedKas)));
+            hasActualMutation = true;
+            needsFinancialReconcile = true;
+          } else if (colName === 'transactions') {
+            const txId = cleanDoc.id || docId;
+            if (!txId || delTxSet.has(txId) || (cleanDoc.referensiId && delSetoranSet.has(cleanDoc.referensiId))) continue;
+            currentState.memberTransactions = currentState.memberTransactions || [];
+            const ex = currentState.memberTransactions.find((t: any) => t.id === txId);
+            const mergedTx = ex ? { ...ex, ...cleanDoc } : cleanDoc;
+            mergedTx.cbg = resolveMutasiCbgCodeServer(mergedTx, currentState.setoranList, currentState.kasList, currentState.sedekahList);
+            upsertById(currentState.memberTransactions, mergedTx);
+            serverFirestoreHashMap.set(`transactions/${txId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedTx)));
+            hasActualMutation = true;
+            needsFinancialReconcile = true;
+          } else if (colName === 'sedekah') {
+            const sdId = cleanDoc.id || docId;
+            if (!sdId || delSetoranSet.has(sdId)) continue;
+            currentState.sedekahList = currentState.sedekahList || [];
+            const ex = currentState.sedekahList.find((s: any) => s.id === sdId);
+            const isTerminal = ex && (ex.status === 'approved' || ex.status === 'rejected');
+            const finalStatus = isTerminal ? ex.status : (cleanDoc.status || ex?.status || 'pending');
+            const mergedSd = ex
+              ? {
+                  ...ex,
+                  ...cleanDoc,
+                  status: finalStatus,
+                  verifiedBy: ex.verifiedBy || cleanDoc.verifiedBy,
+                  verifiedAt: ex.verifiedAt || cleanDoc.verifiedAt,
+                }
+              : cleanDoc;
+            upsertById(currentState.sedekahList, mergedSd);
+            serverFirestoreHashMap.set(`sedekah/${sdId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedSd)));
+            hasActualMutation = true;
+            needsFinancialReconcile = true;
+          } else if (colName === 'chats') {
+            const cId = cleanDoc.id || docId;
+            if (!cId || isChatMessageClearedServer(cleanDoc, delChatSet, currentState.chatClearedAt, currentState.chatClearedBeforeByMember)) {
+              continue;
+            }
+            currentState.chatMessages = currentState.chatMessages || [];
+            const ex = currentState.chatMessages.find((c: any) => c.id === cId);
+            const mergedChat = ex ? { ...ex, ...cleanDoc } : cleanDoc;
+            if (ex) {
+              const idx = currentState.chatMessages.findIndex((c: any) => c.id === cId);
+              if (idx >= 0) currentState.chatMessages[idx] = mergedChat;
+            } else {
+              currentState.chatMessages.push(mergedChat);
+              broadcastQueue.push({ type: 'NEW_CHAT_MESSAGE', payload: mergedChat });
+            }
+            currentState.chatMessages.sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1));
+            serverFirestoreHashMap.set(`chats/${cId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedChat)));
+            hasActualMutation = true;
+          } else if (colName === 'surat') {
+            const srId = cleanDoc.id || docId;
+            if (!srId || isSuratDeletedServer(cleanDoc, delSuratSet, currentState.suratResetAt)) {
+              continue;
+            }
+            currentState.suratList = currentState.suratList || [];
+            const ex = currentState.suratList.find((sr: any) => sr.id === srId);
+            const mergedSurat = ex ? { ...ex, ...cleanDoc } : cleanDoc;
+            if (ex) {
+              const idx = currentState.suratList.findIndex((sr: any) => sr.id === srId);
+              if (idx >= 0) currentState.suratList[idx] = mergedSurat;
+            } else {
+              currentState.suratList.unshift(mergedSurat);
+              broadcastQueue.push({ type: 'NEW_SURAT', payload: { surat: mergedSurat } });
+            }
+            serverFirestoreHashMap.set(`surat/${srId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedSurat)));
+            hasActualMutation = true;
+          } else if (colName === 'logs') {
+            const lId = cleanDoc.id || docId;
+            if (!lId) continue;
+            currentState.auditLogs = currentState.auditLogs || [];
+            if (!currentState.auditLogs.some((l: any) => l.id === lId)) {
+              currentState.auditLogs.unshift({ id: lId, ...cleanDoc });
+              currentState.auditLogs = currentState.auditLogs
+                .sort((a: any, b: any) => (b.timestamp > a.timestamp ? 1 : -1))
+                .slice(0, 300);
+              serverFirestoreHashMap.set(`logs/${lId}`, cleanStr);
+              hasActualMutation = true;
+            }
+          }
+        }
+
+        if (!hasActualMutation) return;
+
+        currentState.deletedMemberIds = Array.from(delMemSet);
+        currentState.deletedAdminIds = Array.from(delAdminSet);
+        currentState.deletedSetoranIds = Array.from(delSetoranSet);
+        currentState.deletedKasIds = Array.from(delKasSet);
+        currentState.deletedTransactionIds = Array.from(delTxSet);
+        currentState.deletedChatIds = Array.from(delChatSet);
+        currentState.deletedSuratIds = Array.from(delSuratSet);
+
+        if (membersMutated) {
+          currentState.members = deduplicateMembersServer(currentState.members || [], currentState.deletedMemberIds);
+          currentState = reconcileLegacyMemberNumbers(currentState).state;
+        }
+        if (needsFinancialReconcile) {
+          currentState = reconcileBalancesWithDeposits(currentState).state;
+        }
+
+        saveDatabase(currentState, { skipFirestore: true });
+        for (const ev of broadcastQueue) {
+          broadcastEvent(ev.type, ev.payload);
+        }
+        broadcastStatePulse(`firestore_${colName}`);
+      } catch {}
     };
 
     onSnapshot(
@@ -2336,8 +2672,9 @@ async function initServerFirestoreRealtimeWatchers() {
       (snap: any) => {
         if (!snap.exists()) return;
         const d = snap.data();
-        if (d && d.updatedBy !== SERVER_INSTANCE_ID) {
-          triggerDebouncedPull();
+        if (d && d.updatedBy && d.updatedBy !== SERVER_INSTANCE_ID) {
+          broadcastStatePulse('firestore_pulse');
+          triggerDebouncedPull(800);
         }
       },
       () => {}
@@ -2348,9 +2685,36 @@ async function initServerFirestoreRealtimeWatchers() {
       (snap: any) => {
         if (!snap.exists()) return;
         const d = snap.data();
-        if (d && d.updatedBy !== SERVER_INSTANCE_ID) {
-          triggerDebouncedPull();
+        if (!d || d.updatedBy === SERVER_INSTANCE_ID) return;
+        const coreHash = JSON.stringify(buildGeneralCorePayloadServer(d));
+        if (serverFirestoreHashMap.get('settings/general') === coreHash) return;
+        serverFirestoreHashMap.set('settings/general', coreHash);
+
+        const patch: any = {};
+        if (d.profile && typeof d.profile === 'object') patch.profile = d.profile;
+        if (d.pengaturanBerbagi && typeof d.pengaturanBerbagi === 'object') patch.pengaturanBerbagi = d.pengaturanBerbagi;
+        if (d.categoriesKasKoperasi && typeof d.categoriesKasKoperasi === 'object') patch.categoriesKasKoperasi = d.categoriesKasKoperasi;
+        if (d.maintenanceLock && typeof d.maintenanceLock === 'object') patch.maintenanceLock = d.maintenanceLock;
+        if (Array.isArray(d.penyaluranList)) patch.penyaluranList = d.penyaluranList;
+        if (Array.isArray(d.pendingMutasiRequests)) patch.pendingMutasiRequests = d.pendingMutasiRequests;
+        if (Array.isArray(d.deletedMemberIds)) patch.deletedMemberIds = d.deletedMemberIds;
+        if (Array.isArray(d.deletedTransactionIds)) patch.deletedTransactionIds = d.deletedTransactionIds;
+        if (Array.isArray(d.deletedKasIds)) patch.deletedKasIds = d.deletedKasIds;
+        if (Array.isArray(d.deletedSetoranIds)) patch.deletedSetoranIds = d.deletedSetoranIds;
+        if (Array.isArray(d.deletedSuratIds)) patch.deletedSuratIds = d.deletedSuratIds;
+        if (Array.isArray(d.deletedChatIds)) patch.deletedChatIds = d.deletedChatIds;
+        if (typeof d.suratResetAt === 'string') patch.suratResetAt = d.suratResetAt;
+        if (typeof d.chatClearedAt === 'string') patch.chatClearedAt = d.chatClearedAt;
+        if (d.chatClearedBeforeByMember && typeof d.chatClearedBeforeByMember === 'object') {
+          patch.chatClearedBeforeByMember = d.chatClearedBeforeByMember;
         }
+        if (Array.isArray(d.usedAccountNumbers)) patch.usedAccountNumbers = d.usedAccountNumbers;
+        if (Array.isArray(d.usedMemberNumbers)) patch.usedMemberNumbers = d.usedMemberNumbers;
+        if (d.updatedAt) lastAppliedFirestoreGeneralUpdatedAt = String(d.updatedAt);
+
+        currentState = mergeServerState(currentState, patch);
+        saveDatabase(currentState, { skipFirestore: true });
+        broadcastStatePulse('firestore_general');
       },
       () => {}
     );
@@ -2360,22 +2724,30 @@ async function initServerFirestoreRealtimeWatchers() {
       (snap: any) => {
         if (!snap.exists()) return;
         const d = snap.data();
-        if (d && d.updatedBy !== SERVER_INSTANCE_ID) {
-          triggerDebouncedPull();
-        }
+        if (!d || d.updatedBy === SERVER_INSTANCE_ID) return;
+        const admHash = JSON.stringify(sanitizeServerDocForFirestore({ id: 'admins', admins: d.admins || [], deletedAdminIds: d.deletedAdminIds || [] }));
+        if (serverFirestoreHashMap.get('settings/admins') === admHash) return;
+        serverFirestoreHashMap.set('settings/admins', admHash);
+
+        currentState = mergeServerState(currentState, {
+          admins: Array.isArray(d.admins) ? d.admins : currentState.admins,
+          deletedAdminIds: Array.isArray(d.deletedAdminIds) ? d.deletedAdminIds : currentState.deletedAdminIds,
+        });
+        saveDatabase(currentState, { skipFirestore: true });
+        broadcastStatePulse('firestore_admins');
       },
       () => {}
     );
 
-    onSnapshot(collection(db, 'members'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'admins'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'setoran'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'kas'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'transactions'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'sedekah'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'chats'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'surat'), () => triggerDebouncedPull(), () => {});
-    onSnapshot(collection(db, 'logs'), () => triggerDebouncedPull(), () => {});
+    onSnapshot(collection(db, 'members'), (snap: any) => applyDeltaCollection('members', snap), () => {});
+    onSnapshot(collection(db, 'admins'), (snap: any) => applyDeltaCollection('admins', snap), () => {});
+    onSnapshot(collection(db, 'setoran'), (snap: any) => applyDeltaCollection('setoran', snap), () => {});
+    onSnapshot(collection(db, 'kas'), (snap: any) => applyDeltaCollection('kas', snap), () => {});
+    onSnapshot(collection(db, 'transactions'), (snap: any) => applyDeltaCollection('transactions', snap), () => {});
+    onSnapshot(collection(db, 'sedekah'), (snap: any) => applyDeltaCollection('sedekah', snap), () => {});
+    onSnapshot(collection(db, 'chats'), (snap: any) => applyDeltaCollection('chats', snap), () => {});
+    onSnapshot(collection(db, 'surat'), (snap: any) => applyDeltaCollection('surat', snap), () => {});
+    onSnapshot(query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(200)), (snap: any) => applyDeltaCollection('logs', snap), () => {});
   } catch {}
 }
 
@@ -4371,7 +4743,7 @@ async function startServer() {
       .filter((d) => d.role === 'member' && d.userId && d.userId !== 'guest')
       .map((d) => d.userId);
 
-    const totalConnected = Math.max(activeList.length, sseClients.size, 1);
+    const totalConnected = Math.max(activeList.length, sseClients.size + wsClients.size, 1);
 
     res.json({
       success: true,
@@ -8141,7 +8513,8 @@ async function startServer() {
           totalSizeBytes: totalBytes,
           lastModified: dbStats ? dbStats.mtime.toISOString() : new Date().toISOString(),
           onlineRealtime: true,
-          sseActiveClients: sseClients.size,
+          sseActiveClients: sseClients.size + wsClients.size,
+          wsActiveClients: wsClients.size,
         },
         storageBreakdown: {
           totalSizeFormatted: `${(totalBytes / 1024).toFixed(2)} KB`,
@@ -8186,7 +8559,7 @@ async function startServer() {
           totalTabunganAnggota: totalSaldoAnggota,
         },
         connectedDevicesAnalytics: {
-          totalDevices: Math.max(activeDevicesMap.size, sseClients.size, 1),
+          totalDevices: Math.max(activeDevicesMap.size, sseClients.size + wsClients.size, 1),
           platforms: {
             android: Array.from(activeDevicesMap.values()).filter((d) => d.platform === 'mobile_android').length,
             ios: Array.from(activeDevicesMap.values()).filter((d) => d.platform === 'mobile_ios').length,
@@ -8313,7 +8686,9 @@ async function startServer() {
     res.json({
       status: 'online',
       server: 'Express Realtime Server',
-      clientsConnected: sseClients.size,
+      clientsConnected: sseClients.size + wsClients.size,
+      wsClientsConnected: wsClients.size,
+      sseClientsConnected: sseClients.size,
       time: new Date().toISOString(),
     });
   });
@@ -8621,9 +8996,97 @@ exit
     app.use(vite.middlewares);
   }
 
-  // Gracefully handle websocket errors
-  server.on('upgrade', (req, socket) => {
+  // Attach dedicated Realtime WebSocket channel on /api/ws (sub-50ms push for Android, iOS, Web, PC, AI Studio)
+  const wss = new WebSocketServer({ noServer: true });
+  wss.on('connection', (ws: WebSocket) => {
+    (ws as any).isAlive = true;
+    wsClients.add(ws);
+    if (!cachedStateDigest) rebuildStateHttpCache(currentState);
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'CONNECTED',
+          payload: {
+            digest: cachedStateDigest,
+            lastSynced: currentState?.serverSyncStatus?.lastSynced || new Date().toISOString(),
+            serverTime: Date.now(),
+          },
+          timestamp: new Date().toISOString(),
+        })
+      );
+    } catch {}
+
+    ws.on('pong', () => {
+      (ws as any).isAlive = true;
+    });
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(String(raw));
+        if (msg?.type === 'PING') {
+          (ws as any).isAlive = true;
+          if (!cachedStateDigest) rebuildStateHttpCache(currentState);
+          ws.send(
+            JSON.stringify({
+              type: 'PONG',
+              payload: {
+                digest: cachedStateDigest,
+                serverTime: Date.now(),
+              },
+              timestamp: new Date().toISOString(),
+            })
+          );
+        } else if (msg?.type === 'REQUEST_SYNC') {
+          if (!cachedStateDigest) rebuildStateHttpCache(currentState);
+          ws.send(
+            JSON.stringify({
+              type: 'STATE_SYNC_PULSE',
+              payload: {
+                digest: cachedStateDigest,
+                reason: 'client_request',
+                lastSynced: currentState?.serverSyncStatus?.lastSynced || new Date().toISOString(),
+              },
+              timestamp: new Date().toISOString(),
+            })
+          );
+        }
+      } catch {}
+    });
+
+    ws.on('close', () => {
+      wsClients.delete(ws);
+    });
+    ws.on('error', () => {
+      wsClients.delete(ws);
+    });
+  });
+
+  // 15s WebSocket heartbeat keepalive prevents silent carrier NAT / proxy drops on Android & iOS
+  setInterval(() => {
+    for (const client of wsClients) {
+      if ((client as any).isAlive === false) {
+        wsClients.delete(client);
+        try { client.terminate(); } catch {}
+        continue;
+      }
+      (client as any).isAlive = false;
+      try { client.ping(); } catch {}
+    }
+  }, 15000);
+
+  // Route /api/ws upgrades to WebSocketServer and safely isolate non-WS upgrades
+  server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => {});
+    const reqUrl = String(req.url || '');
+    if (reqUrl.startsWith('/api/ws')) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit('connection', ws, req);
+      });
+    } else {
+      try {
+        socket.destroy();
+      } catch {}
+    }
   });
 
   // Tarik dan sinkronkan seluruh data & pengaturan terbaru dari Cloud Firestore SEBELUM menerima koneksi agar AI Studio tidak pernah menimpa input Android/iOS/Web/PC
@@ -8636,8 +9099,8 @@ exit
   server.listen(Number(PORT), '0.0.0.0', () => {
     rebuildStateHttpCache(currentState);
     console.log(`Koperasi HWS Realtime Server running on http://0.0.0.0:${PORT}`);
-    // Polling berkala setiap 30 detik sebagai fallback tambahan di samping realtime Firestore onSnapshot listener
-    setInterval(pullFromFirestoreServer, 30000);
+    // Safety-net sync berkala setiap 60 detik sebagai cadangan di samping realtime WebSocket, SSE, dan Firestore delta listener
+    setInterval(pullFromFirestoreServer, 60000);
   });
 }
 
