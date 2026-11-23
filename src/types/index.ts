@@ -239,6 +239,11 @@ export interface MemberTransaction {
   nomorRekening?: string;
   periode?: string;
   jumlahHari?: number;
+  splitOverride?: {
+    pokok: number;
+    qurban: number;
+    zakat: number;
+  };
 }
 
 export interface KasEntry {

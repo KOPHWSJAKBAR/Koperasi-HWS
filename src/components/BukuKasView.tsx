@@ -4,6 +4,7 @@ import {
   AdminUser,
   KasEntry,
   MemberTransaction,
+  MemberUser,
 } from '../types';
 import {
   formatRupiah,
@@ -872,42 +873,114 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     const katLower = (deletedEntry.kategori || '').toLowerCase();
     const isSedekah = katLower.includes('sedekah') || cleanKet.includes('sedekah');
 
-    const matchedMembers = prev.members.filter((m) => {
-      if (deletedEntry.memberId && m.id === deletedEntry.memberId) return true;
-      const mName = (m.nama || '').trim().toLowerCase();
-      if (!mName) return false;
-      if (cleanPenerima && cleanPenerima === mName) return true;
-      if (cleanKet && cleanKet.includes(mName)) return true;
-      return false;
-    });
+    const delIdStr = String(deletedEntry.id || '');
+    const delTsMatch = delIdStr.match(/(\d{10,})/);
+    const delRef = deletedEntry.referensiId ? String(deletedEntry.referensiId) : '';
+
+    const hasSiblingKasRef =
+      (Boolean(delRef) && remainingKas.some((k) => k.referensiId === delRef)) ||
+      (!delRef &&
+        Boolean(delTsMatch) &&
+        remainingKas.some((k) => {
+          if (k.bukuKas !== deletedEntry.bukuKas) return false;
+          if (deletedEntry.memberId && k.memberId && k.memberId !== deletedEntry.memberId) return false;
+          const km = String(k.id || '').match(/(\d{10,})/);
+          return Boolean(km && delTsMatch && Math.abs(Number(km[1]) - Number(delTsMatch[1])) <= 5);
+        }));
+
+    const refsToDelete = new Set<string>();
+    if (delRef && !hasSiblingKasRef) {
+      refsToDelete.add(delRef);
+    }
+
+    let matchedMembers: MemberUser[] = [];
+    if (deletedEntry.memberId) {
+      const directMember = prev.members.find((m) => m.id === deletedEntry.memberId);
+      if (directMember) matchedMembers = [directMember];
+    }
+    if (matchedMembers.length === 0 && delRef) {
+      const refTx = (prev.memberTransactions || []).find((t) => t.referensiId === delRef);
+      const refSet = (prev.setoranList || []).find((s) => s.id === delRef);
+      const targetMid = refTx?.memberId || refSet?.memberId;
+      if (targetMid) {
+        const refMember = prev.members.find((m) => m.id === targetMid);
+        if (refMember) matchedMembers = [refMember];
+      }
+    }
+    if (matchedMembers.length === 0) {
+      matchedMembers = prev.members.filter((m) => {
+        const mName = (m.nama || '').trim().toLowerCase();
+        if (!mName) return false;
+        if (cleanPenerima && cleanPenerima === mName) return true;
+        if (cleanKet && cleanKet.includes(mName)) return true;
+        return false;
+      });
+    }
 
     const matchedMemberIds = new Set(matchedMembers.map((m) => m.id));
     const newlyDeletedTxIds: string[] = [];
+    const updatedTransactions = [...(prev.memberTransactions || [])];
+    let targetTxIdx = -1;
 
-    let removedOrAdjustedTx = false;
-    const updatedTransactions: MemberTransaction[] = [];
+    if (delRef) {
+      targetTxIdx = updatedTransactions.findIndex(
+        (tx) =>
+          tx.referensiId === delRef &&
+          (matchedMemberIds.size === 0 || matchedMemberIds.has(tx.memberId))
+      );
+    }
 
-    for (const tx of prev.memberTransactions || []) {
-      if (
-        !removedOrAdjustedTx &&
-        matchedMemberIds.has(tx.memberId) &&
-        ((deletedEntry.referensiId && tx.referensiId === deletedEntry.referensiId) ||
-          (tx.tanggal === deletedEntry.tanggal && tx.tipe === deletedEntry.tipe))
-      ) {
-        if (tx.nominal === deletedEntry.nominal) {
-          removedOrAdjustedTx = true;
-          newlyDeletedTxIds.push(tx.id);
-          continue;
-        } else if (tx.nominal > deletedEntry.nominal) {
-          removedOrAdjustedTx = true;
-          updatedTransactions.push({
-            ...tx,
-            nominal: tx.nominal - deletedEntry.nominal,
-          });
-          continue;
+    if (targetTxIdx === -1 && delTsMatch) {
+      const delTsNum = Number(delTsMatch[1]);
+      targetTxIdx = updatedTransactions.findIndex((tx) => {
+        if (matchedMemberIds.size > 0 && !matchedMemberIds.has(tx.memberId)) return false;
+        const tm = String(tx.id || '').match(/(\d{10,})/);
+        return Boolean(tm && Math.abs(Number(tm[1]) - delTsNum) <= 5 && tx.tipe === deletedEntry.tipe);
+      });
+    }
+
+    if (targetTxIdx === -1 && matchedMemberIds.size > 0) {
+      const isPokokKat = katLower.includes('pokok') || katLower.includes('qurban') || katLower.includes('zakat');
+      targetTxIdx = updatedTransactions.findIndex((tx) => {
+        if (!matchedMemberIds.has(tx.memberId)) return false;
+        if (tx.tanggal !== deletedEntry.tanggal || tx.tipe !== deletedEntry.tipe) return false;
+        if (isSedekah) return tx.kategori === 'sedekah' || String(tx.keterangan || '').toLowerCase().includes('sedekah');
+        if (isPokokKat) return tx.kategori === 'pokok' || tx.kategori === 'qurban' || tx.kategori === 'zakat';
+        return tx.kategori === 'umum';
+      });
+    }
+
+    if (targetTxIdx !== -1) {
+      const tx = updatedTransactions[targetTxIdx];
+      if (tx.memberId) matchedMemberIds.add(tx.memberId);
+      const delNominal = Number(deletedEntry.nominal) || 0;
+      const txNominal = Number(tx.nominal) || 0;
+
+      if (!hasSiblingKasRef || delNominal >= txNominal) {
+        updatedTransactions.splice(targetTxIdx, 1);
+        newlyDeletedTxIds.push(tx.id);
+        if (tx.referensiId) refsToDelete.add(tx.referensiId);
+      } else {
+        const remainingNominal = Math.max(0, txNominal - delNominal);
+        const baseSplit = tx.splitOverride || {
+          pokok: Math.floor(txNominal * 0.5),
+          qurban: Math.floor(txNominal * 0.25),
+          zakat: txNominal - Math.floor(txNominal * 0.5) - Math.floor(txNominal * 0.25),
+        };
+        const nextSplit = { ...baseSplit };
+        if (katLower.includes('pokok') || delIdStr.startsWith('kas-adj-p-') || delIdStr.startsWith('kas-ang-p-') || delIdStr.startsWith('kas-ang-pokok-')) {
+          nextSplit.pokok = Math.max(0, (Number(nextSplit.pokok) || 0) - delNominal);
+        } else if (katLower.includes('qurban') || delIdStr.startsWith('kas-adj-q-') || delIdStr.startsWith('kas-ang-q-') || delIdStr.startsWith('kas-ang-qurban-')) {
+          nextSplit.qurban = Math.max(0, (Number(nextSplit.qurban) || 0) - delNominal);
+        } else if (katLower.includes('zakat') || delIdStr.startsWith('kas-adj-z-') || delIdStr.startsWith('kas-ang-z-') || delIdStr.startsWith('kas-ang-zakat-')) {
+          nextSplit.zakat = Math.max(0, (Number(nextSplit.zakat) || 0) - delNominal);
         }
+        updatedTransactions[targetTxIdx] = {
+          ...tx,
+          nominal: remainingNominal,
+          splitOverride: nextSplit,
+        };
       }
-      updatedTransactions.push(tx);
     }
 
     let updatedSedekahList = prev.sedekahList || [];
@@ -916,63 +989,97 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       updatedSedekahList = updatedSedekahList.filter((sdk) => {
         if (removedSdk) return true;
         if (
-          (deletedEntry.referensiId && sdk.id === deletedEntry.referensiId) ||
+          (delRef && sdk.id === delRef) ||
           sdk.id === deletedEntry.id ||
           ((sdk.donaturMemberId && matchedMemberIds.has(sdk.donaturMemberId)) && sdk.nominal === deletedEntry.nominal)
         ) {
           removedSdk = true;
+          if (sdk.id) refsToDelete.add(sdk.id);
           return false;
         }
         return true;
       });
     }
 
-    const hasSiblingKasRef =
-      Boolean(deletedEntry.referensiId) &&
-      remainingKas.some((k) => k.referensiId === deletedEntry.referensiId);
-
     const nextDeletedSetoranIds =
-      deletedEntry.referensiId && !hasSiblingKasRef
-        ? Array.from(new Set([...(prev.deletedSetoranIds || []), deletedEntry.referensiId]))
+      refsToDelete.size > 0
+        ? Array.from(new Set([...(prev.deletedSetoranIds || []), ...Array.from(refsToDelete)]))
         : (prev.deletedSetoranIds || []);
     const nextSetoranList =
-      deletedEntry.referensiId && !hasSiblingKasRef
-        ? (prev.setoranList || []).filter((s) => s.id !== deletedEntry.referensiId)
+      refsToDelete.size > 0
+        ? (prev.setoranList || []).filter((s) => !refsToDelete.has(s.id))
         : (prev.setoranList || []);
 
     const updatedMembers = prev.members.map((m) => {
       if (!matchedMemberIds.has(m.id)) return m;
 
-      const perMemberNominal =
-        matchedMembers.length > 1
-          ? Math.floor(deletedEntry.nominal / matchedMembers.length)
-          : deletedEntry.nominal;
+      let p = 0;
+      let u = 0;
+      let z = 0;
+      let q = 0;
 
-      let p = Number(m.saldoPokok) || 0;
-      let u = Number(m.saldoUmum) || 0;
-      let z = Number(m.saldoZakatFitrah) || 0;
-      let q = Number(m.saldoQurban) || 0;
-
-      if (deletedEntry.tipe === 'masuk') {
-        if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
-        else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
-        else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
-        else if (!isSedekah) u = Math.max(0, u - perMemberNominal);
+      if (targetTxIdx !== -1) {
+        const mTxs = updatedTransactions
+          .map((t, idx) => ({ t, idx }))
+          .filter(({ t }) => t.memberId === m.id)
+          .sort((a, b) => compareMemberTransactionsChrono(a.t, b.t));
+        mTxs.forEach(({ t, idx }) => {
+          if (t.kategori === 'sedekah') {
+            updatedTransactions[idx] = { ...t, saldoSetelah: p + u + z + q };
+            return;
+          }
+          const nom = Number(t.nominal) || 0;
+          const isKewajibanSplit =
+            t.kategori === 'pokok' ||
+            String(t.id).startsWith('tx-wajib-') ||
+            String(t.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+            String(t.keterangan || '').includes('50% Pokok');
+          if (t.tipe === 'masuk') {
+            if (isKewajibanSplit) {
+              const pPart = t.splitOverride ? (Number(t.splitOverride.pokok) || 0) : Math.floor(nom * 0.5);
+              const qPart = t.splitOverride ? (Number(t.splitOverride.qurban) || 0) : Math.floor(nom * 0.25);
+              const zPart = t.splitOverride ? (Number(t.splitOverride.zakat) || 0) : (nom - pPart - qPart);
+              p += pPart;
+              q += qPart;
+              z += zPart;
+            } else if (t.kategori === 'qurban') q += nom;
+            else if (t.kategori === 'zakat') z += nom;
+            else u += nom;
+          } else {
+            if (isKewajibanSplit) {
+              const pPart = t.splitOverride ? (Number(t.splitOverride.pokok) || 0) : Math.floor(nom * 0.5);
+              const qPart = t.splitOverride ? (Number(t.splitOverride.qurban) || 0) : Math.floor(nom * 0.25);
+              const zPart = t.splitOverride ? (Number(t.splitOverride.zakat) || 0) : (nom - pPart - qPart);
+              p = Math.max(0, p - pPart);
+              q = Math.max(0, q - qPart);
+              z = Math.max(0, z - zPart);
+            } else if (t.kategori === 'qurban') q = Math.max(0, q - nom);
+            else if (t.kategori === 'zakat') z = Math.max(0, z - nom);
+            else u = Math.max(0, u - nom);
+          }
+          updatedTransactions[idx] = { ...t, saldoSetelah: p + u + z + q };
+        });
       } else {
-        if (katLower.includes('pokok')) p += perMemberNominal;
-        else if (katLower.includes('qurban')) q += perMemberNominal;
-        else if (katLower.includes('zakat')) z += perMemberNominal;
-        else if (!isSedekah) u += perMemberNominal;
+        const perMemberNominal =
+          matchedMembers.length > 1
+            ? Math.floor(deletedEntry.nominal / matchedMembers.length)
+            : deletedEntry.nominal;
+        p = Number(m.saldoPokok) || 0;
+        u = Number(m.saldoUmum) || 0;
+        z = Number(m.saldoZakatFitrah) || 0;
+        q = Number(m.saldoQurban) || 0;
+        if (deletedEntry.tipe === 'masuk') {
+          if (katLower.includes('pokok')) p = Math.max(0, p - perMemberNominal);
+          else if (katLower.includes('qurban')) q = Math.max(0, q - perMemberNominal);
+          else if (katLower.includes('zakat')) z = Math.max(0, z - perMemberNominal);
+          else if (!isSedekah) u = Math.max(0, u - perMemberNominal);
+        } else {
+          if (katLower.includes('pokok')) p += perMemberNominal;
+          else if (katLower.includes('qurban')) q += perMemberNominal;
+          else if (katLower.includes('zakat')) z += perMemberNominal;
+          else if (!isSedekah) u += perMemberNominal;
+        }
       }
-
-      const mTxs = updatedTransactions
-        .filter((t) => t.memberId === m.id)
-        .sort(compareMemberTransactionsChrono);
-      let runSaldo = 0;
-      mTxs.forEach((t) => {
-        runSaldo = t.tipe === 'masuk' ? runSaldo + t.nominal : Math.max(0, runSaldo - t.nominal);
-        t.saldoSetelah = runSaldo;
-      });
 
       return {
         ...m,
@@ -981,6 +1088,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         saldoZakatFitrah: z,
         saldoQurban: q,
         totalSimpanan: p + u + z + q,
+        jumlahHariPokok: Math.floor(p / (prev.profile?.pembagianPokokHarian || 1000)),
       };
     });
 
