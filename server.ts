@@ -928,13 +928,31 @@ function mergeServerState(current: any, incoming: any): any {
       if (!existing) {
         kasMap.set(k.id, k);
       } else {
+        const isIncomingPendingReq =
+          k.status === 'pending_approval' &&
+          (k.pendingAction === 'delete' || k.pendingAction === 'update');
+        const isResolvingPending =
+          existing.status === 'pending_approval' &&
+          (k.status === 'approved' || k.status === 'rejected');
+        const existingUpdated = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+        const incomingUpdated = k.updatedAt ? new Date(k.updatedAt).getTime() : 0;
+        const hasNewerIncoming =
+          Number.isFinite(incomingUpdated) &&
+          Number.isFinite(existingUpdated) &&
+          incomingUpdated > existingUpdated;
         const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
-        const finalStatus = isTerminal ? existing.status : (k.status || existing.status);
+        const finalStatus =
+          (isIncomingPendingReq && (!existingUpdated || hasNewerIncoming || !existing.pendingAction)) ||
+          (isResolvingPending && (!existingUpdated || hasNewerIncoming || Boolean(k.approvedBy)))
+            ? k.status
+            : isTerminal
+            ? existing.status
+            : (k.status || existing.status);
         kasMap.set(k.id, {
           ...existing,
           ...k,
           status: finalStatus,
-          approvedBy: existing.approvedBy || k.approvedBy,
+          approvedBy: isResolvingPending ? k.approvedBy : (existing.approvedBy || k.approvedBy),
         });
       }
     }
@@ -2932,6 +2950,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     if (!m) return;
     const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
     const depTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
+    if (deletedTxSet.has(depTxId)) return;
     if (existingDepositRefs.has(s.id) || existingDepositRefs.has(depTxId)) return;
 
     addedTxCount++;
@@ -2994,7 +3013,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     mTxs.forEach((tx: any) => {
       // Mutasi Sedekah QRIS (kategori: 'sedekah') tercatat di mutasi anggota tanpa menambah/mengurangi saldo tabungan anggota
       if (tx.kategori === 'sedekah') {
-        tx.saldoSetelah = p + u;
+        tx.saldoSetelah = p + u + z + q;
         return;
       }
 
@@ -5431,10 +5450,12 @@ async function startServer() {
             ...tx,
             nominal: remainingNominal,
             splitOverride: nextSplit,
+            updatedAt: new Date().toISOString(),
           };
         }
         currentState.memberTransactions = existingTxs;
       } else {
+        const nowIso = new Date().toISOString();
         // Kas entry had no linked MemberTransaction row yet — still adjust member directly if matched
         currentState.members = members.map((m: any) => {
           if (!matchedMemberIds.has(m.id)) return m;
@@ -5465,6 +5486,7 @@ async function startServer() {
             saldoQurban: q,
             totalSimpanan: p + u + z + q,
             jumlahHariPokok: Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000)),
+            updatedAt: nowIso,
           };
         });
       }
@@ -5535,6 +5557,7 @@ async function startServer() {
           pendingAction: 'delete',
           requestedBy: adminName || 'Admin',
           requestedByRole: effectiveRole,
+          updatedAt: new Date().toISOString(),
         };
       }
 
@@ -5735,6 +5758,7 @@ async function startServer() {
             pendingAction: undefined,
             requestedBy: undefined,
             requestedByRole: undefined,
+            updatedAt: new Date().toISOString(),
           };
         } else if (prevAction === 'update' && entry.originalData) {
           currentState.kasList[idx] = {
@@ -6452,6 +6476,7 @@ async function startServer() {
         mem.saldoQurban = q;
         mem.totalSimpanan = p + u + z + q;
         mem.jumlahHariPokok = Math.floor(p / (currentState.profile?.pembagianPokokHarian || 1000));
+        mem.updatedAt = new Date().toISOString();
       }
     });
   };

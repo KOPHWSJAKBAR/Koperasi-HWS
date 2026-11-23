@@ -998,15 +998,27 @@ export function commitLocalStatePatch(updater: (prev: AppState) => AppState): Ap
   return globalState;
 }
 
+// Apply authoritative server state returned by dedicated mutation endpoints (/api/kas/delete, /api/kas/approve, /api/setoran/verify, etc.)
+// without re-merging stale deleted items or bouncing a redundant POST /api/state
 export function applyAuthoritativeServerState(serverState: AppState, syncToFirestore = true): AppState {
   if (!serverState || typeof serverState !== 'object') return globalState;
   hasHydratedRemoteState = true;
-  globalState = mergeStates(globalState, serverState);
+  const reconciled = reconcileBalancesWithDeposits({
+    ...serverState,
+    deletedMemberIds: Array.from(new Set([...(globalState.deletedMemberIds || []), ...(serverState.deletedMemberIds || [])])),
+    deletedAdminIds: Array.from(new Set([...(globalState.deletedAdminIds || []), ...(serverState.deletedAdminIds || [])])),
+    deletedKasIds: Array.from(new Set([...(globalState.deletedKasIds || []), ...(serverState.deletedKasIds || [])])),
+    deletedTransactionIds: Array.from(new Set([...(globalState.deletedTransactionIds || []), ...(serverState.deletedTransactionIds || [])])),
+    deletedSetoranIds: Array.from(new Set([...(globalState.deletedSetoranIds || []), ...(serverState.deletedSetoranIds || [])])),
+    deletedSuratIds: Array.from(new Set([...(globalState.deletedSuratIds || []), ...(serverState.deletedSuratIds || [])])),
+    deletedChatIds: Array.from(new Set([...(globalState.deletedChatIds || []), ...(serverState.deletedChatIds || [])])),
+  });
+  globalState = reconciled;
   lastServerStateDigest = '';
   scheduleLocalStoragePersist();
   notifyListeners();
-  if (syncToFirestore) {
-    scheduleShardedFirestoreSync(globalState, 150);
+  if (syncToFirestore && getIsInternetConnected()) {
+    scheduleShardedFirestoreSync(globalState, 50);
   }
   return globalState;
 }
@@ -1454,13 +1466,31 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
       if (!existing) {
         kasMap.set(k.id, k);
       } else {
+        const isIncomingPendingReq =
+          k.status === 'pending_approval' &&
+          (k.pendingAction === 'delete' || k.pendingAction === 'update');
+        const isResolvingPending =
+          existing.status === 'pending_approval' &&
+          (k.status === 'approved' || k.status === 'rejected');
+        const existingUpdated = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+        const incomingUpdated = k.updatedAt ? new Date(k.updatedAt).getTime() : 0;
+        const hasNewerIncoming =
+          Number.isFinite(incomingUpdated) &&
+          Number.isFinite(existingUpdated) &&
+          incomingUpdated > existingUpdated;
         const isTerminal = existing.status === 'approved' || existing.status === 'rejected';
-        const finalStatus = isTerminal ? existing.status : (k.status || existing.status);
+        const finalStatus =
+          (isIncomingPendingReq && (!existingUpdated || hasNewerIncoming || !existing.pendingAction)) ||
+          (isResolvingPending && (!existingUpdated || hasNewerIncoming || Boolean(k.approvedBy)))
+            ? k.status
+            : isTerminal
+            ? existing.status
+            : (k.status || existing.status);
         kasMap.set(k.id, {
           ...existing,
           ...k,
           status: finalStatus,
-          approvedBy: existing.approvedBy || k.approvedBy,
+          approvedBy: isResolvingPending ? k.approvedBy : (existing.approvedBy || k.approvedBy),
         });
       }
     }

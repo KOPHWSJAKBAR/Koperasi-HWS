@@ -15,6 +15,7 @@ import {
   getRequiredApproverLabel,
   isApprovalRole,
   compareMemberTransactionsChrono,
+  applyAuthoritativeServerState,
 } from '../lib/storage';
 import {
   downloadExcelCsv,
@@ -103,10 +104,32 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
   const [tfKeterangan, setTfKeterangan] = useState('');
   const [tfNamaPetugas, setTfNamaPetugas] = useState('');
 
+  // In-app confirmation & toast (replaces browser confirm/alert which can be blocked inside iframe/WebView)
+  const [deleteKasConfirm, setDeleteKasConfirm] = useState<{ entry: KasEntry; mode: 'direct' | 'request' } | null>(null);
+  const [isDeletingKas, setIsDeletingKas] = useState(false);
+  const [deleteCatConfirm, setDeleteCatConfirm] = useState<{ tipe: 'pemasukan' | 'pengeluaran'; catName: string } | null>(null);
+  const [kasToast, setKasToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showKasToast = (type: 'success' | 'error', message: string) => {
+    setKasToast({ type, message });
+  };
+
+  useEffect(() => {
+    if (!kasToast) return;
+    const t = setTimeout(() => setKasToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [kasToast]);
+
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
     const handleDeviceBack = (e: Event) => {
-      if (selectedReceiptKas) {
+      if (deleteKasConfirm && !isDeletingKas) {
+        e.preventDefault();
+        setDeleteKasConfirm(null);
+      } else if (deleteCatConfirm) {
+        e.preventDefault();
+        setDeleteCatConfirm(null);
+      } else if (selectedReceiptKas) {
         e.preventDefault();
         setSelectedReceiptKas(null);
       } else if (editingKasEntry) {
@@ -125,7 +148,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     };
     window.addEventListener('app:back_press', handleDeviceBack);
     return () => window.removeEventListener('app:back_press', handleDeviceBack);
-  }, [selectedReceiptKas, editingKasEntry, isInputModalOpen, isAddCatModalOpen, isTransferModalOpen]);
+  }, [deleteKasConfirm, isDeletingKas, deleteCatConfirm, selectedReceiptKas, editingKasEntry, isInputModalOpen, isAddCatModalOpen, isTransferModalOpen]);
 
   // Check roles
   const isSuperAdmin = currentAdmin.role === 'super_admin';
@@ -979,6 +1002,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           ...tx,
           nominal: remainingNominal,
           splitOverride: nextSplit,
+          updatedAt: new Date().toISOString(),
         };
       }
     }
@@ -1010,6 +1034,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         ? (prev.setoranList || []).filter((s) => !refsToDelete.has(s.id))
         : (prev.setoranList || []);
 
+    const syncTimestamp = new Date().toISOString();
     const updatedMembers = prev.members.map((m) => {
       if (!matchedMemberIds.has(m.id)) return m;
 
@@ -1089,6 +1114,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         saldoQurban: q,
         totalSimpanan: p + u + z + q,
         jumlahHariPokok: Math.floor(p / (prev.profile?.pembagianPokokHarian || 1000)),
+        updatedAt: syncTimestamp,
       };
     });
 
@@ -1105,29 +1131,113 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     };
   };
 
-  // Handle Delete Kas Entry (Buku Kas Anggota & Buku Kas Koperasi)
-  const handleDeleteKas = async (entry: KasEntry) => {
+  const deleteLinkedFirestoreDocs = async (kasId: string, refId?: string, txIds: string[] = [], setIds: string[] = []) => {
+    try {
+      const { db } = await import('../lib/firebase');
+      const { doc, deleteDoc } = await import('firebase/firestore');
+      const deletions: Promise<any>[] = [deleteDoc(doc(db, 'kas', kasId)).catch(() => {})];
+      txIds.forEach((tid) => deletions.push(deleteDoc(doc(db, 'transactions', tid)).catch(() => {})));
+      const allSetIds = Array.from(new Set([...(refId ? [refId] : []), ...setIds]));
+      allSetIds.forEach((sid) => {
+        deletions.push(deleteDoc(doc(db, 'setoran', sid)).catch(() => {}));
+        deletions.push(deleteDoc(doc(db, 'sedekah', sid)).catch(() => {}));
+      });
+      await Promise.all(deletions);
+    } catch {}
+  };
+
+  // Handle Delete Kas Entry (opens in-app confirmation modal so iframe/WebView never blocks confirm)
+  const handleDeleteKas = (entry: KasEntry) => {
     if (!canDelete) {
-      alert('Akses Ditolak: Anda tidak memiliki izin untuk menghapus catatan Buku Kas.');
+      showKasToast('error', 'Akses Ditolak: Anda tidak memiliki izin untuk menghapus catatan Buku Kas.');
       return;
     }
 
     if (entry.status === 'pending_approval') {
-      alert('Transaksi ini sedang menunggu persetujuan. Tidak dapat diajukan hapus ulang.');
+      showKasToast('error', 'Transaksi ini sedang menunggu persetujuan. Tidak dapat diajukan hapus ulang.');
       return;
     }
 
+    setDeleteKasConfirm({
+      entry,
+      mode: isDirectExec ? 'direct' : 'request',
+    });
+  };
+
+  const executeConfirmedDeleteKas = async () => {
+    if (!deleteKasConfirm || isDeletingKas) return;
+    const { entry, mode } = deleteKasConfirm;
     const labelBuku = entry.bukuKas === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi';
+    setIsDeletingKas(true);
 
-    if (!isDirectExec) {
-      const targetApprover = getRequiredApproverLabel(currentAdmin.role);
-      const roleLabel = isWriter ? 'Admin Write' : 'Admin Approval';
-      const confirmReq = confirm(
-        `Ajukan penghapusan transaksi ${labelBuku}:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai ${roleLabel}, pengajuan ini wajib disetujui oleh ${targetApprover} sebelum transaksi dihapus dan saldo disesuaikan. Lanjutkan?`
-      );
-      if (!confirmReq) return;
+    try {
+      if (mode === 'request') {
+        const targetApprover = getRequiredApproverLabel(currentAdmin.role);
+        const roleLabel = isWriter ? 'Admin Write' : 'Admin Approval';
+        let serverStateApplied = false;
+        try {
+          const res = await fetch('/api/kas/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: entry.id,
+              adminName: currentAdmin.nama,
+              adminRole: currentAdmin.role,
+              isDirectDelete: false,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            if (data.state) {
+              serverStateApplied = true;
+              await applyAuthoritativeServerState(data.state);
+            }
+          }
+        } catch {}
 
+        if (!serverStateApplied) {
+          const nowIso = new Date().toISOString();
+          await updateState((prev) => ({
+            ...prev,
+            kasList: prev.kasList.map((k) =>
+              k.id === entry.id
+                ? {
+                    ...k,
+                    status: 'pending_approval',
+                    pendingAction: 'delete',
+                    requestedBy: currentAdmin.nama,
+                    requestedByRole: currentAdmin.role,
+                    updatedAt: nowIso,
+                  }
+                : k
+            ),
+            auditLogs: [
+              createAuditLog(
+                currentAdmin,
+                'Pengajuan Hapus Buku Kas',
+                `${roleLabel} ${currentAdmin.nama} mengajukan penghapusan transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} (Menunggu Persetujuan ${targetApprover})`,
+                entry.id
+              ),
+              ...prev.auditLogs,
+            ],
+          }));
+        }
+
+        setDeleteKasConfirm(null);
+        showKasToast(
+          'success',
+          `Pengajuan hapus transaksi ${labelBuku} "${entry.keterangan}" berhasil dikirim ke ${targetApprover}.`
+        );
+        return;
+      }
+
+      // Super Admin direct delete
+      const prevTxSet = new Set(state.deletedTransactionIds || []);
+      const prevSetSet = new Set(state.deletedSetoranIds || []);
       let serverStateApplied = false;
+      let newlyDeletedTxIds: string[] = [];
+      let newlyDeletedSetIds: string[] = [];
+
       try {
         const res = await fetch('/api/kas/delete', {
           method: 'POST',
@@ -1136,109 +1246,76 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
             id: entry.id,
             adminName: currentAdmin.nama,
             adminRole: currentAdmin.role,
-            isDirectDelete: false,
+            isDirectDelete: true,
           }),
         });
         if (res.ok) {
           const data = await res.json().catch(() => ({}));
           if (data.state) {
             serverStateApplied = true;
-            await updateState(() => data.state);
+            newlyDeletedTxIds = (data.state.deletedTransactionIds || []).filter((id: string) => !prevTxSet.has(id));
+            newlyDeletedSetIds = (data.state.deletedSetoranIds || []).filter((id: string) => !prevSetSet.has(id));
+            await applyAuthoritativeServerState(data.state);
           }
         }
       } catch {}
 
       if (!serverStateApplied) {
-        await updateState((prev) => ({
-          ...prev,
-          kasList: prev.kasList.map((k) =>
-            k.id === entry.id
-              ? {
-                  ...k,
-                  status: 'pending_approval',
-                  pendingAction: 'delete',
-                  requestedBy: currentAdmin.nama,
-                  requestedByRole: currentAdmin.role,
-                }
-              : k
-          ),
-          auditLogs: [
-            createAuditLog(
-              currentAdmin,
-              'Pengajuan Hapus Buku Kas',
-              `${roleLabel} ${currentAdmin.nama} mengajukan penghapusan transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} (Menunggu Persetujuan ${targetApprover})`,
-              entry.id
-            ),
-            ...prev.auditLogs,
-          ],
-        }));
-      }
-
-      alert(`✓ Pengajuan hapus transaksi ${labelBuku} "${entry.keterangan}" berhasil dikirim! Menunggu persetujuan ${targetApprover}.`);
-      return;
-    }
-
-    // Super Admin direct delete
-    const confirmDelete = confirm(
-      `Hapus transaksi ${labelBuku}:\n"${entry.keterangan}" (${formatRupiah(entry.nominal)})\n\nSebagai Super Admin, transaksi ini akan langsung dihapus, saldo Buku Kas dikoreksi otomatis${entry.bukuKas === 'anggota' ? ', serta mutasi & saldo simpanan anggota terkait langsung disesuaikan' : ''}. Lanjutkan?`
-    );
-    if (!confirmDelete) return;
-
-    let serverStateApplied = false;
-    try {
-      const res = await fetch('/api/kas/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: entry.id,
-          adminName: currentAdmin.nama,
-          adminRole: currentAdmin.role,
-          isDirectDelete: true,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (data.state) {
-          serverStateApplied = true;
-          await updateState(() => data.state);
+        let localSynced = null as AppState | null;
+        await updateState((prev) => {
+          const nextState = applyKasDeletionWithMemberSync(prev, entry);
+          localSynced = nextState;
+          const audit = createAuditLog(
+            currentAdmin,
+            'Hapus Transaksi Kas & Koreksi Saldo',
+            `Super Admin ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} beserta koreksi saldo otomatis`,
+            entry.id
+          );
+          return {
+            ...nextState,
+            auditLogs: [audit, ...nextState.auditLogs],
+          };
+        });
+        if (localSynced) {
+          newlyDeletedTxIds = ((localSynced as AppState).deletedTransactionIds || []).filter((id) => !prevTxSet.has(id));
+          newlyDeletedSetIds = ((localSynced as AppState).deletedSetoranIds || []).filter((id) => !prevSetSet.has(id));
         }
       }
-    } catch {}
 
-    try {
-      const { db } = await import('../lib/firebase');
-      const { doc, deleteDoc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'kas', entry.id)).catch(() => {});
-    } catch {}
+      await deleteLinkedFirestoreDocs(
+        entry.id,
+        newlyDeletedSetIds.length > 0 ? entry.referensiId : undefined,
+        newlyDeletedTxIds,
+        newlyDeletedSetIds
+      );
 
-    if (!serverStateApplied) {
-      await updateState((prev) => {
-        const nextState = applyKasDeletionWithMemberSync(prev, entry);
-        const audit = createAuditLog(
-          currentAdmin,
-          'Hapus Transaksi Kas & Koreksi Saldo',
-          `Super Admin ${currentAdmin.nama} menghapus transaksi [${entry.bukuKas}] ${entry.keterangan} senilai ${formatRupiah(entry.nominal)} beserta koreksi saldo otomatis`,
-          entry.id
-        );
-        return {
-          ...nextState,
-          auditLogs: [audit, ...nextState.auditLogs],
-        };
-      });
+      setDeleteKasConfirm(null);
+      showKasToast(
+        'success',
+        `Transaksi "${entry.keterangan}" berhasil dihapus dan saldo Buku Kas${entry.bukuKas === 'anggota' ? ', mutasi rekening, serta saldo daftar anggota' : ''} telah disinkronkan.`
+      );
+    } finally {
+      setIsDeletingKas(false);
     }
-
-    alert(`✓ Transaksi "${entry.keterangan}" berhasil dihapus dan jumlah saldo Buku Kas${entry.bukuKas === 'anggota' ? ' serta mutasi & saldo anggota' : ''} telah dikoreksi otomatis.`);
   };
 
   // Handle Approval for pending kas changes (Input, Edit, Hapus)
   const handleApproveKasAction = async (entry: KasEntry, isApproved: boolean) => {
     const reqRole = entry.requestedByRole || 'admin_write';
     if (!canApproveByRole(reqRole, currentAdmin.role)) {
-      alert(`Akses Ditolak: Pengajuan oleh ${isApprovalRole(reqRole) ? 'Admin Approval' : 'Admin'} wajib disetujui oleh ${getRequiredApproverLabel(reqRole)}.`);
+      showKasToast(
+        'error',
+        `Akses Ditolak: Pengajuan oleh ${isApprovalRole(reqRole) ? 'Admin Approval' : 'Admin'} wajib disetujui oleh ${getRequiredApproverLabel(reqRole)}.`
+      );
       return;
     }
 
+    const prevTxSet = new Set(state.deletedTransactionIds || []);
+    const prevSetSet = new Set(state.deletedSetoranIds || []);
     let serverStateApplied = false;
+    let newlyDeletedTxIds: string[] = [];
+    let newlyDeletedSetIds: string[] = [];
+
     try {
       const res = await fetch('/api/kas/approve', {
         method: 'POST',
@@ -1252,30 +1329,29 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
       });
       if (res.status === 403) {
         const errData = await res.json().catch(() => ({}));
-        alert(errData.error || 'Akses Ditolak: Anda tidak memiliki wewenang menyetujui pengajuan pada tingkat admin ini.');
+        showKasToast(
+          'error',
+          errData.error || 'Akses Ditolak: Anda tidak memiliki wewenang menyetujui pengajuan pada tingkat admin ini.'
+        );
         return;
       }
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (data.state) {
           serverStateApplied = true;
-          await updateState(() => data.state);
+          newlyDeletedTxIds = (data.state.deletedTransactionIds || []).filter((id: string) => !prevTxSet.has(id));
+          newlyDeletedSetIds = (data.state.deletedSetoranIds || []).filter((id: string) => !prevSetSet.has(id));
+          await applyAuthoritativeServerState(data.state);
         }
       }
     } catch {}
 
-    if (isApproved && entry.pendingAction === 'delete') {
-      try {
-        const { db } = await import('../lib/firebase');
-        const { doc, deleteDoc } = await import('firebase/firestore');
-        await deleteDoc(doc(db, 'kas', entry.id)).catch(() => {});
-      } catch {}
-    }
-
     if (!serverStateApplied) {
+      let localSynced = null as AppState | null;
       await updateState((prev) => {
         if (isApproved && entry.pendingAction === 'delete') {
           const nextState = applyKasDeletionWithMemberSync(prev, entry);
+          localSynced = nextState;
           const audit = createAuditLog(
             currentAdmin,
             'Pengesahan Hapus Transaksi Kas',
@@ -1436,7 +1512,14 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           if (entry.pendingAction === 'delete') {
             updatedList = updatedList.map((k) =>
               k.id === entry.id
-                ? { ...k, status: 'approved', pendingAction: undefined, requestedBy: undefined, requestedByRole: undefined }
+                ? {
+                    ...k,
+                    status: 'approved',
+                    pendingAction: undefined,
+                    requestedBy: undefined,
+                    requestedByRole: undefined,
+                    updatedAt: new Date().toISOString(),
+                  }
                 : k
             );
           } else if (entry.pendingAction === 'update' && entry.originalData) {
@@ -1450,6 +1533,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                     originalData: undefined,
                     requestedBy: undefined,
                     requestedByRole: undefined,
+                    updatedAt: new Date().toISOString(),
                   }
                 : k
             );
@@ -1458,7 +1542,7 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
               entry.referensiId && String(entry.referensiId).startsWith('KAS-ANG-');
             updatedList = updatedList.map((k) =>
               k.id === entry.id || (isGroupAnggotaCreate && k.referensiId === entry.referensiId)
-                ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined }
+                ? { ...k, status: 'rejected', approvedBy: currentAdmin.nama, pendingAction: undefined, updatedAt: new Date().toISOString() }
                 : k
             );
           }
@@ -1482,16 +1566,29 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
           auditLogs: [audit, ...prev.auditLogs],
         };
       });
+      if (isApproved && entry.pendingAction === 'delete') {
+        newlyDeletedTxIds = (localSynced?.deletedTransactionIds || []).filter((id: string) => !prevTxSet.has(id));
+        newlyDeletedSetIds = (localSynced?.deletedSetoranIds || []).filter((id: string) => !prevSetSet.has(id));
+      }
     }
 
-    alert(
+    if (isApproved && entry.pendingAction === 'delete') {
+      await deleteLinkedFirestoreDocs(
+        entry.id,
+        newlyDeletedSetIds.length > 0 ? entry.referensiId : undefined,
+        newlyDeletedTxIds,
+        newlyDeletedSetIds
+      );
+    }
+
+    showKasToast(
+      'success',
       isApproved
-        ? `✓ ${entry.pendingAction === 'delete' ? 'Penghapusan transaksi' : 'Perubahan / input transaksi'} berhasil disetujui!`
-        : `Permohonan transaksi kas telah ditolak.`
+        ? `${entry.pendingAction === 'delete' ? 'Penghapusan transaksi' : 'Perubahan / input transaksi'} berhasil disetujui & disinkronkan!`
+        : 'Permohonan transaksi kas telah ditolak.'
     );
   };
 
-  // Add Category Handler
   // Add Category Handler
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1508,11 +1605,14 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
     setNewCatName('');
   };
 
-  // Delete Category Handler per User Req
-  const handleDeleteCategory = async (tipe: 'pemasukan' | 'pengeluaran', catName: string) => {
-    const confirmDel = confirm(`Hapus kategori "${catName}" dari daftar kategori kas koperasi?`);
-    if (!confirmDel) return;
+  // Delete Category Handler per User Req (uses in-app confirmation modal)
+  const handleDeleteCategory = (tipe: 'pemasukan' | 'pengeluaran', catName: string) => {
+    setDeleteCatConfirm({ tipe, catName });
+  };
 
+  const executeDeleteCategory = async () => {
+    if (!deleteCatConfirm) return;
+    const { tipe, catName } = deleteCatConfirm;
     await updateState((prev) => ({
       ...prev,
       categoriesKasKoperasi: {
@@ -1520,6 +1620,8 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
         [tipe]: prev.categoriesKasKoperasi[tipe].filter((c) => c !== catName),
       },
     }));
+    setDeleteCatConfirm(null);
+    showKasToast('success', `Kategori "${catName}" berhasil dihapus.`);
   };
 
   // Export Kas Report to Excel / PDF dengan Jurnal Halaman Depan & Perincian Kategori (Req 1)
@@ -3440,6 +3542,142 @@ export const BukuKasView: React.FC<BukuKasViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL KONFIRMASI HAPUS BUKU KAS (IN-APP) ================= */}
+      {deleteKasConfirm && (
+        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-rose-500/40 w-full max-w-md rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-2xl bg-rose-500/20 border border-rose-500/40 text-rose-400">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white">
+                    {deleteKasConfirm.mode === 'direct' ? 'Konfirmasi Hapus Transaksi Kas' : 'Ajukan Hapus Transaksi Kas'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {deleteKasConfirm.entry.bukuKas === 'anggota' ? 'Buku Kas Anggota' : 'Buku Kas Koperasi'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isDeletingKas}
+                onClick={() => setDeleteKasConfirm(null)}
+                className="text-slate-400 hover:text-white disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 space-y-1.5 text-xs">
+              <div className="font-bold text-white">{deleteKasConfirm.entry.keterangan}</div>
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span>Tanggal: <b className="text-slate-200 font-mono">{deleteKasConfirm.entry.tanggal}</b></span>
+                <span>Nominal: <b className="text-amber-300 font-mono">{formatRupiah(deleteKasConfirm.entry.nominal)}</b></span>
+              </div>
+              {deleteKasConfirm.entry.namaPenerima && (
+                <div className="text-[11px] text-sky-300 font-semibold">
+                  Pihak / Anggota: {deleteKasConfirm.entry.namaPenerima}
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {deleteKasConfirm.mode === 'direct' ? (
+                deleteKasConfirm.entry.bukuKas === 'anggota'
+                  ? 'Transaksi ini akan langsung dihapus dari Buku Kas Anggota, serta otomatis menyesuaikan Mutasi Rekening Anggota dan saldo simpanan pada Daftar Anggota.'
+                  : 'Transaksi ini akan langsung dihapus dari Buku Kas Koperasi dan saldo kas berjalan dikoreksi otomatis.'
+              ) : (
+                `Pengajuan penghapusan ini akan dikirim ke ${getRequiredApproverLabel(currentAdmin.role)} untuk disetujui sebelum saldo & mutasi disesuaikan.`
+              )}
+            </p>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isDeletingKas}
+                onClick={() => setDeleteKasConfirm(null)}
+                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingKas}
+                onClick={executeConfirmedDeleteKas}
+                className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 disabled:opacity-60 text-white font-black rounded-xl text-xs shadow-lg shadow-rose-600/25 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>
+                  {isDeletingKas
+                    ? 'Memproses...'
+                    : deleteKasConfirm.mode === 'direct'
+                    ? 'Ya, Hapus & Sinkronkan'
+                    : 'Kirim Pengajuan Hapus'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL KONFIRMASI HAPUS KATEGORI (IN-APP) ================= */}
+      {deleteCatConfirm && (
+        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-sm rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-black text-white">Hapus Kategori Kas</h3>
+              <button type="button" onClick={() => setDeleteCatConfirm(null)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-300">
+              Hapus kategori <b className="text-amber-300">"{deleteCatConfirm.catName}"</b> dari daftar kategori kas koperasi?
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteCatConfirm(null)}
+                className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeDeleteCategory}
+                className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-xl text-xs"
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= IN-APP TOAST NOTIFICATION ================= */}
+      {kasToast && (
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:max-w-md z-[80]">
+          <div
+            className={`px-4 py-3 rounded-2xl border shadow-2xl flex items-start gap-2.5 text-xs font-bold ${
+              kasToast.type === 'success'
+                ? 'bg-emerald-950/95 border-emerald-500/60 text-emerald-200'
+                : 'bg-rose-950/95 border-rose-500/60 text-rose-200'
+            }`}
+          >
+            {kasToast.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            ) : (
+              <XCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            )}
+            <span className="flex-1 leading-relaxed">{kasToast.message}</span>
+            <button type="button" onClick={() => setKasToast(null)} className="opacity-70 hover:opacity-100">
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       )}

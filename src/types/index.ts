@@ -244,6 +244,7 @@ export interface MemberTransaction {
     qurban: number;
     zakat: number;
   };
+  updatedAt?: string;
 }
 
 export interface KasEntry {
@@ -282,6 +283,7 @@ export interface KasEntry {
     kategori?: string;
   };
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface PenyaluranZakatQurban {
