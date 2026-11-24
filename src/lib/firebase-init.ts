@@ -54,7 +54,7 @@ export function getFirebaseFirestore(): Firestore {
       cachedDb = initializeFirestore(
         currentApp,
         {
-          experimentalAutoDetectLongPolling: true,
+          experimentalForceLongPolling: true,
           ignoreUndefinedProperties: true,
         },
         firebaseConfig.firestoreDatabaseId || undefined
@@ -140,31 +140,22 @@ let activeOnlineCheckPromise: Promise<boolean> | null = null;
 let lastOnlineCheckTime = 0;
 let lastOnlineCheckResult = true;
 
-let hasTestedStartupConnection = false;
-
-export async function testFirestoreConnection(): Promise<boolean> {
-  if (hasTestedStartupConnection) return lastOnlineCheckResult;
-  hasTestedStartupConnection = true;
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    lastOnlineCheckResult = false;
+async function verifyFirestoreRestReachability(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const dbId = encodeURIComponent(firebaseConfig.firestoreDatabaseId || '(default)');
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${dbId}/documents/koperasi_state/main_database?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
+    const res = await fetch(url, { method: 'GET', cache: 'no-store', signal: controller.signal });
+    clearTimeout(timer);
+    return res.ok || res.status === 404 || res.status === 403;
+  } catch {
     return false;
   }
-  try {
-    await Promise.race([
-      getDocFromServer(doc(db, 'koperasi_state', 'main_database')),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
-    ]);
-    lastOnlineCheckTime = Date.now();
-    lastOnlineCheckResult = true;
-    return true;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore client is offline; waiting for network reconnection.');
-    }
-    lastOnlineCheckTime = Date.now();
-    lastOnlineCheckResult = typeof navigator !== 'undefined' ? navigator.onLine : false;
-    return lastOnlineCheckResult;
-  }
+}
+
+export async function testFirestoreConnection(): Promise<boolean> {
+  return ensureFirestoreOnline();
 }
 
 // Passive server reachability check: NEVER invokes enableNetwork(db) or disableNetwork(db),
@@ -186,14 +177,15 @@ export async function ensureFirestoreOnline(): Promise<boolean> {
     try {
       await Promise.race([
         getDocFromServer(doc(db, 'koperasi_state', 'main_database')),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
       ]);
       lastOnlineCheckTime = Date.now();
       lastOnlineCheckResult = true;
       return true;
     } catch {
+      const restOk = await verifyFirestoreRestReachability();
       lastOnlineCheckTime = Date.now();
-      lastOnlineCheckResult = typeof navigator !== 'undefined' ? navigator.onLine : false;
+      lastOnlineCheckResult = restOk || (typeof navigator !== 'undefined' ? navigator.onLine : false);
       return lastOnlineCheckResult;
     } finally {
       activeOnlineCheckPromise = null;

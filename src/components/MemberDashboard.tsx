@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete, filterAndDeduplicateMemberTransactions } from '../lib/storage';
+import { formatRupiah, applyAuthoritativeServerState, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete, filterAndDeduplicateMemberTransactions } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { initFCM } from '../lib/fcm';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -356,27 +356,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       referensiId: refId,
     };
 
-    // 1. Perbarui saldo pengirim, saldo penerima, dan mutasi secara langsung di state (Req 2: Transfer sesama anggota terkirim akurat)
-    await updateState((prev) => {
-      const updatedMembers = prev.members.map((m) => {
-        if (m.id === currentMember.id) {
-          return { ...m, saldoUmum: (Number(m.saldoUmum) || 0) - amount };
-        }
-        if (m.id === targetMemberRecipient.id) {
-          return { ...m, saldoUmum: (Number(m.saldoUmum) || 0) + amount };
-        }
-        return m;
-      });
-
-      return {
-        ...prev,
-        members: updatedMembers,
-        memberTransactions: [txSender, txReceiver, ...(prev.memberTransactions || [])],
-      };
-    });
-
-    // 2. Kirim transfer via online API endpoint ke server (Req 2)
+    // Kirim transfer SEKALI lewat endpoint otoritatif /api/transfer agar saldo pengirim & penerima tidak terpotong ganda
     let processedRef = refId;
+    let transferredViaServer = false;
     try {
       const res = await fetch('/api/transfer', {
         method: 'POST',
@@ -387,15 +369,46 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
           nominal: amount,
           catatan: tfCatatan,
           pin: tfPin,
+          refId,
+          txSenderId: txSender.id,
+          txReceiverId: txReceiver.id,
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        transferredViaServer = true;
         if (data.refId) processedRef = data.refId;
+        if (data.state) {
+          applyAuthoritativeServerState(data.state);
+        }
+      } else if (res.status >= 400 && res.status < 500 && data?.error) {
+        setTfError(data.error);
+        return;
       }
     } catch (apiErr: any) {
       console.warn('Backend transfer notice:', apiErr);
+    }
+
+    // Fallback lokal hanya apabila server offline/tidak terjangkau
+    if (!transferredViaServer) {
+      await updateState((prev) => {
+        const updatedMembers = prev.members.map((m) => {
+          if (m.id === currentMember.id) {
+            return { ...m, saldoUmum: (Number(m.saldoUmum) || 0) - amount };
+          }
+          if (m.id === targetMemberRecipient.id) {
+            return { ...m, saldoUmum: (Number(m.saldoUmum) || 0) + amount };
+          }
+          return m;
+        });
+
+        return {
+          ...prev,
+          members: updatedMembers,
+          memberTransactions: [txSender, txReceiver, ...(prev.memberTransactions || [])],
+        };
+      });
     }
 
     setTfSuccess(`✓ Transfer ${formatRupiah(amount)} ke ${targetMemberRecipient.nama} (${targetMemberRecipient.nomorRekening}) berhasil terkirim! Ref: ${processedRef}`);

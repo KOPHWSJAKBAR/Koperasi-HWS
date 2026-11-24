@@ -559,7 +559,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [editPengurusNama, setEditPengurusNama] = useState('');
   const [editPengurusKontak, setEditPengurusKontak] = useState('');
 
-  // Lock Maintenance Sistem State (Req 3: Bekukan akses anggota & admin dengan note dan password super admin)
+  // Lock Maintenance Sistem State (Hanya mengunci anggota; Admin tetap aktif & tidak terkunci)
   const [showMaintenanceModal, setShowMaintenanceModal] = useState(false);
   const [maintenanceModeAction, setMaintenanceModeAction] = useState<'lock' | 'unlock'>('lock');
   const [maintenanceNote, setMaintenanceNote] = useState('');
@@ -567,6 +567,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   const [maintenanceAgreed, setMaintenanceAgreed] = useState(false);
   const [isMaintenanceSubmitting, setIsMaintenanceSubmitting] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState('');
+  const [maintenanceFeedback, setMaintenanceFeedback] = useState('');
 
   // Penyesuaian Saldo State (Req 5: Penyesuaian saldo anggota terinput di kas anggota & Req 14: Pilihan buku kas)
   const [adjMemberId, setAdjMemberId] = useState(() => sortMembersDesc(state.members)[0]?.id || '');
@@ -1085,11 +1086,12 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     setBioEnrollError('Pemindaian terputus! Tekan dan tahan jari pada sensor hingga 100% selesai.');
   };
 
-  // Lock / Unlock Maintenance Sistem (Req 3: Bekukan berlaku semua anggota & admin, masukkan note & password, buka kembali)
+  // Lock / Unlock Maintenance Sistem (Hanya mengunci anggota; seluruh Admin tetap aktif & tidak terkunci)
   const handleToggleMaintenanceLock = async () => {
     setMaintenanceError('');
+    setMaintenanceFeedback('');
     if (!isSuperAdmin) {
-      alert('Akses Ditolak: Fitur Lock Maintenance hanya dapat dijalankan oleh Super Admin.');
+      setMaintenanceError('Akses Ditolak: Fitur Lock Maintenance hanya dapat dijalankan oleh Super Admin.');
       return;
     }
 
@@ -1143,8 +1145,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           currentAdmin!,
           maintenanceModeAction === 'lock' ? 'Lock Maintenance Sistem' : 'Buka Lock Maintenance Sistem',
           maintenanceModeAction === 'lock'
-            ? `Super Admin membekukan sistem untuk seluruh anggota dan admin. Alasan: "${maintenanceNote.trim()}"`
-            : `Super Admin membuka kembali status lock maintenance. Sistem normal kembali.`
+            ? `Super Admin mengaktifkan kunci maintenance khusus seluruh anggota (semua Admin tetap aktif & tidak terkunci). Alasan: "${maintenanceNote.trim()}"`
+            : `Super Admin membuka kembali kunci maintenance anggota. Akses seluruh anggota normal kembali.`
         );
 
         return {
@@ -1172,9 +1174,9 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       setMaintenanceAgreed(false);
 
       if (maintenanceModeAction === 'lock') {
-        alert('⚠️ Berhasil! Seluruh sistem Koperasi telah DIBEKUKAN / DIKUNCI MAINTENANCE. Anggota dan admin yang login akan menerima catatan alasan ini.');
+        setMaintenanceFeedback('Kunci maintenance aktif khusus anggota. Keterangan langsung tampil saat anggota ingin login, sedangkan seluruh Admin tetap aktif.');
       } else {
-        alert('✓ Berhasil! Kunci maintenance telah DIBUKA. Akses seluruh pengguna telah normal kembali.');
+        setMaintenanceFeedback('Kunci maintenance berhasil dibuka. Seluruh anggota kini dapat login kembali secara normal.');
       }
     } catch (err: any) {
       setMaintenanceError(err.message || 'Terjadi kesalahan');
@@ -2356,686 +2358,825 @@ export const SettingModal: React.FC<SettingModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 overflow-y-auto">
-      <div className="bg-[#0f172a] text-slate-100 border border-slate-700/80 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden my-4 max-h-[92vh] flex flex-col">
-        {/* Header matching Anngota Setting Menu.png & mobile admin */}
-        <div className="p-4 border-b border-slate-700/80 flex items-center justify-between bg-[#162035] shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="text-amber-500 font-bold text-base">⚙️</span>
-            <h3 className="text-sm font-extrabold text-white">
-              {isMember ? 'Pengaturan Akun & Profil' : 'Pengaturan & Profil Pengurus'}
-            </h3>
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+      <div className="bg-[#0b1120] text-slate-100 border border-slate-800 w-full max-w-md lg:max-w-5xl rounded-3xl shadow-2xl overflow-hidden my-4 max-h-[92vh] flex flex-col">
+        {/* Header */}
+        <div className="px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 flex items-center justify-between bg-[#0f172a] shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+              <Wrench className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-extrabold text-white leading-tight">
+                {isMember ? 'Pengaturan Akun & Profil' : 'Pengaturan & Profil Pengurus'}
+              </h3>
+              <p className="hidden sm:block text-[11px] text-slate-400">
+                {isMember
+                  ? 'Kelola data diri, keamanan perangkat, kartu anggota, dan aplikasi'
+                  : 'Kelola profil pengurus, keamanan perangkat, operasional koperasi, dan sistem cloud'}
+              </p>
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {!isMember && currentAdmin && (
+              <span className="hidden sm:inline-flex items-center px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-[10px] font-black uppercase text-amber-300">
+                {currentAdmin.role.replace('_', ' ')}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              title="Tutup Menu Setting"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Content Body */}
-        <div className="p-4 overflow-y-auto space-y-4 flex-1">
-          {/* ================= PROFILE CARD ================= */}
-          {isMember ? (
-            <div className="bg-[#162035] p-4 rounded-2xl border border-slate-700/80 space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-300 p-0.5">
-                  <div className="w-full h-full bg-slate-900 rounded-[14px] flex items-center justify-center font-black text-amber-400 text-xl">
-                    {currentMember.nama.charAt(0).toUpperCase()}
-                  </div>
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-white">{currentMember.nama}</h4>
-                  <div className="text-[11px] font-mono font-bold text-amber-400">
-                    {currentMember.nomorRekening || currentMember.nomorAnggota}
-                  </div>
-                  <div className="text-[10px] text-slate-400">Wilayah: {currentMember.wilayah}</div>
-                </div>
-              </div>
-
-              <div className="pt-2 border-t border-slate-700/60 space-y-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">No. Rekening / Anggota:</span>
-                  <span className="font-mono font-black text-white">{currentMember.nomorRekening || currentMember.nomorAnggota}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Bank Pribadi:</span>
-                  <span className="font-mono text-slate-200 truncate max-w-[200px]">
-                    {currentMember.bankPribadi.namaBank} ({currentMember.bankPribadi.nomorRekening})
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">No. WhatsApp:</span>
-                  <span className="font-mono text-slate-200">{currentMember.whatsapp}</span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSubModal('edit_profile')}
-                className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold text-amber-400 border border-amber-500/20 flex items-center justify-center gap-1.5"
-              >
-                <Edit2 className="w-3.5 h-3.5" />
-                Ubah Data Diri & Password
-              </button>
-            </div>
-          ) : (
-            <div className="bg-[#162035] p-4 rounded-2xl border border-slate-700/80 space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="w-14 h-14 rounded-2xl bg-amber-500 flex items-center justify-center font-black text-slate-950 text-2xl shadow-lg">
-                  {currentAdmin?.nama.charAt(0).toUpperCase() || 'A'}
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-white">{currentAdmin?.nama}</h4>
-                  <div className="text-[11px] text-sky-400 font-mono">@{currentAdmin?.username}</div>
-                  <span className="inline-block mt-0.5 px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase">
-                    {currentAdmin?.role.replace('_', ' ')}
-                  </span>
-                </div>
-              </div>
-
-              <div className="pt-2 border-t border-slate-700/60 space-y-1 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">NIK:</span>
-                  <span className="font-mono text-slate-200">{currentAdmin?.nik}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">No. WhatsApp:</span>
-                  <span className="font-mono text-slate-200">{currentAdmin?.whatsapp}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Email:</span>
-                  <span className="text-slate-200 truncate max-w-[190px]">{currentAdmin?.email}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Wilayah Kantor:</span>
-                  <span className="text-slate-200">{currentAdmin?.wilayahKantor}</span>
-                </div>
-              </div>
-
-              {currentAdmin && (
-                <button
-                  type="button"
-                  onClick={() => setSubModal('edit_profile')}
-                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold text-amber-400 border border-amber-500/20 flex items-center justify-center gap-1.5"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                  Ubah Profil & Password Saya
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* ================= BIOMETRIK & NOTIFIKASI MOBILE (Req: Both Members & All Admins) ================= */}
-          <div className="bg-[#162035] p-3.5 rounded-2xl border border-slate-700/80 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-amber-400">🛡️</span>
-                  <span className="font-extrabold text-white text-xs">Keamanan Biometrik & Notifikasi Mobile</span>
-                </div>
-                <span className="text-[10px] text-amber-400 font-mono font-bold">Device Sync</span>
-              </div>
-
-              {/* Toggle Biometrik (Req 7) */}
-              <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
-                    biometricEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'
-                  }`}>
-                    <Lock className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="font-bold text-white text-xs">Biometrik Sidik Jari (Fingerprint Scan)</div>
-                    <div className="text-[10px] text-slate-400">
-                      {biometricEnabled ? 'Aktif pada sensor perangkat ini (tidak tersimpan di database)' : 'Klik untuk mengaktifkan pada perangkat ini saja'}
+        {/* Content Body: Stacked on Mobile (< lg), 2-Column Workspace on PC & Web (lg+) */}
+        <div className="p-4 sm:p-6 overflow-y-auto flex-1">
+          <div className="space-y-4 lg:grid lg:grid-cols-[320px_1fr] lg:grid-rows-[auto_1fr] lg:gap-5 lg:space-y-0 lg:items-start">
+            {/* ================= LEFT RAIL: PROFILE & DEVICE SECURITY ================= */}
+            <div className="space-y-4 lg:col-start-1 lg:row-start-1">
+              {/* PROFILE CARD */}
+              {isMember ? (
+                <div className="bg-[#0f172a] p-4 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-300 p-0.5 shrink-0">
+                      <div className="w-full h-full bg-slate-900 rounded-[14px] flex items-center justify-center font-black text-amber-400 text-xl">
+                        {currentMember.nama.charAt(0).toUpperCase()}
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-extrabold text-white truncate">{currentMember.nama}</h4>
+                      <div className="text-[11px] font-mono font-bold text-amber-400">
+                        {currentMember.nomorRekening || currentMember.nomorAnggota}
+                      </div>
+                      <div className="text-[10px] text-slate-400">Wilayah: {currentMember.wilayah}</div>
                     </div>
                   </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleToggleBiometric}
-                  className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
-                    biometricEnabled
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
-                  }`}
-                >
-                  {biometricEnabled ? '✓ Aktif' : 'Aktifkan'}
-                </button>
-              </div>
 
-              {/* Toggle Notifikasi Mobile (Req 8) */}
-              <div className="flex items-center justify-between p-2.5 bg-slate-900/80 rounded-xl border border-slate-750">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
-                    mobileNotifEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
-                  }`}>
-                    <Smartphone className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="font-bold text-white text-xs">Notifikasi Mobile (Surat & Chat)</div>
-                    <div className="text-[10px] text-slate-400">
-                      {mobileNotifEnabled ? 'Notifikasi perangkat langsung aktif' : 'Aktifkan saat aplikasi terinstal'}
+                  <div className="pt-2.5 border-t border-slate-800 space-y-1.5 text-xs">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">No. Rekening:</span>
+                      <span className="font-mono font-black text-white">{currentMember.nomorRekening || currentMember.nomorAnggota}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">Bank Pribadi:</span>
+                      <span className="font-mono text-slate-200 truncate max-w-[180px]">
+                        {currentMember.bankPribadi.namaBank} ({currentMember.bankPribadi.nomorRekening})
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">No. WhatsApp:</span>
+                      <span className="font-mono text-slate-200">{currentMember.whatsapp}</span>
                     </div>
                   </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleToggleMobileNotifications}
-                  className={`px-3 py-1.5 rounded-xl font-black text-xs transition-all ${
-                    mobileNotifEnabled
-                      ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                      : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600'
-                  }`}
-                >
-                  {mobileNotifEnabled ? '✓ Aktif' : 'Aktifkan'}
-                </button>
-              </div>
-            </div>
 
-          {/* ================= BUTTONS LIST ================= */}
-          {isMember ? (
-            /* Member Options: KTA, Ubah data diri, Lihat KTA Digital, Log Out, Instalasi Koperasi */
-            <div className="space-y-2">
-              <button
-                onClick={() => setSubModal('edit_profile')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <User className="w-4 h-4 text-sky-400" />
-                  <span>Ubah Data Diri & Password</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  onClose();
-                  onOpenKta?.();
-                }}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Lihat KTA Digital Anggota</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  onClose();
-                  onOpenMutasi?.();
-                }}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <FileText className="w-4 h-4 text-amber-400" />
-                  <span>Cetak Rekening Koran PDF</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  onClose();
-                  onOpenChat?.();
-                }}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Server className="w-4 h-4 text-amber-400" />
-                  <span>Layanan Bantuan Pengurus</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              {/* Install PWA Button */}
-              <button
-                onClick={() => setSubModal('install_pwa')}
-                className="w-full p-3 bg-emerald-950/40 hover:bg-emerald-950/60 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Smartphone className="w-4 h-4 text-emerald-400" />
-                  <div className="text-left">
-                    <div className="text-emerald-300">Instal Aplikasi Koperasi HWS</div>
-                    <div className="text-[10px] text-emerald-400/80 font-normal">
-                      APK Android & iOS (Langsung Terpasang)
-                    </div>
-                  </div>
-                </div>
-                <span className="text-emerald-400">›</span>
-              </button>
-            </div>
-          ) : isSuperAdmin ? (
-            /* Super Admin Options */
-            <div className="space-y-2">
-              <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase pt-2">
-                Kelola Pengurus & Sistem (Super Admin)
-              </div>
-
-              {/* CADANGAN BASIS DATA FIRESTORE (JSON BACKUP & RESTORE - HANYA SUPER ADMIN) */}
-              <div className="p-3 bg-gradient-to-r from-emerald-950/80 via-slate-900 to-teal-950/80 rounded-2xl border-2 border-emerald-500/50 shadow-lg space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="p-1.5 rounded-lg bg-emerald-500 text-slate-950 font-black">
-                      <Download className="w-4 h-4" />
-                    </span>
-                    <div>
-                      <div className="font-black text-white text-xs">Cadangan Basis Data (JSON)</div>
-                      <div className="text-[10px] text-emerald-300">Ekspor status aplikasi saat ini dari Firestore untuk pemulihan</div>
-                    </div>
-                  </div>
-                  <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono font-bold border border-emerald-500/30">
-                    Cadangan Data
-                  </span>
-                </div>
-                <div className="pt-1">
                   <button
                     type="button"
-                    onClick={handleExportFirestoreJson}
-                    disabled={isExportingJson}
-                    className="w-full py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs rounded-xl shadow flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
-                    title="Unduh seluruh database saat ini dalam format JSON untuk cadangan"
+                    onClick={() => setSubModal('edit_profile')}
+                    className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold text-amber-400 border border-amber-500/25 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                   >
-                    <Download className={`w-3.5 h-3.5 ${isExportingJson ? 'animate-bounce' : ''}`} />
-                    <span>{isExportingJson ? 'Mengekspor...' : 'Ekspor Basis Data (.JSON)'}</span>
+                    <Edit2 className="w-3.5 h-3.5" />
+                    Ubah Data Diri & Password
+                  </button>
+                </div>
+              ) : (
+                <div className="bg-[#0f172a] p-4 rounded-2xl border border-slate-800 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-2xl bg-amber-500 flex items-center justify-center font-black text-slate-950 text-2xl shrink-0">
+                      {currentAdmin?.nama.charAt(0).toUpperCase() || 'A'}
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-extrabold text-white truncate">{currentAdmin?.nama}</h4>
+                      <div className="text-[11px] text-sky-400 font-mono truncate">@{currentAdmin?.username}</div>
+                      <span className="inline-block mt-1 px-2 py-0.5 rounded-md text-[9px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase">
+                        {currentAdmin?.role.replace('_', ' ')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2.5 border-t border-slate-800 space-y-1.5 text-xs">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">NIK:</span>
+                      <span className="font-mono text-slate-200">{currentAdmin?.nik}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">No. WhatsApp:</span>
+                      <span className="font-mono text-slate-200">{currentAdmin?.whatsapp}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">Email:</span>
+                      <span className="text-slate-200 truncate max-w-[180px]">{currentAdmin?.email}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">Wilayah Kantor:</span>
+                      <span className="text-slate-200 truncate">{currentAdmin?.wilayahKantor}</span>
+                    </div>
+                  </div>
+
+                  {currentAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setSubModal('edit_profile')}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-bold text-amber-400 border border-amber-500/25 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      Ubah Profil & Password Saya
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* BIOMETRIK & NOTIFIKASI MOBILE */}
+              <div className="bg-[#0f172a] p-3.5 rounded-2xl border border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between gap-2 pb-1 border-b border-slate-800/80">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span className="font-extrabold text-white text-xs">Keamanan & Notifikasi</span>
+                  </div>
+                  <span className="text-[10px] text-amber-400 font-mono font-bold">Device Sync</span>
+                </div>
+
+                {/* Toggle Biometrik */}
+                <div className="flex items-center justify-between gap-2 p-2.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                        biometricEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-white text-xs truncate">Biometrik Sidik Jari</div>
+                      <div className="text-[10px] text-slate-400 leading-tight">
+                        {biometricEnabled ? 'Aktif pada perangkat ini' : 'Aktifkan untuk login cepat'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleBiometric}
+                    className={`px-2.5 py-1.5 rounded-xl font-black text-[11px] shrink-0 transition-colors cursor-pointer ${
+                      biometricEnabled
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                    }`}
+                  >
+                    {biometricEnabled ? '✓ Aktif' : 'Aktifkan'}
+                  </button>
+                </div>
+
+                {/* Toggle Notifikasi Mobile */}
+                <div className="flex items-center justify-between gap-2 p-2.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                        mobileNotifEnabled ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                      }`}
+                    >
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-white text-xs truncate">Notifikasi Surat & Chat</div>
+                      <div className="text-[10px] text-slate-400 leading-tight">
+                        {mobileNotifEnabled ? 'Notifikasi langsung aktif' : 'Aktifkan notifikasi perangkat'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleToggleMobileNotifications}
+                    className={`px-2.5 py-1.5 rounded-xl font-black text-[11px] shrink-0 transition-colors cursor-pointer ${
+                      mobileNotifEnabled
+                        ? 'bg-emerald-500 text-slate-950'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                    }`}
+                  >
+                    {mobileNotifEnabled ? '✓ Aktif' : 'Aktifkan'}
                   </button>
                 </div>
               </div>
+            </div>
 
-              {/* HAPUS TRANSAKSI ANGGOTA (HANYA SUPER ADMIN - PILIH WILAYAH / ANGGOTA, PASSWORD ADMIN & PERSETUJUAN) */}
-              <button
-                type="button"
-                onClick={() => setShowHapusTxModal(true)}
-                className="w-full p-3 bg-rose-950/40 hover:bg-rose-900/60 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group cursor-pointer"
-                title="Hapus riwayat transaksi anggota berdasarkan wilayah atau nama anggota dengan otorisasi password admin"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Hapus Transaksi Anggota (Otoritas Super Admin)</div>
-                    <div className="text-[10px] text-rose-300 font-normal">
-                      Pilih wilayah / nama anggota, masukkan password Super Admin, lalu klik persetujuan
-                    </div>
+            {/* ================= RIGHT WORKSPACE: CATEGORIZED SETTINGS GRID ================= */}
+            <div className="space-y-4 lg:col-start-2 lg:row-start-1 lg:row-span-2 min-w-0">
+              {isMember ? (
+                /* Member Options */
+                <div className="space-y-3">
+                  <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase">
+                    Layanan Akun & Dokumen Anggota
                   </div>
-                </div>
-                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-              </button>
-
-              {/* KELOLA & HAPUS RIWAYAT VERIFIKASI SETORAN (HANYA SUPER ADMIN) */}
-              <button
-                type="button"
-                onClick={() => setSubModal('kelola_setoran')}
-                className="w-full p-3 bg-red-950/40 hover:bg-red-900/60 rounded-2xl border border-red-500/50 flex items-center justify-between text-xs font-bold text-red-200 transition-all shadow-md group cursor-pointer"
-                title="Kelola dan hapus berkas riwayat verifikasi setoran anggota (otoritas Super Admin)"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Hapus & Kelola Verifikasi Setoran (Super Admin)</div>
-                    <div className="text-[10px] text-rose-300 font-normal">
-                      Hapus pengajuan setoran yang salah / tolak secara permanen
-                    </div>
-                  </div>
-                </div>
-                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-              </button>
-
-              {/* KHUSUS SUPER ADMIN: Tambah Admin & Kelola Admin */}
-              <button
-                type="button"
-                onClick={handleOpenTambahAdmin}
-                className="w-full p-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-black text-xs flex items-center justify-between shadow-lg transition-all"
-              >
-                <div className="flex items-center gap-2">
-                  <Plus className="w-4 h-4" />
-                  <span>+ Tambah Admin / Pengurus Baru</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSubModal('daftar_admin')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all text-left"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Shield className="w-4 h-4 text-sky-400 shrink-0" />
-                  <div>
-                    <div className="font-extrabold text-white">
-                      Kelola Administrator Koperasi ({state.admins.length} Admin)
-                    </div>
-                    <div className="text-[10px] text-slate-400 font-normal">
-                      Super Admin: Edit, tambah, atau hapus akun pengurus
-                    </div>
-                  </div>
-                </div>
-                <span>›</span>
-              </button>
-
-              {/* Biodata & QRIS Resmi Koperasi */}
-              <button
-                onClick={() => setSubModal('profil_koperasi')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Building className="w-4 h-4 text-emerald-400" />
-                  <div className="text-left">
-                    <div className="font-extrabold text-white">Biodata & QRIS Resmi Koperasi</div>
-                    <div className="text-[10px] text-slate-400 font-normal">
-                      Kelola legalitas, susunan pengurus, dan barcode QRIS koperasi
-                    </div>
-                  </div>
-                </div>
-                <span>›</span>
-              </button>
-
-
-              {/* KUNCI / BEKUKAN MAINTENANCE SISTEM (Req 3: Khusus Super Admin) */}
-              {state.maintenanceLock?.isLocked ? (
-                <div className="p-3.5 bg-rose-950/70 rounded-2xl border-2 border-rose-500/80 shadow-lg shadow-rose-950/50 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="p-1.5 bg-rose-500/20 text-rose-400 rounded-lg">
-                        <Lock className="w-4 h-4 text-rose-400" />
-                      </span>
-                      <div>
-                        <div className="font-black text-rose-200 text-xs uppercase tracking-wide">
-                          Mode Lock Maintenance Aktif
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSubModal('edit_profile')}
+                      className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-sky-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 flex items-center justify-center shrink-0">
+                          <User className="w-4 h-4" />
                         </div>
-                        <div className="text-[10px] text-rose-300">
-                          Semua anggota & admin sedang dibekukan
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-white">Ubah Data Diri & Password</div>
+                          <div className="text-[10px] text-slate-400 font-normal">Perbarui kontak, bank & kata sandi</div>
                         </div>
                       </div>
-                    </div>
+                      <span className="text-slate-400 shrink-0">›</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => {
-                        setMaintenanceModeAction('unlock');
-                        setMaintenancePassword('');
-                        setMaintenanceError('');
-                        setShowMaintenanceModal(true);
+                        onClose();
+                        onOpenKta?.();
                       }}
-                      className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition-all cursor-pointer shadow shrink-0"
+                      className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
                     >
-                      Buka Kunci
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-white">Lihat KTA Digital Anggota</div>
+                          <div className="text-[10px] text-slate-400 font-normal">Kartu Tanda Anggota resmi koperasi</div>
+                        </div>
+                      </div>
+                      <span className="text-slate-400 shrink-0">›</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenMutasi?.();
+                      }}
+                      className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-amber-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-white">Cetak Rekening Koran PDF</div>
+                          <div className="text-[10px] text-slate-400 font-normal">Unduh mutasi simpanan & buku kas</div>
+                        </div>
+                      </div>
+                      <span className="text-slate-400 shrink-0">›</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenChat?.();
+                      }}
+                      className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-amber-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+                          <Server className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-white">Layanan Bantuan Pengurus</div>
+                          <div className="text-[10px] text-slate-400 font-normal">Hubungi admin koperasi via chat</div>
+                        </div>
+                      </div>
+                      <span className="text-slate-400 shrink-0">›</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSubModal('install_pwa')}
+                      className="md:col-span-2 w-full p-3.5 bg-emerald-950/35 hover:bg-emerald-950/55 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                          <Smartphone className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-emerald-300 font-extrabold">Instal Aplikasi Koperasi HWS</div>
+                          <div className="text-[10px] text-emerald-400/80 font-normal">
+                            Android (.APK), iOS, dan PC Desktop langsung terpasang
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-emerald-400 shrink-0">›</span>
                     </button>
                   </div>
-                  {state.maintenanceLock.note && (
-                    <div className="p-2 bg-slate-900/80 rounded-xl text-[11px] text-slate-200 border border-rose-500/30">
-                      <span className="font-bold text-amber-400">Alasan:</span> {state.maintenanceLock.note}
+                </div>
+              ) : isSuperAdmin ? (
+                /* Super Admin Categorized 2-Column Workspace */
+                <div className="space-y-5">
+                  {/* Maintenance Status & Feedback Banner */}
+                  {maintenanceFeedback && (
+                    <div className="p-3 bg-emerald-950/70 border border-emerald-500/40 rounded-xl text-xs text-emerald-200 flex items-center justify-between gap-2">
+                      <span>{maintenanceFeedback}</span>
+                      <button
+                        type="button"
+                        onClick={() => setMaintenanceFeedback('')}
+                        className="text-emerald-300 hover:text-white shrink-0 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
                     </div>
                   )}
-                  <div className="text-[10px] text-slate-400">
-                    Dikunci oleh: {state.maintenanceLock.lockedByName || 'Super Admin'} • {state.maintenanceLock.lockedAt ? new Date(state.maintenanceLock.lockedAt).toLocaleString('id-ID') : ''}
+
+                  {state.maintenanceLock?.isLocked && (
+                    <div className="p-3.5 bg-rose-950/60 rounded-2xl border border-rose-500/70 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="p-2 bg-rose-500/20 text-rose-400 rounded-xl shrink-0">
+                            <Lock className="w-4 h-4 text-rose-400" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="font-black text-rose-200 text-xs uppercase tracking-wide">
+                              Mode Lock Maintenance Aktif
+                            </div>
+                            <div className="text-[11px] text-rose-300">
+                              Hanya anggota dikunci sementara (Admin tetap aktif & bebas akses)
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMaintenanceModeAction('unlock');
+                            setMaintenancePassword('');
+                            setMaintenanceError('');
+                            setShowMaintenanceModal(true);
+                          }}
+                          className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition-colors cursor-pointer shrink-0"
+                        >
+                          Buka Kunci
+                        </button>
+                      </div>
+                      {state.maintenanceLock.note && (
+                        <div className="p-2.5 bg-slate-900/80 rounded-xl text-[11px] text-slate-200 border border-rose-500/30">
+                          <span className="font-bold text-amber-400">Keterangan:</span> {state.maintenanceLock.note}
+                        </div>
+                      )}
+                      <div className="text-[10px] text-slate-400">
+                        Dikunci oleh: {state.maintenanceLock.lockedByName || 'Super Admin'} •{' '}
+                        {state.maintenanceLock.lockedAt ? new Date(state.maintenanceLock.lockedAt).toLocaleString('id-ID') : ''}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Section 1: Manajemen Pengurus & Profil Koperasi */}
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-black tracking-wider text-slate-400 uppercase">
+                        Manajemen Pengurus & Koperasi
+                      </span>
+                      <span className="text-[10px] text-amber-400 font-bold">Super Admin</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={handleOpenTambahAdmin}
+                        className="w-full p-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-black text-xs flex items-center justify-between transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-slate-950/15 flex items-center justify-center shrink-0">
+                            <Plus className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-black text-slate-950">Tambah Admin / Pengurus Baru</div>
+                            <div className="text-[10px] text-slate-900/80 font-semibold">Buat akun administrator wilayah</div>
+                          </div>
+                        </div>
+                        <span className="font-black shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('daftar_admin')}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-sky-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors text-left cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 flex items-center justify-center shrink-0">
+                            <Shield className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white truncate">
+                              Kelola Administrator ({state.admins.length} Admin)
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-normal">
+                              Edit, atur hak akses, atau hapus pengurus
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-slate-400 shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('profil_koperasi')}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors text-left cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                            <Building className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Biodata & QRIS Resmi Koperasi</div>
+                            <div className="text-[10px] text-slate-400 font-normal">
+                              Legalitas, pengurus, dan barcode QRIS
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-slate-400 shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('pengaturan_berbagi')}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-rose-500/40 hover:border-rose-400 flex items-center justify-between text-xs font-bold text-white transition-colors text-left cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center border border-rose-500/30 shrink-0">
+                            <Heart className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white group-hover:text-rose-300 transition-colors">
+                              Pengaturan Menu Berbagi
+                            </div>
+                            <div className="text-[10px] text-rose-300/90 font-normal truncate">
+                              {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & QRIS
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-rose-400 font-bold shrink-0">›</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 2: Pemeliharaan, Keamanan & Cadangan Data */}
+                  <div className="space-y-2.5">
+                    <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase">
+                      Pemeliharaan, Keamanan & Cadangan Data
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {/* Cadangan JSON */}
+                      <div className="p-3.5 bg-[#0f172a] rounded-2xl border border-emerald-500/45 flex flex-col justify-between gap-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                              <Download className="w-4 h-4" />
+                            </span>
+                            <div className="min-w-0">
+                              <div className="font-extrabold text-white text-xs">Cadangan Basis Data (JSON)</div>
+                              <div className="text-[10px] text-slate-400">Ekspor snapshot Firestore untuk pemulihan</div>
+                            </div>
+                          </div>
+                          <span className="text-[9px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono font-bold border border-emerald-500/30 shrink-0">
+                            JSON
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleExportFirestoreJson}
+                          disabled={isExportingJson}
+                          className="w-full py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+                        >
+                          <Download className={`w-3.5 h-3.5 ${isExportingJson ? 'animate-bounce' : ''}`} />
+                          <span>{isExportingJson ? 'Mengekspor...' : 'Ekspor Basis Data (.JSON)'}</span>
+                        </button>
+                      </div>
+
+                      {/* Kunci Maintenance Anggota (when unlocked) */}
+                      {!state.maintenanceLock?.isLocked && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMaintenanceModeAction('lock');
+                            setMaintenanceNote('');
+                            setMaintenancePassword('');
+                            setMaintenanceAgreed(false);
+                            setMaintenanceError('');
+                            setShowMaintenanceModal(true);
+                          }}
+                          className="w-full p-3.5 bg-rose-950/35 hover:bg-rose-900/50 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-rose-200 transition-colors cursor-pointer text-left"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                              <Lock className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="font-extrabold text-white">Kunci Maintenance Anggota</div>
+                              <div className="text-[10px] text-rose-300 font-normal">
+                                Bekukan akses anggota saat pemeliharaan (Admin tetap aktif)
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-rose-400 font-bold shrink-0">›</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setShowHapusTxModal(true)}
+                        className="w-full p-3.5 bg-rose-950/30 hover:bg-rose-900/50 rounded-2xl border border-rose-500/40 flex items-center justify-between text-xs font-bold text-rose-200 transition-colors cursor-pointer text-left"
+                        title="Hapus riwayat transaksi anggota berdasarkan wilayah atau nama anggota dengan otorisasi password admin"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Hapus Transaksi Anggota</div>
+                            <div className="text-[10px] text-rose-300 font-normal">
+                              Filter wilayah/anggota dengan otorisasi Super Admin
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-rose-400 font-bold shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('kelola_setoran')}
+                        className="w-full p-3.5 bg-red-950/30 hover:bg-red-900/50 rounded-2xl border border-red-500/40 flex items-center justify-between text-xs font-bold text-red-200 transition-colors cursor-pointer text-left"
+                        title="Kelola dan hapus berkas riwayat verifikasi setoran anggota"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Hapus & Kelola Verifikasi Setoran</div>
+                            <div className="text-[10px] text-rose-300 font-normal">
+                              Hapus pengajuan setoran salah atau ditolak secara permanen
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-rose-400 font-bold shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowResetAppModal(true)}
+                        className="md:col-span-2 w-full p-3.5 bg-rose-950/40 hover:bg-rose-900/55 rounded-2xl border border-rose-500/55 flex items-center justify-between text-xs font-bold text-rose-200 transition-colors cursor-pointer text-left group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/40 shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white group-hover:text-rose-300 transition-colors">
+                              Reset Total Aplikasi Mulai Dari 0
+                            </div>
+                            <div className="text-[10px] text-rose-300 font-normal">
+                              Hapus seluruh riwayat transaksi mutasi anggota & sisakan hanya Super Admin
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-rose-400 font-bold shrink-0">›</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 3: Cloud, Analitik Realtime & Aplikasi */}
+                  <div className="space-y-2.5">
+                    <div className="text-[11px] font-black tracking-wider text-slate-400 uppercase">
+                      Cloud, Analitik Realtime & Aplikasi
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSyncFeedback('');
+                          setSubModal('realtime_analytics');
+                        }}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-emerald-500/45 flex items-center justify-between gap-2 text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center border border-emerald-500/35 shrink-0">
+                            <Activity className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white flex flex-wrap items-center gap-1.5">
+                              <span>Firebase Realtime Analytics</span>
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black">
+                                {realtimeAnalytics.onlineCount} LIVE
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-emerald-300/90 font-normal truncate">
+                              Perangkat aktif & sinkronisasi lintas perangkat
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-emerald-400 font-bold shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSubModal('analisis_error');
+                          fetchDiagnostics();
+                        }}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-red-500/40 flex items-center justify-between text-xs font-bold text-red-200 transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/30 text-red-400 flex items-center justify-center shrink-0">
+                            <Activity className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Analisis Sistem & Diagnostik Error</div>
+                            <div className="text-[10px] text-red-300 font-normal truncate">
+                              Storage, speed, status API & Firestore
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-red-400 font-bold shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('cloud_server')}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-purple-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-400 flex items-center justify-center shrink-0">
+                            <Server className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Server Firebase Cloud Firestore</div>
+                            <div className="text-[10px] text-slate-400 font-normal">Status koneksi & sinkronisasi cloud</div>
+                          </div>
+                        </div>
+                        <span className="text-slate-400 shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('google_drive')}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-amber-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+                            <Cloud className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Cadangan Google Drive</div>
+                            <div className="text-[10px] text-slate-400 font-normal">Backup laporan & arsip ke cloud</div>
+                          </div>
+                        </div>
+                        <span className="text-slate-400 shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('log_audit')}
+                        className="w-full p-3.5 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-slate-800 hover:border-sky-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 flex items-center justify-center shrink-0">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white">Log Audit Aktivitas (60 Hari)</div>
+                            <div className="text-[10px] text-slate-400 font-normal">Jejak perubahan & persetujuan admin</div>
+                          </div>
+                        </div>
+                        <span className="text-slate-400 shrink-0">›</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('install_pwa')}
+                        className="w-full p-3.5 bg-emerald-950/35 hover:bg-emerald-950/55 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/35 text-emerald-400 flex items-center justify-center shrink-0">
+                            <Smartphone className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-emerald-300">Instal Aplikasi Koperasi</div>
+                            <div className="text-[10px] text-emerald-400/80 font-normal truncate">
+                              Android (.APK), iOS, dan PC (.EXE)
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-emerald-400 shrink-0">›</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMaintenanceModeAction('lock');
-                    setMaintenanceNote('');
-                    setMaintenancePassword('');
-                    setMaintenanceAgreed(false);
-                    setMaintenanceError('');
-                    setShowMaintenanceModal(true);
-                  }}
-                  className="w-full p-3 bg-rose-950/40 hover:bg-rose-900/60 rounded-2xl border border-rose-500/60 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Lock className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform shrink-0" />
-                    <div className="text-left">
-                      <div className="font-extrabold text-white text-xs">Kunci Maintenance Sistem (Bekukan Akses)</div>
-                      <div className="text-[10px] text-rose-300 font-normal">
-                        Bekukan seluruh anggota & admin dengan catatan alasan resmi
-                      </div>
+                /* Non-Super Admin Workspace */
+                <div className="space-y-4">
+                  <div className="p-3.5 bg-emerald-950/35 rounded-2xl border border-emerald-500/35 text-emerald-300 text-xs flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/35 text-emerald-400 flex items-center justify-center shrink-0">
+                      <Building className="w-4 h-4" />
                     </div>
-                  </div>
-                  <span className="text-rose-400 font-bold">›</span>
-                </button>
-              )}
-
-              {/* Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat (Khusus Super Admin) */}
-              <button
-                type="button"
-                onClick={() => {
-                  setSyncFeedback('');
-                  setSubModal('realtime_analytics');
-                }}
-                className="w-full p-3 bg-gradient-to-r from-emerald-950/60 to-slate-900 hover:from-emerald-900/60 hover:to-slate-800 rounded-2xl border border-emerald-500/50 flex items-center justify-between gap-2 text-xs font-bold text-white transition-all shadow-md"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shrink-0">
-                    <Activity className="w-4 h-4 animate-pulse" />
-                  </div>
-                  <div className="text-left min-w-0">
-                    <div className="font-extrabold text-white text-xs flex flex-wrap items-center gap-1.5">
-                      <span>Firebase Realtime Analytics & Sinkronisasi Lintas Perangkat</span>
-                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black">
-                        {realtimeAnalytics.onlineCount} LIVE
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-emerald-300/90 font-normal truncate">
-                      Perangkat aktif, saldo kas berjalan, sedekah & sinkronisasi realtime
-                    </div>
-                  </div>
-                </div>
-                <span className="text-emerald-400 font-bold shrink-0">›</span>
-              </button>
-
-              {/* Analisis Sistem, Firebase, Google Drive, Log Audit */}
-              <button
-                onClick={() => {
-                  setSubModal('analisis_error');
-                  fetchDiagnostics();
-                }}
-                className="w-full p-3 bg-red-950/40 hover:bg-red-900/60 rounded-2xl border border-red-500/50 flex items-center justify-between text-xs font-bold text-red-200 transition-all shadow-md shadow-red-950/50"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Activity className="w-4 h-4 text-red-400 shrink-0" />
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs">Analisis Sistem & Diagnostik Error (Super Admin)</div>
-                    <div className="text-[10px] text-red-300 font-normal">Device online, storage, speed, SQL Google & Firestore</div>
-                  </div>
-                </div>
-                <span className="text-red-400 font-bold">›</span>
-              </button>
-
-              <button
-                onClick={() => setSubModal('cloud_server')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Server className="w-4 h-4 text-purple-400" />
-                  <span>Server Firebase Cloud Firestore</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              <button
-                onClick={() => setSubModal('google_drive')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Cloud className="w-4 h-4 text-amber-400" />
-                  <span>Cadangan Google Drive (Backup Cloud)</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              <button
-                onClick={() => setSubModal('log_audit')}
-                className="w-full p-3 bg-slate-800/80 hover:bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <FileText className="w-4 h-4 text-sky-400" />
-                  <span>Log Audit Aktivitas Sistem (60 Hari)</span>
-                </div>
-                <span>›</span>
-              </button>
-
-              {/* Req 1 & 8: Pengaturan Menu Berbagi (Nama Sedekah & QRIS) */}
-              <button
-                type="button"
-                onClick={() => setSubModal('pengaturan_berbagi')}
-                className="w-full p-3 bg-gradient-to-r from-rose-950/60 to-slate-900 hover:bg-slate-800 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/40 shrink-0">
-                    <Heart className="w-4 h-4 text-rose-400" />
-                  </div>
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
-                      Pengaturan Menu Berbagi (Nama Sedekah & QRIS)
-                    </div>
-                    <div className="text-[10px] text-rose-300 font-normal">
-                      Ubah nama program ({berbagiSubuh}, {berbagiJumat}, {berbagiUmum}) & barcode QRIS
-                    </div>
-                  </div>
-                </div>
-                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-              </button>
-
-              {/* Req 1: Reset Total Aplikasi Mulai Dari 0 (Hapus Semua Transaksi & Sisakan Super Admin) */}
-              <button
-                type="button"
-                onClick={() => setShowResetAppModal(true)}
-                className="w-full p-3 bg-gradient-to-r from-rose-950/60 to-red-950/60 hover:from-rose-900/70 hover:to-red-900/70 rounded-2xl border border-rose-500/60 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/40 shrink-0 group-hover:scale-105 transition-transform">
-                    <Trash2 className="w-4 h-4 text-rose-400" />
-                  </div>
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
-                      Reset Total Aplikasi Mulai Dari 0
-                    </div>
-                    <div className="text-[10px] text-rose-300 font-normal">
-                      Hapus semua riwayat transaksi mutasi anggota & sisakan hanya Super Admin
-                    </div>
-                  </div>
-                </div>
-                <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-              </button>
-
-              {/* Menu Instal Aplikasi Koperasi */}
-              <button
-                onClick={() => setSubModal('install_pwa')}
-                className="w-full p-3 bg-emerald-950/40 hover:bg-emerald-950/60 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-all"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Smartphone className="w-4 h-4 text-emerald-400" />
-                  <div className="text-left">
-                    <div className="font-extrabold text-emerald-300">Instal Aplikasi Koperasi</div>
-                    <div className="text-[10px] text-emerald-400/80 font-normal">
-                      Unduh Android (.APK), Unduh iOS, Unduh PC (.EXE)
-                    </div>
-                  </div>
-                </div>
-                <span>›</span>
-              </button>
-            </div>
-          ) : (
-            /* Admin Write, Approval, Laporan Biodata & Pengaturan Menu Berbagi Options */
-            <div className="space-y-3">
-              <div className="p-3 bg-emerald-950/40 rounded-2xl border border-emerald-500/40 text-emerald-300 text-xs flex items-start gap-2.5">
-                <span className="text-base leading-none">🏢</span>
-                <div>
-                  <div className="font-extrabold text-white">
-                    Hak Akses Pengaturan: {currentAdmin?.role === 'admin_write' ? 'Admin Write' : currentAdmin?.role === 'admin_approval' ? 'Admin Approval' : currentAdmin?.role === 'admin_kelola' ? 'Admin Kelola' : 'Admin Laporan'}
-                  </div>
-                  <div className="text-[11px] text-emerald-400/90 mt-0.5">
-                    Sesuai wewenang sistem, Anda dapat <strong>merubah Biodata Koperasi</strong> serta <strong>Nama & QRIS Menu Berbagi</strong>.
-                  </div>
-                </div>
-              </div>
-
-              {/* Tombol Buka Biodata Koperasi Lengkap */}
-              <button
-                type="button"
-                onClick={() => setSubModal('profil_koperasi')}
-                className="w-full p-3.5 bg-gradient-to-r from-slate-800 to-slate-850 hover:bg-slate-750 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
-                    <Building className="w-5 h-5" />
-                  </div>
-                  <div className="text-left">
-                    <div className="font-extrabold text-white text-xs group-hover:text-emerald-300 transition-colors">
-                      Biodata & Legalitas Resmi Koperasi
-                    </div>
-                    <div className="text-[10px] text-slate-400 font-normal mt-0.5">
-                      Ubah data SK Kemenkumham, NPWP, NIK, alamat kantor, susunan pengurus & QRIS
-                    </div>
-                  </div>
-                </div>
-                <span className="text-emerald-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-              </button>
-
-              {/* Req 1 & 8: Tombol Pengaturan Menu Berbagi untuk Admin Write & Approval */}
-              {canEditPengaturanBerbagi && (
-                <button
-                  type="button"
-                  onClick={() => setSubModal('pengaturan_berbagi')}
-                  className="w-full p-3.5 bg-gradient-to-r from-rose-950/60 to-slate-900 hover:bg-slate-800 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-white transition-all shadow-md group"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/40">
-                      <Heart className="w-5 h-5 text-rose-400" />
-                    </div>
-                    <div className="text-left">
-                      <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
-                        Pengaturan Menu Berbagi (Nama Sedekah & QRIS)
-                      </div>
-                      <div className="text-[10px] text-rose-300 font-normal mt-0.5">
-                        Wewenang {currentAdmin?.role === 'admin_write' ? 'Admin Write' : 'Admin Approval'}: Ubah nama {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & barcode QRIS
-                      </div>
-                    </div>
-                  </div>
-                  <span className="text-rose-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-                </button>
-              )}
-
-              {canRequestHapusMutasi && (
-                <button
-                  type="button"
-                  onClick={() => setShowHapusTxModal(true)}
-                  className="w-full p-3.5 bg-rose-950/40 hover:bg-rose-900/60 rounded-2xl border border-rose-500/50 flex items-center justify-between text-xs font-bold text-rose-200 transition-all shadow-md group cursor-pointer"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/40">
-                      <Trash2 className="w-5 h-5 text-rose-400" />
-                    </div>
-                    <div className="text-left">
-                      <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
-                        Ajukan Hapus Transaksi Mutasi Anggota
-                      </div>
-                      <div className="text-[10px] text-rose-300 font-normal mt-0.5">
+                    <div>
+                      <div className="font-extrabold text-white">
+                        Hak Akses Pengaturan:{' '}
                         {currentAdmin?.role === 'admin_write'
-                          ? 'Pengajuan penghapusan mutasi anggota (memerlukan persetujuan Admin Approval / Super Admin)'
-                          : 'Pengajuan penghapusan mutasi anggota (memerlukan persetujuan Super Admin)'}
+                          ? 'Admin Write'
+                          : currentAdmin?.role === 'admin_approval'
+                          ? 'Admin Approval'
+                          : currentAdmin?.role === 'admin_kelola'
+                          ? 'Admin Kelola'
+                          : 'Admin Laporan'}
+                      </div>
+                      <div className="text-[11px] text-emerald-400/90 mt-0.5">
+                        Sesuai wewenang sistem, Anda dapat <strong>merubah Biodata Koperasi</strong> serta{' '}
+                        <strong>Nama & QRIS Menu Berbagi</strong>.
                       </div>
                     </div>
                   </div>
-                  <span className="text-rose-400 text-sm font-bold group-hover:translate-x-0.5 transition-transform">›</span>
-                </button>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSubModal('profil_koperasi')}
+                      className="w-full p-4 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-emerald-500/40 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer group text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
+                          <Building className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-white text-xs group-hover:text-emerald-300 transition-colors">
+                            Biodata & Legalitas Resmi Koperasi
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-normal mt-0.5">
+                            SK Kemenkumham, NPWP, NIK, alamat kantor, pengurus & QRIS
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-emerald-400 text-sm font-bold shrink-0">›</span>
+                    </button>
+
+                    {canEditPengaturanBerbagi && (
+                      <button
+                        type="button"
+                        onClick={() => setSubModal('pengaturan_berbagi')}
+                        className="w-full p-4 bg-[#0f172a] hover:bg-slate-800/80 rounded-2xl border border-rose-500/45 flex items-center justify-between text-xs font-bold text-white transition-colors cursor-pointer group text-left"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/35">
+                            <Heart className="w-5 h-5 text-rose-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
+                              Pengaturan Menu Berbagi (Nama & QRIS)
+                            </div>
+                            <div className="text-[10px] text-rose-300 font-normal mt-0.5">
+                              Ubah nama {berbagiSubuh}, {berbagiJumat}, {berbagiUmum} & QRIS
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-rose-400 text-sm font-bold shrink-0">›</span>
+                      </button>
+                    )}
+
+                    {canRequestHapusMutasi && (
+                      <button
+                        type="button"
+                        onClick={() => setShowHapusTxModal(true)}
+                        className="md:col-span-2 w-full p-4 bg-rose-950/35 hover:bg-rose-900/50 rounded-2xl border border-rose-500/45 flex items-center justify-between text-xs font-bold text-rose-200 transition-colors cursor-pointer group text-left"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0 border border-rose-500/35">
+                            <Trash2 className="w-5 h-5 text-rose-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-white text-xs group-hover:text-rose-300 transition-colors">
+                              Ajukan Hapus Transaksi Mutasi Anggota
+                            </div>
+                            <div className="text-[10px] text-rose-300 font-normal mt-0.5">
+                              {currentAdmin?.role === 'admin_write'
+                                ? 'Pengajuan penghapusan mutasi anggota (memerlukan persetujuan Admin Approval / Super Admin)'
+                                : 'Pengajuan penghapusan mutasi anggota (memerlukan persetujuan Super Admin)'}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-rose-400 text-sm font-bold shrink-0">›</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
-          )}
 
-          {/* ================= LOGOUT BUTTON (Only located here per user instruction!) ================= */}
-          <div className="pt-2">
-            <button
-              type="button"
-              onClick={() => onLogout()}
-              className="w-full py-3 bg-red-950/40 hover:bg-red-900/60 border border-red-500/40 text-red-300 hover:text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-950/50"
-            >
-              <LogOut className="w-4 h-4" />
-              Keluar dari Akun (Logout)
-            </button>
+            {/* ================= LOGOUT BUTTON (Left Rail bottom on PC, Bottom on Mobile) ================= */}
+            <div className="pt-2 lg:pt-0 lg:col-start-1 lg:row-start-2">
+              <button
+                type="button"
+                onClick={() => onLogout()}
+                className="w-full py-3 bg-red-950/40 hover:bg-red-900/60 border border-red-500/40 text-red-300 hover:text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                Keluar dari Akun (Logout)
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -5972,13 +6113,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <div>
                   <h3 className="text-sm sm:text-base font-extrabold text-white">
                     {maintenanceModeAction === 'lock'
-                      ? 'Kunci Maintenance Sistem'
+                      ? 'Kunci Maintenance Anggota'
                       : 'Buka Lock Maintenance'}
                   </h3>
                   <p className="text-[11px] text-slate-400">
                     {maintenanceModeAction === 'lock'
-                      ? 'Bekukan akses seluruh anggota & admin'
-                      : 'Aktifkan kembali akses seluruh pengguna'}
+                      ? 'Kunci login & akses khusus anggota (Admin tidak terkunci)'
+                      : 'Aktifkan kembali akses seluruh anggota'}
                   </p>
                 </div>
               </div>
@@ -6001,19 +6142,19 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             {maintenanceModeAction === 'lock' ? (
               <div className="space-y-3 text-xs">
                 <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-amber-300 text-[11px] leading-relaxed">
-                  ⚠️ <strong>Perhatian:</strong> Ketika sistem dibekukan, semua anggota dan admin (kecuali Super Admin) tidak akan dapat login. Catatan alasan yang Anda buat akan langsung dikirimkan dan ditampilkan pada layar login mereka.
+                  ⚠️ <strong>Perhatian:</strong> Ketika kunci maintenance diaktifkan, <strong>hanya anggota yang terkunci</strong> dan keterangan yang Anda tulis akan langsung tampil saat anggota ingin login. Seluruh Admin tetap dapat login dan mengakses dashboard secara normal.
                 </div>
 
                 <div>
                   <label className="block font-bold text-slate-300 mb-1">
-                    Catatan / Alasan Maintenance *
+                    Keterangan / Alasan Maintenance (Tampil Saat Login) *
                   </label>
                   <textarea
                     rows={3}
                     required
                     value={maintenanceNote}
                     onChange={(e) => setMaintenanceNote(e.target.value)}
-                    placeholder="Contoh: Pemeliharaan server dan rekonsiliasi data akhir tahun koperasi. Sistem akan dibuka kembali pukul 17:00 WIB."
+                    placeholder="Contoh: Pemeliharaan server dan rekonsiliasi data akhir tahun koperasi. Sistem anggota akan dibuka kembali pukul 17:00 WIB."
                     className="w-full p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:border-rose-500 focus:outline-none"
                   />
                 </div>
@@ -6040,7 +6181,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500"
                   />
                   <span className="text-[11px] text-slate-300">
-                    Saya menyetujui penguncian maintenance sistem untuk seluruh anggota dan admin.
+                    Saya menyetujui penguncian maintenance khusus anggota (Admin tetap aktif & tidak terkunci).
                   </span>
                 </label>
 
@@ -6066,7 +6207,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
             ) : (
               <div className="space-y-3 text-xs">
                 <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-emerald-300 text-[11px] leading-relaxed">
-                  ✓ Sistem akan dibuka kembali. Seluruh anggota dan admin akan dapat login serta mengakses seluruh menu secara normal.
+                  ✓ Kunci maintenance akan dibuka. Seluruh anggota akan dapat login dan mengakses aplikasi kembali secara normal.
                 </div>
 
                 <div>

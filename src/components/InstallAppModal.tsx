@@ -42,7 +42,11 @@ export const InstallAppModal: React.FC<InstallAppModalProps> = ({ isOpen, onClos
   } | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  const currentAppUrl = typeof window !== 'undefined' ? window.location.origin : 'https://koperasi-hws.id';
+  const rawOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const currentAppUrl =
+    !rawOrigin || /localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(rawOrigin)
+      ? 'https://ais-pre-ceuwz66sqfjoknexm5gbdu-284535189588.asia-southeast1.run.app'
+      : rawOrigin.replace('://ais-dev-', '://ais-pre-');
 
   const handleCopyLink = () => {
     try {

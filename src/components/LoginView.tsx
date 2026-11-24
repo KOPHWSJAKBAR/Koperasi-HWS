@@ -75,6 +75,58 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [liveMaintenanceLock, setLiveMaintenanceLock] = useState(state.maintenanceLock);
+
+  useEffect(() => {
+    setLiveMaintenanceLock(state.maintenanceLock);
+  }, [state.maintenanceLock]);
+
+  useEffect(() => {
+    let active = true;
+    const syncMaintStatus = async () => {
+      try {
+        const res = await fetch('/api/maintenance/status', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (active && data && typeof data === 'object') {
+          setLiveMaintenanceLock(data);
+        }
+      } catch {}
+    };
+    syncMaintStatus();
+    const timer = setInterval(syncMaintStatus, 10000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const activeMaintenanceLock = liveMaintenanceLock?.isLocked
+    ? liveMaintenanceLock
+    : state.maintenanceLock?.isLocked
+    ? state.maintenanceLock
+    : liveMaintenanceLock || state.maintenanceLock;
+
+  const checkLiveMaintenanceLock = async () => {
+    if (activeMaintenanceLock?.isLocked) return activeMaintenanceLock;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch('/api/maintenance/status', {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          setLiveMaintenanceLock(data);
+          return data;
+        }
+      }
+    } catch {}
+    return activeMaintenanceLock;
+  };
 
   // Pengingat Password & User ID di Perangkat (Req 2, 6, 24, 25)
   const [rememberAccount, setRememberAccount] = useState<boolean>(() => {
@@ -292,9 +344,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
   const [foundUser, setFoundUser] = useState<any>(null);
 
   // Handle Login Anggota
-  const handleMemberSubmit = (e?: React.FormEvent) => {
+  const handleMemberSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setErrorMessage('');
+
+    // Req 1 & 2: Cek status kunci maintenance terlebih dahulu agar selalu muncul keterangan saat anggota ingin login
+    const currentLock = await checkLiveMaintenanceLock();
+    if (currentLock?.isLocked) {
+      setErrorMessage(
+        `🔒 AKSES ANGGOTA DIKUNCI (MODE MAINTENANCE):\n\nKeterangan: "${currentLock.note || 'Pemeliharaan sistem berkala.'}"\n\nHanya akses anggota yang dikunci sementara. Portal Pengurus / Admin tetap aktif. Silakan coba login kembali setelah pemeliharaan selesai.`
+      );
+      return;
+    }
+
     const cleanId = memberIdentifier.trim();
 
     const member = state.members.find(
@@ -314,14 +376,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
 
     if (member.status === 'dibekukan') {
       setErrorMessage('Akun Anda saat ini sedang DIBEKUKAN oleh pengurus koperasi. Hubungi pengurus koperasi untuk membuka status pembekuan.');
-      return;
-    }
-
-    // Req 3: Cek status lock maintenance sistem
-    if (state.maintenanceLock?.isLocked) {
-      setErrorMessage(
-        `⚠️ SISTEM SEDANG DALAM MODE LOCK MAINTENANCE:\n\n"${state.maintenanceLock.note || 'Pemeliharaan sistem berkala.'}"\n\nAkses seluruh anggota dibekukan sementara. Silakan coba kembali beberapa saat lagi.`
-      );
       return;
     }
 
@@ -369,14 +423,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       return;
     }
 
-    // Req 3: Cek status lock maintenance sistem (Kecuali Super Admin yang dapat membukanya)
-    const isSuperAdminUser = admin.role === 'super_admin' || admin.username?.toLowerCase() === 'abzqar';
-    if (state.maintenanceLock?.isLocked && !isSuperAdminUser) {
-      setErrorMessage(
-        `⚠️ SISTEM SEDANG DALAM MODE LOCK MAINTENANCE:\n\n"${state.maintenanceLock.note || 'Pemeliharaan sistem berkala.'}"\n\nAkses login pengurus saat ini dibekukan sementara oleh Super Admin.`
-      );
-      return;
-    }
+    // Kunci Maintenance hanya mengunci anggota — seluruh Admin tetap dapat login secara normal
 
     const linkedMember = state.members.find(
       (m) => m.nik === admin.nik || (m.email && admin.email && m.email.toLowerCase() === admin.email.toLowerCase())
@@ -587,9 +634,21 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  const executeBiometricLogin = (targetUser: string) => {
+  const executeBiometricLogin = async (targetUser: string) => {
     const cleanTarget = targetUser.trim().toLowerCase();
     if (activeTab === 'member') {
+      // Req 1 & 2: Cek kunci maintenance untuk anggota sebelum login biometrik
+      const currentLock = await checkLiveMaintenanceLock();
+      if (currentLock?.isLocked) {
+        const msg = `🔒 AKSES ANGGOTA DIKUNCI (MAINTENANCE): "${currentLock.note || 'Pemeliharaan sistem berkala.'}"`;
+        setBiometricStatus('failed');
+        setBiometricMsg(msg);
+        setErrorMessage(
+          `🔒 AKSES ANGGOTA DIKUNCI (MODE MAINTENANCE):\n\nKeterangan: "${currentLock.note || 'Pemeliharaan sistem berkala.'}"\n\nHanya akses anggota yang dikunci sementara. Portal Pengurus / Admin tetap aktif.`
+        );
+        return;
+      }
+
       const member = state.members.find(
         (m) =>
           m.nomorAnggota?.toLowerCase() === cleanTarget ||
@@ -605,13 +664,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
       if (member.status === 'dibekukan' || member.status === 'nonaktif') {
         setBiometricStatus('failed');
         setBiometricMsg('Akun anggota ini sedang tidak aktif atau dibekukan pengurus.');
-        return;
-      }
-
-      // Req 3: Cek lock maintenance sistem
-      if (state.maintenanceLock?.isLocked) {
-        setBiometricStatus('failed');
-        setBiometricMsg(`⚠️ SISTEM MAINTENANCE: "${state.maintenanceLock.note || 'Sistem dibekukan sementara'}"`);
         return;
       }
 
@@ -639,13 +691,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         return;
       }
 
-      // Req 3: Cek lock maintenance sistem (Kecuali Super Admin)
-      const isSuperAdminUser = admin.role === 'super_admin' || admin.username?.toLowerCase() === 'abzqar';
-      if (state.maintenanceLock?.isLocked && !isSuperAdminUser) {
-        setBiometricStatus('failed');
-        setBiometricMsg(`⚠️ SISTEM MAINTENANCE: "${state.maintenanceLock.note || 'Sistem dibekukan sementara'}"`);
-        return;
-      }
+      // Kunci Maintenance hanya mengunci anggota — seluruh Admin tetap dapat login via biometrik
 
       const platform = detectPlatform();
       const audit = createAuditLog(
@@ -973,19 +1019,30 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </button>
         </div>
 
-        {/* Maintenance Lock Banner (Req 3: Alasan dikirimkan ketika ada anggota / admin yang akan login) */}
-        {state.maintenanceLock?.isLocked && (
-          <div className="w-full mt-3 p-3.5 bg-rose-950/90 border-2 border-rose-500 text-rose-100 text-xs rounded-2xl shadow-xl space-y-1.5">
-            <div className="flex items-center gap-2 font-black text-rose-300 uppercase tracking-wide">
-              <span className="p-1 bg-rose-500/30 rounded-lg">🔒</span>
-              <span>Sistem Sedang Dalam Mode Lock Maintenance</span>
+        {/* Maintenance Lock Banner (Req 1 & 2: Muncul keterangan saat akan login; hanya anggota yang terkunci, admin tidak terkunci) */}
+        {activeMaintenanceLock?.isLocked && (
+          <div className="w-full mt-3 p-3.5 bg-rose-950/90 border-2 border-rose-500 text-rose-100 text-xs rounded-2xl shadow-xl space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-black text-rose-300 uppercase tracking-wide">
+                <span className="p-1 bg-rose-500/30 rounded-lg">🔒</span>
+                <span>Kunci Maintenance Aktif (Khusus Anggota)</span>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
+                Admin Tetap Aktif
+              </span>
             </div>
-            <div className="text-[11px] text-slate-200 bg-black/40 p-2.5 rounded-xl border border-rose-500/30 leading-relaxed">
-              <span className="font-bold text-amber-400">Pemberitahuan Pengurus:</span> "{state.maintenanceLock.note || 'Sistem sedang dalam pemeliharaan server database.'}"
+            <div className="text-[11px] text-slate-100 bg-black/45 p-2.5 rounded-xl border border-rose-500/30 leading-relaxed">
+              <span className="font-bold text-amber-400">Keterangan Pengurus:</span>{' '}
+              "{activeMaintenanceLock.note || 'Sistem sedang dalam pemeliharaan server database.'}"
             </div>
-            <p className="text-[10px] text-rose-300">
-              Akses anggota dan admin dibekukan sementara. Super Admin dapat login untuk mengelola dan membuka kunci maintenance.
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-rose-200/90">
+              <span>Hanya login anggota yang dikunci sementara. Portal Admin tetap dapat login normal.</span>
+              {activeMaintenanceLock.lockedAt && (
+                <span className="font-mono text-rose-300/80">
+                  {new Date(activeMaintenanceLock.lockedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB
+                </span>
+              )}
+            </div>
           </div>
         )}
 
@@ -1016,6 +1073,19 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   Gunakan No. Rekening / Anggota atau No. HP dan Password terdaftar Anda.
                 </p>
               </div>
+
+              {activeMaintenanceLock?.isLocked && (
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-2xl text-rose-900 text-xs space-y-1">
+                  <div className="font-extrabold flex items-center gap-1.5 text-rose-700">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Login Anggota Sedang Dikunci (Maintenance)</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-slate-700">
+                    <strong className="text-rose-800">Keterangan:</strong>{' '}
+                    "{activeMaintenanceLock.note || 'Pemeliharaan sistem berkala.'}"
+                  </p>
+                </div>
+              )}
 
               {/* Pengingat Password & User ID di Perangkat (Req 2 & 6) */}
               {savedMemberAccount && (

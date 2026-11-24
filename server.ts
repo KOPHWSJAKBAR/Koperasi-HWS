@@ -6,8 +6,15 @@ import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 import { WebSocketServer, WebSocket } from 'ws';
+
+const CANONICAL_APP_URL = (
+  process.env.APP_URL ||
+  'https://ais-pre-ceuwz66sqfjoknexm5gbdu-284535189588.asia-southeast1.run.app'
+).replace('://ais-dev-', '://ais-pre-');
+const APP_BUILD_ID = `2.10.0-${Date.now().toString(36)}`;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1092,9 +1099,23 @@ function mergeServerState(current: any, incoming: any): any {
       ? incoming.categoriesKasKoperasi
       : current.categoriesKasKoperasi;
 
+  const getMaintTs = (lk: any): number => {
+    if (!lk || typeof lk !== 'object') return 0;
+    const tLock = lk.lockedAt ? Date.parse(lk.lockedAt) || 0 : 0;
+    const tUnlock = lk.unlockedAt ? Date.parse(lk.unlockedAt) || 0 : 0;
+    return Math.max(tLock, tUnlock);
+  };
+  const currMaintTs = getMaintTs(current.maintenanceLock);
+  const incMaintTs = getMaintTs(incoming.maintenanceLock);
   const mergedMaintenanceLock =
     incoming.maintenanceLock && typeof incoming.maintenanceLock === 'object'
-      ? incoming.maintenanceLock
+      ? incMaintTs > currMaintTs
+        ? incoming.maintenanceLock
+        : incMaintTs === currMaintTs && currMaintTs === 0
+        ? incoming.maintenanceLock
+        : incMaintTs === currMaintTs && incoming.maintenanceLock.isLocked !== current.maintenanceLock?.isLocked
+        ? current.maintenanceLock || incoming.maintenanceLock
+        : current.maintenanceLock || incoming.maintenanceLock
       : current.maintenanceLock || { isLocked: false };
 
   const isSchemaV2 =
@@ -1504,7 +1525,7 @@ async function ensureServerFirestore() {
         serverFirestoreInstance = initializeFirestore(
           fbApp,
           {
-            experimentalAutoDetectLongPolling: true,
+            experimentalForceLongPolling: true,
             ignoreUndefinedProperties: true,
           },
           cfg.firestoreDatabaseId || undefined
@@ -4070,7 +4091,7 @@ const startupMemRecon = reconcileLegacyMemberNumbers(currentState);
 currentState = startupMemRecon.state;
 if (startupMemRecon.migratedCount > 0 || bootCbgChanged || bootDedupChanged) {
   console.log(`[Boot Reconcile] Migrated ${startupMemRecon.migratedCount} members, CBG/Saldo normalized: ${bootCbgChanged}, Dedup/Kas healed: ${bootDedupChanged} (addedTx: ${startupRecon.addedTxCount}).`);
-  saveDatabase(currentState, { skipFirestore: !bootCbgChanged && !bootDedupChanged });
+  saveDatabase(currentState, { skipFirestore: true });
 }
 // Enforce 10-day chat retention on startup
 const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
@@ -4118,6 +4139,13 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.get('/sw.js', (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+  });
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/api/uploads', express.static(UPLOADS_DIR));
 
@@ -4277,11 +4305,15 @@ async function startServer() {
   // Cross-platform version & update sync check (Android, iOS, Web, PC, AI Studio) without mutating any data
   app.get('/api/version', (_req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (!cachedStateDigest) rebuildStateHttpCache(currentState);
     res.json({
-      version: '2.7.0',
+      version: '2.10.0',
+      buildId: APP_BUILD_ID,
+      canonicalUrl: CANONICAL_APP_URL,
       platforms: ['android', 'ios', 'web', 'pc', 'aistudio'],
       preserveDataOnUpdate: true,
       alwaysOnline: true,
+      stateDigest: cachedStateDigest,
       totalMembers: (currentState.members || []).length,
       lastSynced: currentState.serverSyncStatus?.lastSynced || new Date().toISOString(),
     });
@@ -5564,10 +5596,10 @@ async function startServer() {
     }
   });
 
-  // Online Realtime Member-to-Member Transfer Endpoint (Req 2: Transfer sesama anggota terkirim akurat)
+  // Online Realtime Member-to-Member Transfer Endpoint (Req 2: Transfer sesama anggota terkirim akurat & idempoten)
   app.post('/api/transfer', (req: Request, res: Response) => {
     try {
-      const { senderId, targetRek, nominal, catatan, pin } = req.body;
+      const { senderId, targetRek, nominal, catatan, pin, refId: clientRefId, txSenderId, txReceiverId } = req.body;
       const sender = (currentState.members || []).find((m: any) => m.id === senderId);
       if (!sender) return res.status(404).json({ error: 'Akun pengirim tidak ditemukan' });
 
@@ -5585,11 +5617,11 @@ async function startServer() {
       const recipient = (currentState.members || []).find((m: any) =>
         m.id !== sender.id && (
           m.id === targetRek ||
-          m.nomorRekening === cleanQuery ||
+          m.nomorRekening.toLowerCase() === cleanQuery ||
           m.nomorAnggota.toLowerCase() === cleanQuery ||
           m.nama.toLowerCase() === cleanQuery ||
-          (cleanDigits.length >= 8 && m.nomorRekening.includes(cleanDigits)) ||
-          (cleanDigits.length >= 8 && m.whatsapp.replace(/\D/g, '') === cleanDigits)
+          (cleanDigits.length >= 4 && m.nomorRekening.replace(/\D/g, '').includes(cleanDigits)) ||
+          (cleanDigits.length >= 4 && m.whatsapp.replace(/\D/g, '') === cleanDigits)
         )
       );
 
@@ -5600,17 +5632,36 @@ async function startServer() {
         return res.status(400).json({ error: 'Tidak dapat melakukan transfer ke rekening sendiri' });
       }
 
-      const now = new Date();
-      const tgl = now.toISOString().split('T')[0];
-      const jam = now.toTimeString().split(' ')[0].slice(0, 5);
-      const refId = `TF-${Date.now().toString().slice(-6)}`;
+      const refId = clientRefId || `TF-${Date.now().toString().slice(-6)}`;
+      currentState.memberTransactions = currentState.memberTransactions || [];
+      const alreadyProcessed = currentState.memberTransactions.some(
+        (t: any) =>
+          (refId && t.referensiId === refId) ||
+          (txSenderId && t.id === txSenderId) ||
+          (txReceiverId && t.id === txReceiverId)
+      );
+      if (alreadyProcessed) {
+        return res.json({
+          success: true,
+          refId,
+          senderSaldoUmum: sender.saldoUmum,
+          recipientSaldoUmum: recipient.saldoUmum,
+          recipientNama: recipient.nama,
+          state: currentState,
+        });
+      }
 
-      sender.saldoUmum -= amount;
+      const now = new Date();
+      const wibMs = now.getTime() + 7 * 60 * 60 * 1000;
+      const wibDate = new Date(wibMs);
+      const tgl = wibDate.toISOString().split('T')[0];
+      const jam = wibDate.toISOString().split('T')[1].slice(0, 5);
+
+      sender.saldoUmum = (Number(sender.saldoUmum) || 0) - amount;
       recipient.saldoUmum = (Number(recipient.saldoUmum) || 0) + amount;
 
-      currentState.memberTransactions = currentState.memberTransactions || [];
       currentState.memberTransactions.unshift({
-        id: `tx-tf-send-${Date.now()}`,
+        id: txSenderId || `tx-tf-send-${Date.now()}`,
         memberId: sender.id,
         tanggal: tgl,
         jam,
@@ -5624,7 +5675,7 @@ async function startServer() {
       });
 
       currentState.memberTransactions.unshift({
-        id: `tx-tf-recv-${Date.now() + 1}`,
+        id: txReceiverId || `tx-tf-recv-${Date.now() + 1}`,
         memberId: recipient.id,
         tanggal: tgl,
         jam,
@@ -5639,8 +5690,14 @@ async function startServer() {
 
       // Update members array in currentState
       currentState.members = currentState.members.map((m: any) => {
-        if (m.id === sender.id) return { ...m, saldoUmum: sender.saldoUmum };
-        if (m.id === recipient.id) return { ...m, saldoUmum: recipient.saldoUmum };
+        if (m.id === sender.id) {
+          const total = (Number(m.saldoPokok) || 0) + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0) + sender.saldoUmum;
+          return { ...m, saldoUmum: sender.saldoUmum, totalSimpanan: total, updatedAt: now.toISOString() };
+        }
+        if (m.id === recipient.id) {
+          const total = (Number(m.saldoPokok) || 0) + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0) + recipient.saldoUmum;
+          return { ...m, saldoUmum: recipient.saldoUmum, totalSimpanan: total, updatedAt: now.toISOString() };
+        }
         return m;
       });
 
@@ -5660,15 +5717,14 @@ async function startServer() {
 
       res.json({
         success: true,
-        message: `Transfer ${amount.toLocaleString('id-ID')} ke ${recipient.nama} (${recipient.nomorRekening}) berhasil terkirim online realtime!`,
         refId,
         senderSaldoUmum: sender.saldoUmum,
+        recipientSaldoUmum: recipient.saldoUmum,
         recipientNama: recipient.nama,
-        recipientRekening: recipient.nomorRekening
+        state: currentState,
       });
     } catch (err: any) {
-      console.error('Error in /api/transfer:', err);
-      res.status(500).json({ error: 'Gagal memproses transfer online: ' + (err.message || 'Server error') });
+      res.status(500).json({ error: err?.message || 'Gagal memproses transfer sesama anggota' });
     }
   });
 
@@ -8023,10 +8079,11 @@ async function startServer() {
   // ================= ENDPOINTS LOCK MAINTENANCE SISTEM (Req 3) =================
   // Status Maintenance
   app.get('/api/maintenance/status', (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.json(currentState.maintenanceLock || { isLocked: false });
   });
 
-  // Kunci / Bekukan Sistem (Hanya Super Admin)
+  // Kunci / Bekukan Akses Anggota (Admin tetap aktif & tidak terkunci)
   app.post('/api/maintenance/lock', (req: Request, res: Response) => {
     try {
       const { note, password, adminName } = req.body;
@@ -8061,7 +8118,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Lock Maintenance Sistem',
-        detail: `Super Admin mengaktifkan KUNCI MAINTENANCE sistem untuk semua anggota dan admin. Alasan: "${note.trim()}"`,
+        detail: `Super Admin mengaktifkan KUNCI MAINTENANCE khusus seluruh anggota (semua Admin tetap aktif & tidak terkunci). Alasan: "${note.trim()}"`,
       });
 
       saveDatabase(currentState);
@@ -8072,7 +8129,7 @@ async function startServer() {
     }
   });
 
-  // Buka Kunci / Unfreeze Maintenance (Hanya Super Admin)
+  // Buka Kunci / Unfreeze Maintenance Anggota
   app.post('/api/maintenance/unlock', (req: Request, res: Response) => {
     try {
       const { password, adminName } = req.body;
@@ -8103,7 +8160,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Buka Lock Maintenance Sistem',
-        detail: `Super Admin MEMBUKA KUNCI MAINTENANCE sistem. Seluruh anggota dan admin kini dapat login dan mengakses kembali secara normal.`,
+        detail: `Super Admin MEMBUKA KUNCI MAINTENANCE anggota. Seluruh anggota kini dapat login dan mengakses kembali secara normal.`,
       });
 
       saveDatabase(currentState);
@@ -8788,7 +8845,14 @@ async function startServer() {
     const proto = forwardedProto
       ? (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto.split(',')[0].trim())
       : (req.secure ? 'https' : (req.protocol || 'https'));
-    const host = req.headers['x-forwarded-host'] || req.get('host') || 'koperasi-hws.id';
+    const rawHost = String(req.headers['x-forwarded-host'] || req.get('host') || '');
+    const host = rawHost.split(',')[0].trim();
+    if (!host || /^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(host)) {
+      return CANONICAL_APP_URL;
+    }
+    if (host.startsWith('ais-dev-')) {
+      return `https://${host.replace(/^ais-dev-/, 'ais-pre-')}`;
+    }
     return `${proto}://${host}`;
   }
 
@@ -8800,8 +8864,7 @@ async function startServer() {
 
     try {
       if (fs.existsSync(makePeScript)) {
-        const { execSync } = require('child_process');
-        execSync(`python3 "${makePeScript}" "${hostUrl}" "${pePath}"`);
+        execFileSync('python3', [makePeScript, hostUrl, pePath]);
       }
     } catch (e) {
       console.warn('Could not regenerate dynamic PE launcher:', e);
@@ -9008,6 +9071,7 @@ exit
           type: 'CONNECTED',
           payload: {
             digest: cachedStateDigest,
+            buildId: APP_BUILD_ID,
             lastSynced: currentState?.serverSyncStatus?.lastSynced || new Date().toISOString(),
             serverTime: Date.now(),
           },
@@ -9031,6 +9095,7 @@ exit
               type: 'PONG',
               payload: {
                 digest: cachedStateDigest,
+                buildId: APP_BUILD_ID,
                 serverTime: Date.now(),
               },
               timestamp: new Date().toISOString(),

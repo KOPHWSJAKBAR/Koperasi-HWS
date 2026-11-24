@@ -28,6 +28,7 @@ import { SettingModal } from './SettingModal';
 import { InstallAppModal } from './InstallAppModal';
 import { MenuBerbagiModal } from './MenuBerbagiModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
+import { TabunganUmumView } from './TabunganUmumView';
 import { downloadExcelCsv, printDocumentHtml } from '../lib/exportPdf';
 import { initFCM, cleanupFCM } from '../lib/fcm';
 import {
@@ -62,6 +63,7 @@ import {
   Fingerprint,
   Trash2,
   CheckCheck,
+  Wallet,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -90,7 +92,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const currentAdmin = state.admins.find((a) => a.id === admin.id) || admin;
 
   const [activeTab, setActiveTab] = useState<
-    'dashboard' | 'verifikasi' | 'anggota' | 'kas' | 'penyesuaian_saldo' | 'zakat' | 'surat' | 'chat'
+    'dashboard' | 'verifikasi' | 'anggota' | 'kas' | 'penyesuaian_saldo' | 'zakat' | 'surat' | 'chat' | 'tabungan_umum'
   >('dashboard');
 
   const [showSettings, setShowSettings] = useState(false);
@@ -473,6 +475,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 3. User Req 1: Dashboard Saldo kas berjalan = total saldo anggota (pokok+Tabungan umum+Zakat+qurban) + saldo buku kas koperasi
   const saldoKasBerjalan = totalSaldoAnggota + saldoKasKoperasi;
 
+  // Jumlah anggota yang memiliki saldo tabungan umum > 0
+  const tabunganUmumMembersCount = state.members.filter((m) => (m.saldoUmum || 0) > 0).length;
+
   // Pending deposits count (hanya setoran yang benar-benar masih menunggu verifikasi)
   const pendingDepositsCount = pendingDeposits.length;
 
@@ -575,46 +580,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
-      {/* ================= HEADER (Matching Tampilan Pada Dashboard PC Aplikasi admin.png) ================= */}
-      <header className="sticky top-0 z-40 bg-[#0d1424]/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-6 py-3">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
+      {/* ================= HEADER ================= */}
+      <header className="sticky top-0 z-40 bg-[#0d1424]/95 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-2 sm:py-3">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-3">
           {/* Left Brand & Admin Badge */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-white p-0.5 shadow flex items-center justify-center shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveTab('dashboard')}
+            className="flex items-center gap-2 sm:gap-3 min-w-0 text-left cursor-pointer group"
+            title="Kembali ke Dashboard Admin"
+          >
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white p-0.5 shadow flex items-center justify-center shrink-0">
               <LogoHws className="w-full h-full" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-black text-sm sm:text-base tracking-wide text-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-black text-xs sm:text-base tracking-wide text-white truncate group-hover:text-amber-300 transition-colors">
                   KOPERASI HWS
                 </span>
-                <span className="bg-[#00bcd4] text-slate-950 font-black text-[9px] sm:text-[10px] px-2 py-0.5 rounded-md uppercase">
+                <span className="hidden sm:inline-block bg-[#00bcd4] text-slate-950 font-black text-[8px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-md uppercase shrink-0">
                   ADMIN
                 </span>
-                <span className="bg-[#f59e0b] text-slate-950 font-black text-[9px] sm:text-[10px] px-2 py-0.5 rounded-md uppercase">
+                <span className="bg-[#f59e0b] text-slate-950 font-black text-[8px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-md uppercase shrink-0">
                   {currentAdmin.role.replace('_', ' ')}
                 </span>
               </div>
-              <div className="text-[11px] sm:text-xs text-slate-400 font-medium">
-                {currentAdmin.nama} • Wilayah {currentAdmin.wilayahKantor}
+              <div className="text-[10px] sm:text-xs text-slate-400 font-medium truncate">
+                {currentAdmin.nama} • {currentAdmin.wilayahKantor}
               </div>
             </div>
-          </div>
+          </button>
 
-          {/* Right Action Buttons: Only Setting per User Req 9 ("Menu setting pada dashboard hilangkan hanya ada setting") */}
-          <div className="flex items-center gap-2">
+          {/* Right Action Buttons: Notif + Menu Setting */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
 
             {/* Realtime Notification Center Bell */}
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setShowNotifCenter(!showNotifCenter)}
-                className="relative py-1.5 px-2.5 rounded-xl bg-[#162035] hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 transition-all shadow-sm flex items-center justify-center gap-1.5"
+                className="relative min-w-[40px] min-h-[40px] sm:min-h-[36px] py-1.5 px-2 sm:px-2.5 rounded-xl bg-[#162035] hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
                 title="Pusat Notifikasi Realtime"
               >
                 <Bell className="w-4 h-4 text-amber-400" />
                 {totalNotifCount > 0 ? (
-                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center animate-bounce shadow">
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center shadow tabular-nums">
                     {totalNotifCount}
                   </span>
                 ) : (
@@ -831,19 +841,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Live WIB Time Badge (Waktu Indonesia Bagian Barat UTC+7) */}
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-800/80 border border-amber-500/30 text-[10px] font-bold text-amber-300">
+            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-800/80 border border-amber-500/30 text-[10px] font-bold text-amber-300">
               <span className="text-slate-400">WIB:</span>
-              <span className="font-mono">{wibTime}</span>
+              <span className="font-mono tabular-nums">{wibTime}</span>
             </div>
 
             {/* Realtime Online Status Badge */}
-            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-extrabold text-emerald-400">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>Online Realtime (Firebase)</span>
+            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-extrabold text-emerald-400">
+              <span>Online Realtime</span>
             </div>
 
             {/* Write Permission Status: Write hanya pada Super Admin */}
-            <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-[10px] font-bold">
+            <div className="hidden lg:flex items-center gap-1 px-2 py-1 rounded-xl bg-slate-800/80 border border-slate-700 text-[10px] font-bold">
               <span className="text-slate-400">Akses Tulis:</span>
               <span className={isSuperAdmin ? 'text-amber-400 font-black' : 'text-slate-400'}>
                 {isSuperAdmin ? 'Super Admin' : 'Terbatas'}
@@ -857,204 +866,395 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 setSettingSubModal(null);
                 setShowSettings(true);
               }}
-              className="py-1.5 px-3.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 text-amber-300 border border-amber-500/40 text-xs font-black flex items-center gap-2 transition-all shadow-md active:scale-95 cursor-pointer"
+              className="min-h-[40px] sm:min-h-[36px] py-1.5 px-2.5 sm:px-3.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-amber-600/20 hover:from-amber-500/30 hover:to-amber-600/30 text-amber-300 border border-amber-500/40 text-[11px] sm:text-xs font-black flex items-center gap-1.5 sm:gap-2 transition-all shadow-md active:scale-95 cursor-pointer shrink-0"
               title="Menu Pengaturan (Kelola Admin, Keamanan Biometrik, Pasang Aplikasi, Profil Koperasi)"
             >
-              <Settings className="w-4 h-4 text-amber-400" />
+              <Settings className="w-4 h-4 text-amber-400 shrink-0" />
               <span>Menu Setting</span>
             </button>
           </div>
         </div>
-
-        {/* Navigation Bar for Desktop (Matching Tampilan Pada Dashboard PC Aplikasi admin.png) */}
-        <div className="hidden lg:flex items-center gap-1 max-w-7xl mx-auto mt-3 pt-2 border-t border-slate-800/60 overflow-x-auto">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-              activeTab === 'dashboard'
-                ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            Dashboard
-          </button>
-
-          {!isLaporan && (
-            <button
-              onClick={() => setActiveTab('verifikasi')}
-              className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-                activeTab === 'verifikasi'
-                  ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Verifikasi Setoran
-              {pendingDepositsCount > 0 && (
-                <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center ml-1">
-                  {pendingDepositsCount}
-                </span>
-              )}
-            </button>
-          )}
-
-          <button
-            onClick={() => setActiveTab('anggota')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-              activeTab === 'anggota'
-                ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Users className="w-3.5 h-3.5" />
-            <span>Data Anggota ({state.members.length})</span>
-            {(pendingLockPokokCount + pendingMutasiCount) > 0 && (isSuperAdmin || isApproval) && (
-              <span className="px-1.5 py-0.5 bg-sky-500 text-slate-950 rounded-full font-black text-[10px] animate-pulse">
-                {pendingLockPokokCount + pendingMutasiCount} Approval
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('kas')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-              activeTab === 'kas'
-                ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Buku Kas & Neraca</span>
-            {pendingKasCount > 0 && (isSuperAdmin || isApproval) && (
-              <span className="px-1.5 py-0.5 bg-amber-500 text-slate-950 rounded-full font-black text-[10px] animate-pulse">
-                {pendingKasCount} Approval
-              </span>
-            )}
-          </button>
-
-          {!isLaporan && (
-            <button
-              onClick={() => setActiveTab('penyesuaian_saldo')}
-              className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-                activeTab === 'penyesuaian_saldo'
-                  ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              Penyesuaian Saldo
-            </button>
-          )}
-
-          <button
-            onClick={() => setActiveTab('zakat')}
-            className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-              activeTab === 'zakat'
-                ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <HeartHandshake className="w-3.5 h-3.5" />
-            Zakat & Qurban
-          </button>
-
-          {/* User Req 3: Menu Laporan Sedekah & Penyaluran Sedekah pada Dashboard Admin */}
-          <button
-            type="button"
-            onClick={() => {
-              setBerbagiInitialTab('laporan');
-              setShowBerbagiModal(true);
-            }}
-            className="py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer"
-            title="Laporan Sedekah (Filter Wilayah, Per Anggota & Periode Excel/PDF)"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-sky-400" />
-            <span>Laporan Sedekah</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setBerbagiInitialTab('salurkan');
-              setShowBerbagiModal(true);
-            }}
-            className="py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer relative"
-            title="Penyaluran Sedekah (Input Admin Write & Disetujui Approval/Super Admin)"
-          >
-            <Send className="w-3.5 h-3.5 text-amber-400" />
-            <span>Penyaluran Sedekah</span>
-            {pendingSalurCount > 0 && (
-              <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center animate-pulse" title={`${pendingSalurCount} Penyaluran Butuh Approval`}>
-                {pendingSalurCount}
-              </span>
-            )}
-          </button>
-
-          {!isLaporan && (
-            <button
-              onClick={() => setActiveTab('surat')}
-              className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-                activeTab === 'surat'
-                  ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Mail className="w-3.5 h-3.5" />
-              <span>Surat Menyurat</span>
-              {unreadSuratAdminCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[9px] font-black">
-                  {unreadSuratAdminCount}
-                </span>
-              )}
-            </button>
-          )}
-
-          {!isLaporan && (
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`py-2 px-3.5 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all ${
-                activeTab === 'chat'
-                  ? 'bg-amber-500/10 text-amber-400 border-b-2 border-amber-500'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Chat Anggota
-              {unreadChatCount > 0 && (
-                <span className="w-4 h-4 rounded-full bg-sky-500 text-slate-950 text-[10px] font-black flex items-center justify-center ml-1 animate-pulse">
-                  {unreadChatCount}
-                </span>
-              )}
-            </button>
-          )}
-        </div>
       </header>
 
-      {/* ================= BACK BUTTON ON SUBMENUS (Mobile Navigation Requirement) ================= */}
-      {activeTab !== 'dashboard' && (
-        <div className="bg-[#111c33] border-b border-slate-800 px-4 py-2.5">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <button
-              type="button"
-              onClick={handleSubmenuBack}
-              className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors"
+      {(() => {
+        const logoMenuItems = [
+          !isLaporan && {
+            id: 'verifikasi',
+            label: 'Verifikasi Setoran',
+            icon: CheckCircle2,
+            iconClass: 'text-sky-400',
+            badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
+            active: activeTab === 'verifikasi',
+            badge: pendingDepositsCount > 0 ? pendingDepositsCount : null,
+            badgeColor: 'bg-amber-500 text-slate-950',
+            onClick: () => setActiveTab('verifikasi'),
+          },
+          {
+            id: 'anggota',
+            label: 'Data Anggota',
+            icon: Users,
+            iconClass: 'text-emerald-400',
+            badgeBgClass: 'bg-emerald-500/15 border-emerald-500/25',
+            active: activeTab === 'anggota',
+            badge:
+              pendingLockPokokCount + pendingMutasiCount > 0 && (isSuperAdmin || isApproval)
+                ? pendingLockPokokCount + pendingMutasiCount
+                : state.members.length,
+            badgeColor:
+              pendingLockPokokCount + pendingMutasiCount > 0 && (isSuperAdmin || isApproval)
+                ? 'bg-sky-500 text-slate-950'
+                : 'bg-slate-800 text-slate-300 border border-slate-700',
+            onClick: () => setActiveTab('anggota'),
+          },
+          {
+            id: 'kas',
+            label: 'Buku Kas Neraca',
+            icon: BookOpen,
+            iconClass: 'text-amber-400',
+            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+            active: activeTab === 'kas',
+            badge: pendingKasCount > 0 && (isSuperAdmin || isApproval) ? pendingKasCount : null,
+            badgeColor: 'bg-amber-500 text-slate-950',
+            onClick: () => setActiveTab('kas'),
+          },
+          !isLaporan && {
+            id: 'penyesuaian_saldo',
+            label: 'Penyesuaian Saldo',
+            icon: SlidersHorizontal,
+            iconClass: 'text-amber-300',
+            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+            active: activeTab === 'penyesuaian_saldo',
+            badge: null,
+            badgeColor: '',
+            onClick: () => setActiveTab('penyesuaian_saldo'),
+          },
+          {
+            id: 'zakat',
+            label: 'Zakat & Qurban',
+            icon: HeartHandshake,
+            iconClass: 'text-emerald-400',
+            badgeBgClass: 'bg-emerald-500/15 border-emerald-500/25',
+            active: activeTab === 'zakat',
+            badge: null,
+            badgeColor: '',
+            onClick: () => setActiveTab('zakat'),
+          },
+          {
+            id: 'penyaluran',
+            label: 'Penyaluran',
+            icon: Send,
+            iconClass: 'text-amber-400',
+            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+            active: false,
+            badge: pendingSalurCount > 0 ? pendingSalurCount : null,
+            badgeColor: 'bg-rose-500 text-white',
+            onClick: () => {
+              setBerbagiInitialTab('salurkan');
+              setShowBerbagiModal(true);
+            },
+          },
+          {
+            id: 'sedekah',
+            label: 'Sedekah',
+            icon: Heart,
+            iconClass: 'text-rose-400',
+            badgeBgClass: 'bg-rose-500/15 border-rose-500/25',
+            active: false,
+            badge: null,
+            badgeColor: '',
+            onClick: () => {
+              setBerbagiInitialTab('laporan');
+              setShowBerbagiModal(true);
+            },
+          },
+          !isLaporan && {
+            id: 'surat',
+            label: 'Surat Menyurat',
+            icon: Mail,
+            iconClass: 'text-sky-400',
+            badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
+            active: activeTab === 'surat',
+            badge: unreadSuratAdminCount > 0 ? unreadSuratAdminCount : null,
+            badgeColor: 'bg-rose-500 text-white',
+            onClick: () => setActiveTab('surat'),
+          },
+          !isLaporan && {
+            id: 'chat',
+            label: 'Chat Online',
+            icon: MessageSquare,
+            iconClass: 'text-amber-400',
+            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+            active: activeTab === 'chat',
+            badge: unreadChatCount > 0 ? unreadChatCount : null,
+            badgeColor: 'bg-sky-500 text-slate-950',
+            onClick: () => setActiveTab('chat'),
+          },
+          isSuperAdmin && {
+            id: 'log_audit',
+            label: 'Log Audit',
+            icon: Activity,
+            iconClass: 'text-purple-400',
+            badgeBgClass: 'bg-purple-500/15 border-purple-500/25',
+            active: false,
+            badge: null,
+            badgeColor: '',
+            onClick: () => {
+              setSettingSubModal('log_audit');
+              setShowSettings(true);
+            },
+          },
+          (isSuperAdmin || isApproval || isWriter) && {
+            id: 'hapus_mutasi',
+            label: 'Hapus Mutasi',
+            icon: Trash2,
+            iconClass: 'text-rose-400',
+            badgeBgClass: 'bg-rose-500/15 border-rose-500/25',
+            active: false,
+            badge: null,
+            badgeColor: '',
+            onClick: () => setShowHapusTxModal(true),
+          },
+          {
+            id: 'tabungan_umum',
+            label: 'Tabungan Umum',
+            icon: Wallet,
+            iconClass: 'text-sky-400',
+            badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
+            active: activeTab === 'tabungan_umum',
+            badge: tabunganUmumMembersCount > 0 ? tabunganUmumMembersCount : null,
+            badgeColor: 'bg-sky-500/20 text-sky-300 border border-sky-500/40',
+            onClick: () => setActiveTab('tabungan_umum'),
+          },
+        ].filter(Boolean) as Array<{
+          id: string;
+          label: string;
+          icon: React.ComponentType<{ className?: string }>;
+          iconClass: string;
+          badgeBgClass: string;
+          active: boolean;
+          badge: number | null;
+          badgeColor: string;
+          onClick: () => void;
+        }>;
+
+        return (
+          <>
+            {/* ================= DESKTOP: MENU LOGO + TULISAN KECIL DI BAWAH MENU SETTING ================= */}
+            <nav
+              aria-label="Menu Utama Admin Desktop"
+              className="hidden lg:block bg-[#0d1424]/95 border-b border-slate-800/80 px-6 py-2.5"
             >
-              <ChevronLeft className="w-4 h-4" />
-              <span>Kembali ke Dashboard Admin</span>
-            </button>
-            <span className="text-xs text-slate-400 font-semibold uppercase">
-              {activeTab === 'verifikasi' && 'Verifikasi Setoran'}
-              {activeTab === 'anggota' && 'Data Anggota'}
-              {activeTab === 'kas' && 'Buku Kas & Neraca'}
-              {activeTab === 'penyesuaian_saldo' && 'Penyesuaian Saldo Anggota'}
-              {activeTab === 'zakat' && 'Zakat & Qurban'}
-              {activeTab === 'surat' && 'Surat Menyurat'}
-              {activeTab === 'chat' && 'Chat Online'}
-            </span>
-          </div>
-        </div>
-      )}
+              <div className="max-w-7xl mx-auto flex items-stretch [&>button]:flex-1 [&>button]:min-w-0 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  title="Dashboard"
+                  className={`group relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl border transition-all cursor-pointer min-h-[60px] ${
+                    activeTab === 'dashboard'
+                      ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
+                      : 'bg-slate-900/60 border-slate-800/80 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700 hover:text-white'
+                  }`}
+                >
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                      activeTab === 'dashboard' ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-amber-400'
+                    }`}
+                  >
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-bold leading-tight text-center line-clamp-2">
+                    Dashboard
+                  </span>
+                </button>
+
+                {logoMenuItems.map((item) => {
+                  const IconComp = item.icon;
+                  const isTabunganActive = item.id === 'tabungan_umum' && item.active;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={item.onClick}
+                      title={item.label}
+                      className={`group relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl border transition-all cursor-pointer min-h-[60px] ${
+                        isTabunganActive
+                          ? 'bg-sky-500/15 border-sky-500/60 text-sky-300'
+                          : item.active
+                          ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
+                          : 'bg-slate-900/60 border-slate-800/80 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {item.badge !== null && (
+                        <span
+                          className={`absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                      <div
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                          isTabunganActive
+                            ? 'bg-sky-500 text-slate-950'
+                            : item.active
+                            ? 'bg-amber-500 text-slate-950'
+                            : `bg-slate-800 ${item.iconClass}`
+                        }`}
+                      >
+                        <IconComp className="w-4 h-4" />
+                      </div>
+                      <span className="text-[10px] font-bold leading-tight text-center line-clamp-2">
+                        {item.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </nav>
+
+            {/* ================= MOBILE DASHBOARD: 12 LOGO + LABEL MENU LAUNCHER DI BAWAH MENU SETTING ================= */}
+            {activeTab === 'dashboard' && (
+              <section
+                aria-label="Menu Dashboard Mobile Admin"
+                className="lg:hidden bg-[#0b1120] px-3 pt-3 pb-1"
+              >
+                <div className="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-3 shadow-lg">
+                  <div className="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-slate-800/80">
+                    <div className="flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-200">
+                        Menu Layanan Admin
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono tabular-nums text-emerald-400 font-bold">
+                      {wibTime} WIB
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {logoMenuItems.map((item) => {
+                      const IconComp = item.icon;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={item.onClick}
+                          title={item.label}
+                          className="relative flex flex-col items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-2xl border bg-[#111c33]/85 border-slate-800/90 hover:border-amber-500/40 active:scale-[0.97] transition-all cursor-pointer min-h-[84px]"
+                        >
+                          {item.badge !== null && (
+                            <span
+                              className={`absolute top-1.5 right-1.5 min-w-[17px] h-[17px] px-1 rounded-full text-[9px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
+                            >
+                              {item.badge}
+                            </span>
+                          )}
+                          <div
+                            className={`w-10 h-10 rounded-xl border flex items-center justify-center ${item.badgeBgClass} ${item.iconClass}`}
+                          >
+                            <IconComp className="w-5 h-5" />
+                          </div>
+                          <span className="text-[10.5px] font-bold leading-tight text-center text-slate-200 line-clamp-2">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* ================= BACK BUTTON + MOBILE QUICK LOGO STRIP ON SUBMENUS ================= */}
+            {activeTab !== 'dashboard' && (
+              <>
+                <div className="bg-[#111c33] border-b border-slate-800 px-3 sm:px-4 py-2">
+                  <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSubmenuBack}
+                      className="inline-flex items-center gap-1.5 min-h-[36px] text-xs sm:text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                    >
+                      <ChevronLeft className="w-4 h-4 shrink-0" />
+                      <span>Kembali ke Dashboard Admin</span>
+                    </button>
+                    <span className="text-[10px] sm:text-xs text-slate-400 font-semibold uppercase truncate">
+                      {activeTab === 'verifikasi' && 'Verifikasi Setoran'}
+                      {activeTab === 'anggota' && 'Data Anggota'}
+                      {activeTab === 'kas' && 'Buku Kas Neraca'}
+                      {activeTab === 'penyesuaian_saldo' && 'Penyesuaian Saldo'}
+                      {activeTab === 'zakat' && 'Zakat & Qurban'}
+                      {activeTab === 'surat' && 'Surat Menyurat'}
+                      {activeTab === 'chat' && 'Chat Online'}
+                      {activeTab === 'tabungan_umum' && 'Tabungan Umum'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Mobile Submenu Quick Horizontal Logo Switcher */}
+                <nav
+                  aria-label="Navigasi Cepat Mobile Admin"
+                  className="lg:hidden bg-[#0d1424]/95 border-b border-slate-800/80 px-3 py-2"
+                >
+                  <div className="flex items-stretch gap-1.5 overflow-x-auto pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('dashboard')}
+                      className="shrink-0 w-[68px] min-h-[56px] flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-xl border bg-slate-900/70 border-slate-800 text-slate-300 active:scale-95 transition-all cursor-pointer"
+                    >
+                      <div className="w-7 h-7 rounded-lg bg-slate-800 text-amber-400 flex items-center justify-center">
+                        <Layers className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9.5px] font-bold leading-tight text-center line-clamp-1">
+                        Dashboard
+                      </span>
+                    </button>
+                    {logoMenuItems.map((item) => {
+                      const IconComp = item.icon;
+                      const isTabunganActive = item.id === 'tabungan_umum' && item.active;
+                      return (
+                        <button
+                          key={`mob-strip-${item.id}`}
+                          type="button"
+                          onClick={item.onClick}
+                          className={`relative shrink-0 w-[72px] min-h-[56px] flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-xl border active:scale-95 transition-all cursor-pointer ${
+                            isTabunganActive
+                              ? 'bg-sky-500/15 border-sky-500/60 text-sky-300'
+                              : item.active
+                              ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
+                              : 'bg-slate-900/70 border-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {item.badge !== null && (
+                            <span
+                              className={`absolute top-1 right-1 min-w-[15px] h-[15px] px-1 rounded-full text-[8.5px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
+                            >
+                              {item.badge}
+                            </span>
+                          )}
+                          <div
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                              isTabunganActive
+                                ? 'bg-sky-500 text-slate-950'
+                                : item.active
+                                ? 'bg-amber-500 text-slate-950'
+                                : `bg-slate-800 ${item.iconClass}`
+                            }`}
+                          >
+                            <IconComp className="w-4 h-4" />
+                          </div>
+                          <span className="text-[9.5px] font-bold leading-tight text-center line-clamp-2">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </nav>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       {/* ================= MAIN CONTENT BODY ================= */}
       <main className={`max-w-7xl w-full mx-auto flex-1 overflow-x-hidden ${activeTab === 'chat' ? 'p-2 sm:p-4 flex flex-col min-h-0' : 'p-4 sm:p-6 space-y-6'}`}>
@@ -1159,115 +1359,253 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             )}
 
-            {/* Top 5 Stat Cards Grid: Simpanan Pokok, Tabungan Umum, Zakat & Qurban, Kas Berjalan, dan Saldo Sedekah Koperasi */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+            {/* ================= MOBILE KPI GRID (< lg) ================= */}
+            <div className="grid grid-cols-2 lg:hidden gap-2.5">
               {/* 1. Total Simpanan Pokok */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block break-words">
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-3.5 min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block break-words">
                   TOTAL SIMPANAN POKOK
                 </span>
                 <div
-                  className="text-xl sm:text-2xl font-black text-[#f59e0b] mt-1.5 font-mono tracking-tight break-all"
+                  className="text-base font-black text-[#f59e0b] mt-1.5 font-mono tabular-nums tracking-tight break-all"
                   title={formatRupiah(totalPokok)}
                 >
                   {formatRupiah(totalPokok)}
                 </div>
-                <div className="text-[10px] sm:text-[11px] text-slate-400 mt-1 break-words leading-tight" title="Rp1.000 / hari • Terkunci oleh Admin">
-                  Rp1.000 / hari • Terkunci oleh Admin
+                <div className="text-[10px] text-slate-400 mt-1 break-words leading-tight">
+                  Rp1.000 / hari • Terkunci
                 </div>
               </div>
 
               {/* 2. Total Tabungan Umum */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block break-words">
-                  TOTAL TABUNGAN UMUM
-                </span>
+              <div
+                onClick={() => setActiveTab('tabungan_umum')}
+                className="bg-[#0d1424] border border-slate-800 hover:border-sky-500/60 rounded-2xl p-3.5 min-w-0 overflow-hidden flex flex-col justify-between cursor-pointer transition-all group"
+              >
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block break-words">
+                    TOTAL TABUNGAN UMUM
+                  </span>
+                  <Wallet className="w-4 h-4 text-sky-400 shrink-0" />
+                </div>
                 <div
-                  className="text-xl sm:text-2xl font-black text-sky-400 mt-1.5 font-mono tracking-tight break-all"
+                  className="text-base font-black text-sky-400 mt-1.5 font-mono tabular-nums tracking-tight break-all"
                   title={formatRupiah(totalUmum)}
                 >
                   {formatRupiah(totalUmum)}
                 </div>
-                <div className="text-[10px] sm:text-[11px] text-slate-400 mt-1 break-words leading-tight" title="Bisa setor & tarik kapan saja">
-                  Bisa setor & tarik kapan saja
+                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-between gap-1 leading-tight">
+                  <span className="truncate">Setor & tarik bebas</span>
+                  <span className="text-sky-400 font-bold shrink-0">Lihat ›</span>
                 </div>
               </div>
 
               {/* 3. Dana Zakat & Qurban */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
-                <span className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-wider block break-words">
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-3.5 min-w-0 overflow-hidden flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block break-words">
                   DANA ZAKAT & QURBAN
                 </span>
                 <div
-                  className="text-xl sm:text-2xl font-black text-emerald-400 mt-1.5 font-mono tracking-tight break-all"
+                  className="text-base font-black text-emerald-400 mt-1.5 font-mono tabular-nums tracking-tight break-all"
                   title={formatRupiah(totalZakat + totalQurban)}
                 >
                   {formatRupiah(totalZakat + totalQurban)}
                 </div>
-                <div
-                  className="text-[10px] sm:text-[11px] text-slate-400 mt-1 break-words leading-tight"
-                  title={`Fitrah: ${formatRupiah(totalZakat)} • Qurban: ${formatRupiah(totalQurban)}`}
-                >
+                <div className="text-[10px] text-slate-400 mt-1 break-words leading-tight">
                   Fitrah: {formatRupiah(totalZakat)} • Qurban: {formatRupiah(totalQurban)}
                 </div>
               </div>
 
-              {/* 4. Saldo Kas Berjalan (User Req 1: total saldo anggota (pokok+Tabungan umum+Zakat+qurban) + saldo buku kas koperasi) */}
-              <div className="bg-[#0d1424] border border-emerald-500/40 rounded-3xl p-4 sm:p-5 shadow-xl min-w-0 overflow-hidden flex flex-col justify-between">
-                <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] sm:text-xs text-emerald-400 font-bold uppercase tracking-wider block break-words">
-                    SALDO KAS BERJALAN
-                  </span>
-                  <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-1.5 py-0.5 rounded-full border border-emerald-500/30 shrink-0 whitespace-nowrap">
-                    Kas Berjalan
-                  </span>
-                </div>
-                <div
-                  className="text-xl sm:text-2xl font-black text-white mt-1.5 font-mono tracking-tight break-all"
-                  title={`Saldo Kas Berjalan = Total Saldo Anggota: Pokok (${formatRupiah(totalPokok)}) + Umum (${formatRupiah(totalUmum)}) + Zakat (${formatRupiah(totalZakat)}) + Qurban (${formatRupiah(totalQurban)}) + Buku Kas Koperasi (${formatRupiah(saldoKasKoperasi)}) = ${formatRupiah(saldoKasBerjalan)}`}
-                >
-                  {formatRupiah(saldoKasBerjalan)}
-                </div>
-                <div
-                  className="text-[10px] sm:text-[11px] text-slate-300 mt-1 break-words leading-tight font-medium"
-                  title={`Saldo Kas Berjalan: Total Saldo Anggota (${formatRupiah(totalSaldoAnggota)}) + Saldo Buku Kas Koperasi (${formatRupiah(saldoKasKoperasi)}) = ${formatRupiah(saldoKasBerjalan)}`}
-                >
-                  Total Saldo Anggota (Pokok + Umum + Zakat + Qurban) + Kas Koperasi
-                </div>
-              </div>
-
-              {/* 5. Kotak Merah: Saldo Sedekah Koperasi (User Req 1: Kotak merah pada dashboard admin Adalah saldo sedekah koperasi) */}
+              {/* 4. Saldo Sedekah Koperasi */}
               <div
                 onClick={() => {
                   setBerbagiInitialTab('laporan');
                   setShowBerbagiModal(true);
                 }}
-                className="bg-gradient-to-br from-[#0d1424] via-[#1a1c38] to-[#25152b] border border-rose-500/50 hover:border-rose-400 rounded-3xl p-4 sm:p-5 shadow-xl cursor-pointer transition-all hover:scale-[1.02] group min-w-0 overflow-hidden flex flex-col justify-between"
-                title="Buka Menu Berbagi / Penyaluran Sedekah Koperasi"
+                className="bg-gradient-to-br from-[#0d1424] via-[#1a1c38] to-[#25152b] border border-rose-500/50 rounded-2xl p-3.5 cursor-pointer transition-all min-w-0 overflow-hidden flex flex-col justify-between"
               >
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] sm:text-xs text-rose-300 font-bold uppercase tracking-wider block break-words">
+                  <span className="text-[10px] text-rose-300 font-bold uppercase tracking-wider block break-words">
                     SALDO SEDEKAH KOPERASI
                   </span>
-                  <Heart className="w-4 h-4 text-rose-400 fill-rose-400/20 group-hover:scale-110 transition-transform shrink-0" />
+                  <Heart className="w-4 h-4 text-rose-400 fill-rose-400/20 shrink-0" />
                 </div>
                 <div
-                  className="text-xl sm:text-2xl font-black text-rose-400 mt-1.5 font-mono tracking-tight break-all"
-                  title={`Saldo Sedekah Koperasi: ${formatRupiah(saldoSedekahTersedia)}`}
+                  className="text-base font-black text-rose-400 mt-1.5 font-mono tabular-nums tracking-tight break-all"
+                  title={formatRupiah(saldoSedekahTersedia)}
                 >
                   {formatRupiah(saldoSedekahTersedia)}
                 </div>
-                <div className="text-[10px] sm:text-[11px] text-slate-400 mt-1 flex items-center justify-between gap-1 min-w-0">
-                  <span className="break-words min-w-0 leading-tight">Saldo Tersedia</span>
-                  <span className="text-rose-400 font-bold underline group-hover:text-rose-300 shrink-0 whitespace-nowrap">Kelola ›</span>
+                <div className="text-[10px] text-slate-400 mt-1 flex items-center justify-between gap-1 min-w-0">
+                  <span>Saldo Tersedia</span>
+                  <span className="text-rose-400 font-bold underline shrink-0">Kelola ›</span>
+                </div>
+              </div>
+
+              {/* 5. Saldo Kas Berjalan */}
+              <div className="col-span-2 bg-[#0d1424] border border-emerald-500/40 rounded-2xl p-3.5 min-w-0 overflow-hidden flex flex-col justify-between">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">
+                    SALDO KAS BERJALAN
+                  </span>
+                  <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded border border-emerald-500/30 shrink-0">
+                    Konsolidasi
+                  </span>
+                </div>
+                <div className="text-lg font-black text-white mt-1.5 font-mono tabular-nums tracking-tight break-all">
+                  {formatRupiah(saldoKasBerjalan)}
+                </div>
+                <div className="text-[10px] text-slate-300 mt-1 leading-tight font-medium">
+                  Total Saldo Anggota (Pokok + Umum + Zakat + Qurban) + Kas Koperasi
                 </div>
               </div>
             </div>
 
-            {/* 3 Main Cards: Buku Kas Anggota, Buku Kas Koperasi & Kas Berbagi Sedekah Koperasi */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              {/* Card 1: Buku Kas Anggota (User Req: Tulisan angka nominal terlihat jelas dalam kotak) */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-6 shadow-2xl flex flex-col justify-between space-y-4 min-w-0 overflow-hidden">
+            {/* ================= PC & WEB EXECUTIVE OVERVIEW (hidden lg:grid) ================= */}
+            <section aria-label="Ringkasan Keuangan Koperasi PC" className="hidden lg:grid grid-cols-12 gap-4">
+              {/* Primary Anchor: Saldo Kas Berjalan */}
+              <div className="col-span-5 bg-[#0d1424] border border-emerald-500/40 rounded-2xl p-5 flex flex-col justify-between relative overflow-hidden">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                        Saldo Kas Berjalan Koperasi
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-300">
+                        Konsolidasi Aktif
+                      </span>
+                    </div>
+                    <div
+                      className="text-3xl xl:text-4xl font-black text-white font-mono tabular-nums tracking-tight mt-2"
+                      title={formatRupiah(saldoKasBerjalan)}
+                    >
+                      {formatRupiah(saldoKasBerjalan)}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                      Total Saldo Anggota ({formatRupiah(totalSaldoAnggota)}) + Saldo Buku Kas Koperasi ({formatRupiah(saldoKasKoperasi)})
+                    </p>
+                  </div>
+                  <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                    <TrendingUp className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3.5 border-t border-slate-800/90 flex items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Total Anggota</span>
+                      <span className="font-mono tabular-nums font-extrabold text-white text-sm">{state.members.length} Orang</span>
+                    </div>
+                    <div className="h-6 w-px bg-slate-800" />
+                    <div>
+                      <span className="text-slate-400 block text-[10px] uppercase font-bold">Antrean Verifikasi</span>
+                      <span className={`font-mono tabular-nums font-extrabold text-sm ${pendingDepositsCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                        {pendingDepositsCount} Setoran
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePrintSummary}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-amber-400" />
+                    Cetak Ringkasan
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Sub-Balance KPI Tiles */}
+              <div className="col-span-7 grid grid-cols-2 gap-3.5">
+                {/* 1. Simpanan Pokok */}
+                <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                      Total Simpanan Pokok
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-500/10 border border-amber-500/25 px-2 py-0.5 rounded">
+                      50%
+                    </span>
+                  </div>
+                  <div className="text-2xl font-black text-[#f59e0b] font-mono tabular-nums tracking-tight mt-2">
+                    {formatRupiah(totalPokok)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    Rp1.000 / hari • Terkunci oleh Admin
+                  </div>
+                </div>
+
+                {/* 2. Tabungan Umum */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('tabungan_umum')}
+                  className="bg-[#0d1424] border border-slate-800 hover:border-sky-500/60 rounded-2xl p-4 flex flex-col justify-between text-left transition-colors cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between gap-2 w-full">
+                    <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                      Total Tabungan Umum
+                    </span>
+                    <Wallet className="w-4 h-4 text-sky-400 shrink-0" />
+                  </div>
+                  <div className="text-2xl font-black text-sky-400 font-mono tabular-nums tracking-tight mt-2">
+                    {formatRupiah(totalUmum)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between w-full">
+                    <span>{tabunganUmumMembersCount} anggota memiliki saldo</span>
+                    <span className="text-sky-400 font-bold group-hover:translate-x-0.5 transition-transform">Daftar ›</span>
+                  </div>
+                </button>
+
+                {/* 3. Dana Zakat & Qurban */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('zakat')}
+                  className="bg-[#0d1424] border border-slate-800 hover:border-emerald-500/50 rounded-2xl p-4 flex flex-col justify-between text-left transition-colors cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between gap-2 w-full">
+                    <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+                      Dana Zakat & Qurban
+                    </span>
+                    <HeartHandshake className="w-4 h-4 text-emerald-400 shrink-0" />
+                  </div>
+                  <div className="text-2xl font-black text-emerald-400 font-mono tabular-nums tracking-tight mt-2">
+                    {formatRupiah(totalZakat + totalQurban)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1 font-mono tabular-nums">
+                    Fitrah {formatRupiah(totalZakat)} • Qurban {formatRupiah(totalQurban)}
+                  </div>
+                </button>
+
+                {/* 4. Saldo Sedekah Koperasi */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBerbagiInitialTab('laporan');
+                    setShowBerbagiModal(true);
+                  }}
+                  className="bg-[#0d1424] border border-rose-500/40 hover:border-rose-400 rounded-2xl p-4 flex flex-col justify-between text-left transition-colors cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between gap-2 w-full">
+                    <span className="text-[11px] text-rose-300 font-bold uppercase tracking-wider">
+                      Saldo Sedekah Koperasi
+                    </span>
+                    <Heart className="w-4 h-4 text-rose-400 fill-rose-400/20 shrink-0" />
+                  </div>
+                  <div className="text-2xl font-black text-rose-400 font-mono tabular-nums tracking-tight mt-2">
+                    {formatRupiah(saldoSedekahTersedia)}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between w-full">
+                    <span>Siap disalurkan</span>
+                    <span className="text-rose-400 font-bold group-hover:translate-x-0.5 transition-transform">Kelola ›</span>
+                  </div>
+                </button>
+              </div>
+            </section>
+
+            {/* ================= 3 LEDGER PANELS (Clean Single-Elevation Accounting Tables) ================= */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5">
+              {/* Card 1: Buku Kas Anggota */}
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col justify-between space-y-4 min-w-0 overflow-hidden">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800 gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -1276,80 +1614,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div className="min-w-0">
                         <h4 className="text-sm sm:text-base font-extrabold text-white break-words">Buku Kas Anggota</h4>
-                        <div className="text-[10px] sm:text-[11px] text-slate-400 break-words leading-tight">
+                        <div className="text-[11px] text-slate-400 leading-tight">
                           Rekapitulasi Simpanan & Tabungan Anggota
                         </div>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded shrink-0">
                       Anggota
                     </span>
                   </div>
 
-                  {/* Dedicated Prominent Balance Banner - Angka terlihat penuh, tidak terpotong / melewati kotak */}
-                  <div className="p-3.5 bg-gradient-to-r from-[#141e33] to-[#0f172a] border border-amber-500/30 rounded-2xl flex flex-col justify-center shadow-inner">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
-                        Saldo Buku Kas Anggota:
-                      </span>
-                      <span className="text-[9px] text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-full border border-slate-700/60 shrink-0 whitespace-nowrap">
-                        Konsolidasi
-                      </span>
-                    </div>
+                  {/* Highlighted Total Row */}
+                  <div className="py-2.5 px-3.5 bg-slate-900/70 border-l-4 border-amber-500 rounded-r-xl flex flex-col justify-center">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+                      Saldo Buku Kas Anggota
+                    </span>
                     <div
-                      className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono tracking-tight mt-1 break-all"
+                      className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono tabular-nums tracking-tight mt-0.5 break-all"
                       title={formatRupiah(saldoKasAnggota)}
                     >
                       {formatRupiah(saldoKasAnggota)}
                     </div>
-                    <div className="text-[10px] sm:text-[11px] text-slate-300 mt-1 break-words leading-tight font-medium" title="Total Simpanan Pokok Anggota + Total Tabungan Umum + Tabungan Zakat Fitrah + Tabungan Qurban">
-                      Total Simpanan Pokok + Tabungan Umum + Zakat Fitrah + Qurban
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Pokok + Tabungan Umum + Zakat Fitrah + Qurban
                     </div>
                   </div>
 
-                  {/* Sub-item Breakdown */}
-                  <div className="space-y-2 text-xs">
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">Total Simpanan Pokok Anggota (50%):</span>
-                      <span className="font-bold text-amber-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(totalPokok)}</span>
+                  {/* Aligned Ledger Breakdown */}
+                  <div className="divide-y divide-slate-800/80 text-xs">
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 leading-tight">Simpanan Pokok Anggota (50%)</span>
+                      <span className="font-bold text-amber-400 font-mono tabular-nums shrink-0">{formatRupiah(totalPokok)}</span>
                     </div>
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">Total Tabungan Umum Anggota:</span>
-                      <span className="font-bold text-sky-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(totalUmum)}</span>
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 leading-tight">Tabungan Umum Anggota</span>
+                      <span className="font-bold text-sky-400 font-mono tabular-nums shrink-0">{formatRupiah(totalUmum)}</span>
                     </div>
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">Tabungan Zakat Fitrah (25%):</span>
-                      <span className="font-bold text-emerald-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(totalZakat)}</span>
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 leading-tight">Tabungan Zakat Fitrah (25%)</span>
+                      <span className="font-bold text-emerald-400 font-mono tabular-nums shrink-0">{formatRupiah(totalZakat)}</span>
                     </div>
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">Tabungan Qurban (25%):</span>
-                      <span className="font-bold text-teal-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(totalQurban)}</span>
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 leading-tight">Tabungan Qurban (25%)</span>
+                      <span className="font-bold text-teal-400 font-mono tabular-nums shrink-0">{formatRupiah(totalQurban)}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setActiveTab('kas')}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      PDF Laporan
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('kas')}
-                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
-                    >
-                      <FileDown className="w-3.5 h-3.5" />
-                      Unduh Excel
-                    </button>
-                  </div>
+                <div className="flex gap-2 pt-2 border-t border-slate-800/70">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('kas')}
+                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    PDF Laporan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('kas')}
+                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <FileDown className="w-3.5 h-3.5" />
+                    Unduh Excel
+                  </button>
                 </div>
               </div>
 
-              {/* Card 2: Buku Kas Koperasi (Req: Tampilan atas total saldo, tampilan di bawahnya = total bersedekah dan saldo kas berjalan) */}
-              <div className="bg-[#0d1424] border border-slate-700/80 rounded-3xl p-4 sm:p-6 shadow-2xl flex flex-col justify-between space-y-4 min-w-0 overflow-hidden">
+              {/* Card 2: Buku Kas Koperasi */}
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col justify-between space-y-4 min-w-0 overflow-hidden">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800 gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -1358,66 +1691,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div className="min-w-0">
                         <h4 className="text-sm sm:text-base font-extrabold text-white break-words">Buku Kas Koperasi</h4>
-                        <div className="text-[10px] sm:text-[11px] text-slate-400 break-words leading-tight">
+                        <div className="text-[11px] text-slate-400 leading-tight">
                           Operasional, Sedekah & Lembaga Koperasi
                         </div>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-500/15 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-500/15 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded shrink-0">
                       Lembaga
                     </span>
                   </div>
 
-                  {/* Dedicated Prominent Balance Banner - Angka terlihat penuh, tidak terpotong / melewati kotak */}
-                  <div className="p-3.5 bg-gradient-to-r from-[#141e33] to-[#0f172a] border border-sky-500/30 rounded-2xl flex flex-col justify-center shadow-inner">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-sky-400 uppercase tracking-wider">
-                        Total Saldo Kas Koperasi:
-                      </span>
-                      <span className="text-[9px] text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-full border border-slate-700/60 shrink-0 whitespace-nowrap">
-                        Kas Induk
-                      </span>
-                    </div>
+                  {/* Highlighted Total Row */}
+                  <div className="py-2.5 px-3.5 bg-slate-900/70 border-l-4 border-sky-500 rounded-r-xl flex flex-col justify-center">
+                    <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider">
+                      Total Saldo Kas Koperasi
+                    </span>
                     <div
-                      className="text-2xl sm:text-3xl font-black text-sky-400 font-mono tracking-tight mt-1 break-all"
+                      className="text-2xl sm:text-3xl font-black text-sky-400 font-mono tabular-nums tracking-tight mt-0.5 break-all"
                       title={formatRupiah(saldoKasKoperasi)}
                     >
                       {formatRupiah(saldoKasKoperasi)}
                     </div>
-                    <div className="text-[10px] sm:text-[11px] text-slate-300 mt-1 break-words leading-tight font-medium">
-                      Operasional & Lembaga Koperasi
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Kas Induk Operasional & Lembaga
                     </div>
                   </div>
 
-                  {/* Sub-item Breakdown */}
-                  <div className="space-y-2 text-xs">
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">Total Bersedekah:</span>
-                      <span className="font-bold text-rose-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(saldoSedekahTersedia)}</span>
+                  {/* Aligned Ledger Breakdown */}
+                  <div className="divide-y divide-slate-800/80 text-xs">
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300">Total Bersedekah</span>
+                      <span className="font-bold text-rose-400 font-mono tabular-nums shrink-0">{formatRupiah(saldoSedekahTersedia)}</span>
                     </div>
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <div className="min-w-0 break-words">
-                        <div className="text-slate-300 text-xs">Saldo Kas Berjalan (Operasional):</div>
-                        <div className="text-[10px] text-slate-400 leading-tight">Total Saldo Kas - Total Bersedekah</div>
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <div className="min-w-0">
+                        <div className="text-slate-300">Saldo Kas Operasional</div>
+                        <div className="text-[10px] text-slate-500">Total Kas Koperasi - Total Bersedekah</div>
                       </div>
-                      <span className="font-bold text-emerald-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">
+                      <span className="font-bold text-emerald-400 font-mono tabular-nums shrink-0">
                         {formatRupiah(Math.max(0, saldoKasKoperasi - saldoSedekahTersedia))}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-2 border-t border-slate-800/70">
                   <button
+                    type="button"
                     onClick={() => setActiveTab('kas')}
-                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all"
+                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                   >
                     <PlusCircle className="w-3.5 h-3.5 text-emerald-400" />
-                    + Input Kas Koperasi
+                    Input Kas Koperasi
                   </button>
                   <button
+                    type="button"
                     onClick={() => setActiveTab('zakat')}
-                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md"
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                   >
                     <HeartHandshake className="w-3.5 h-3.5" />
                     Salurkan Zakat
@@ -1425,8 +1755,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Card 3: Kas Berbagi & Sedekah Koperasi (Prominent & Realtime Online) */}
-              <div className="bg-[#0d1424] border border-rose-500/50 hover:border-rose-400 rounded-3xl p-4 sm:p-6 shadow-2xl flex flex-col justify-between space-y-4 min-w-0 overflow-hidden">
+              {/* Card 3: Kas Berbagi & Sedekah Koperasi */}
+              <div className="bg-[#0d1424] border border-rose-500/40 rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col justify-between space-y-4 min-w-0 overflow-hidden">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between pb-3 border-b border-slate-800 gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -1435,59 +1765,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                       <div className="min-w-0">
                         <h4 className="text-sm sm:text-base font-extrabold text-white break-words">Kas Berbagi & Sedekah</h4>
-                        <div className="text-[10px] sm:text-[11px] text-rose-300/80 break-words leading-tight">
+                        <div className="text-[11px] text-rose-300/80 leading-tight truncate">
                           {namaSubuh}, {namaJumat} & {namaUmum}
                         </div>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-rose-500/15 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-rose-500/15 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded shrink-0">
                       Sedekah
                     </span>
                   </div>
 
-                  {/* Dedicated Prominent Balance Banner - Angka terlihat penuh, tidak terpotong / melewati kotak */}
-                  <div className="p-3.5 bg-gradient-to-r from-[#1f1627] to-[#121424] border border-rose-500/30 rounded-2xl flex flex-col justify-center shadow-inner">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-rose-400 uppercase tracking-wider">
-                        Saldo Siap Disalurkan:
-                      </span>
-                      <span className="text-[9px] text-rose-300 bg-rose-500/20 px-2 py-0.5 rounded-full border border-rose-500/40 shrink-0 whitespace-nowrap">
-                        Tersedia
-                      </span>
-                    </div>
+                  {/* Highlighted Total Row */}
+                  <div className="py-2.5 px-3.5 bg-slate-900/70 border-l-4 border-rose-500 rounded-r-xl flex flex-col justify-center">
+                    <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">
+                      Saldo Siap Disalurkan
+                    </span>
                     <div
-                      className="text-2xl sm:text-3xl font-black text-rose-400 font-mono tracking-tight mt-1 break-all"
+                      className="text-2xl sm:text-3xl font-black text-rose-400 font-mono tabular-nums tracking-tight mt-0.5 break-all"
                       title={formatRupiah(saldoSedekahTersedia)}
                     >
                       {formatRupiah(saldoSedekahTersedia)}
                     </div>
-                    <div className="text-[10px] sm:text-[11px] text-slate-300 mt-1 break-words leading-tight font-medium">
-                      Penyaluran Program Berbagi Koperasi
+                    <div className="text-[10px] text-slate-400 mt-0.5">
+                      Masuk {formatRupiah(totalSedekahMasuk)} • Disalurkan {formatRupiah(totalSedekahSalur)}
                     </div>
                   </div>
 
-                  {/* Sub-item Breakdown */}
-                  <div className="space-y-2 text-xs">
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">{namaSubuh}:</span>
-                      <span className="font-bold text-amber-300 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(subuhSaldo)}</span>
+                  {/* Aligned Ledger Breakdown */}
+                  <div className="divide-y divide-slate-800/80 text-xs">
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">{namaSubuh}</span>
+                      <span className="font-bold text-amber-300 font-mono tabular-nums shrink-0">{formatRupiah(subuhSaldo)}</span>
                     </div>
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">{namaJumat}:</span>
-                      <span className="font-bold text-emerald-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(jumatSaldo)}</span>
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">{namaJumat}</span>
+                      <span className="font-bold text-emerald-400 font-mono tabular-nums shrink-0">{formatRupiah(jumatSaldo)}</span>
                     </div>
-                    <div className="p-2 sm:p-2.5 bg-[#162035] rounded-xl flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-slate-300 text-xs break-words min-w-0 leading-tight">{namaUmum}:</span>
-                      <span className="font-bold text-sky-400 font-mono text-xs sm:text-sm shrink-0 whitespace-nowrap">{formatRupiah(umumSaldo)}</span>
-                    </div>
-                    <div className="text-[10px] text-slate-400 flex justify-between items-center gap-2 pt-1 px-1 min-w-0">
-                      <span className="break-words min-w-0 leading-tight">Masuk: {formatRupiah(totalSedekahMasuk)}</span>
-                      <span className="shrink-0 whitespace-nowrap">Disalurkan: {formatRupiah(totalSedekahSalur)}</span>
+                    <div className="py-2.5 flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-slate-300 truncate">{namaUmum}</span>
+                      <span className="font-bold text-sky-400 font-mono tabular-nums shrink-0">{formatRupiah(umumSaldo)}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2">
+                <div className="space-y-2 pt-2 border-t border-slate-800/70">
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -1495,7 +1816,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setBerbagiInitialTab('konfirmasi');
                         setShowBerbagiModal(true);
                       }}
-                      className="flex-1 py-2 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md shadow-rose-600/20 cursor-pointer"
+                      className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                     >
                       <Heart className="w-3.5 h-3.5 fill-current" />
                       <span>Kas Sedekah</span>
@@ -1527,338 +1848,117 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            {/* Mobile Vertical Menu Stack (Matching Tampilan Pada Dasbord mobile Admin.png) */}
-            <div className="lg:hidden space-y-3 pt-2">
-              <div className="flex justify-between items-center px-1">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-400">
-                  Pilihan Menu Utama Admin
-                </span>
-                <span className="text-[11px] text-slate-500">Pilih menu di bawah</span>
+            {/* ================= PC & WEB OPERATIONAL ACTIVITY PANELS (hidden lg:grid) ================= */}
+            <section aria-label="Ringkasan Operasional PC" className="hidden lg:grid grid-cols-2 gap-5">
+              {/* Left: Pending Setoran Queue */}
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-sky-400" />
+                      <h4 className="text-sm font-extrabold text-white">Antrean Verifikasi Setoran</h4>
+                    </div>
+                    {!isLaporan && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('verifikasi')}
+                        className="text-xs font-bold text-amber-400 hover:text-amber-300 cursor-pointer"
+                      >
+                        Buka Semua ({pendingDepositsCount}) ›
+                      </button>
+                    )}
+                  </div>
+
+                  {pendingDepositsCount === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-400">
+                      Semua pengajuan setoran anggota telah diverifikasi. Tidak ada antrean menunggu.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-800/80 mt-1">
+                      {pendingDeposits.slice(0, 4).map((dep) => (
+                        <div
+                          key={dep.id}
+                          onClick={() => !isLaporan && setActiveTab('verifikasi')}
+                          className="py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-slate-800/40 px-2 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-white truncate">{dep.memberNama}</div>
+                            <div className="text-[11px] text-slate-400">
+                              {dep.jenis.toUpperCase()} • {dep.metode}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="font-mono tabular-nums font-extrabold text-emerald-400">
+                              {formatRupiah(dep.nominal)}
+                            </div>
+                            <div className="text-[10px] font-mono text-amber-300/90">
+                              {dep.createdAt
+                                ? new Date(dep.createdAt).toLocaleTimeString('id-ID', {
+                                    timeZone: 'Asia/Jakarta',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    hour12: false,
+                                  }) + ' WIB'
+                                : '-'}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('dashboard')}
-                  className="w-full p-4 rounded-2xl bg-[#f59e0b] text-slate-950 font-extrabold flex items-center justify-between shadow-lg text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-slate-950 text-white flex items-center justify-center">
-                      <BookOpen className="w-4 h-4" />
+              {/* Right: Top Tabungan Umum & Quick Directory */}
+              <div className="bg-[#0d1424] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <Wallet className="w-4 h-4 text-sky-400" />
+                      <h4 className="text-sm font-extrabold text-white">Pemilik Simpanan Tabungan Umum</h4>
                     </div>
-                    <div>
-                      <div className="text-xs font-black">1. Dashboard</div>
-                      <div className="text-[10px] font-medium text-slate-900">
-                        Ringkasan Kas, Saldo & Statistik
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('tabungan_umum')}
+                      className="text-xs font-bold text-sky-400 hover:text-sky-300 cursor-pointer"
+                    >
+                      Lihat ({tabunganUmumMembersCount} Anggota) ›
+                    </button>
                   </div>
-                  <span>›</span>
-                </button>
 
-                {!isLaporan && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('verifikasi')}
-                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 text-white flex items-center justify-between text-left"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-slate-800 text-sky-400 flex items-center justify-center">
-                        <CheckCircle2 className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold">2. Verifikasi Setoran</div>
-                        <div className="text-[10px] text-slate-400">
-                          Verifikasi bukti setor QRIS anggota
-                        </div>
-                      </div>
+                  {tabunganUmumMembersCount === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-400">
+                      Belum ada anggota yang memiliki saldo Tabungan Umum saat ini.
                     </div>
-                    <span>›</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('anggota')}
-                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 text-white flex items-center justify-between text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-slate-800 text-emerald-400 flex items-center justify-center">
-                      <Users className="w-4 h-4" />
+                  ) : (
+                    <div className="divide-y divide-slate-800/80 mt-1">
+                      {state.members
+                        .filter((m) => (m.saldoUmum || 0) > 0)
+                        .sort((a, b) => (b.saldoUmum || 0) - (a.saldoUmum || 0))
+                        .slice(0, 4)
+                        .map((mem) => (
+                          <div
+                            key={mem.id}
+                            onClick={() => setActiveTab('tabungan_umum')}
+                            className="py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-slate-800/40 px-2 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-bold text-white truncate">{mem.nama}</div>
+                              <div className="text-[11px] font-mono text-slate-400">
+                                {mem.nomorRekening || mem.nomorAnggota} • {mem.wilayah}
+                              </div>
+                            </div>
+                            <div className="font-mono tabular-nums font-extrabold text-sky-400 shrink-0">
+                              {formatRupiah(mem.saldoUmum)}
+                            </div>
+                          </div>
+                        ))}
                     </div>
-                    <div>
-                      <div className="text-xs font-extrabold flex items-center gap-1.5">
-                        <span>3. Data Anggota</span>
-                        <span className="text-[9px] bg-slate-700 px-1.5 py-0.5 rounded-full text-slate-300">
-                          {state.members.length} Anggota
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        KTA Digital, Rekening, Mutasi & Anggota Baru
-                      </div>
-                    </div>
-                  </div>
-                  <span>›</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('kas')}
-                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 text-white flex items-center justify-between text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-slate-800 text-amber-400 flex items-center justify-center">
-                      <Building className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold">4. Buku Kas & Neraca</div>
-                      <div className="text-[10px] text-slate-400">
-                        Buku Kas Anggota, Kas Koperasi & Laporan Neraca
-                      </div>
-                    </div>
-                  </div>
-                  <span>›</span>
-                </button>
-
-                {!isLaporan && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('penyesuaian_saldo')}
-                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 hover:border-amber-500/60 text-white flex items-center justify-between text-left transition-all group shadow-md"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-slate-800 text-amber-400 flex items-center justify-center group-hover:scale-105 transition-transform">
-                        <SlidersHorizontal className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold flex items-center gap-1.5">
-                          <span>5. Penyesuaian Saldo Anggota</span>
-                          <span className="text-[9px] bg-amber-500/20 text-amber-300 font-black px-1.5 py-0.2 rounded">Baru</span>
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Koreksi Saldo Manual & Pembagian Hasil (% Pokok / SHU)
-                        </div>
-                      </div>
-                    </div>
-                    <span>›</span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('zakat')}
-                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 text-white flex items-center justify-between text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-slate-800 text-emerald-400 flex items-center justify-center">
-                      <HeartHandshake className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold">6. Zakat & Qurban</div>
-                      <div className="text-[10px] text-slate-400">
-                        Penyaluran Zakat Fitrah & Tabungan Qurban
-                      </div>
-                    </div>
-                  </div>
-                  <span>›</span>
-                </button>
-
-                {/* User Req 3: Menu Laporan Sedekah & Penyaluran Sedekah pada Mobile Admin */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBerbagiInitialTab('laporan');
-                    setShowBerbagiModal(true);
-                  }}
-                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-sky-500/40 text-white flex items-center justify-between text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center">
-                      <FileSpreadsheet className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold flex items-center gap-1.5">
-                        <span>7. Laporan Sedekah</span>
-                        <span className="text-[9px] bg-sky-500/20 text-sky-300 font-bold px-1.5 py-0.2 rounded">PDF / Excel</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        Filter per wilayah, per anggota & periode harian/bulanan/tahunan
-                      </div>
-                    </div>
-                  </div>
-                  <span>›</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBerbagiInitialTab('salurkan');
-                    setShowBerbagiModal(true);
-                  }}
-                  className="w-full p-4 rounded-2xl bg-[#111c33] border border-amber-500/40 text-white flex items-center justify-between text-left"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center relative">
-                      <Send className="w-4 h-4" />
-                      {pendingSalurCount > 0 && (
-                        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center animate-pulse">
-                          {pendingSalurCount}
-                        </span>
-                      )}
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold flex items-center gap-1.5">
-                        <span>8. Penyaluran Sedekah</span>
-                        {pendingSalurCount > 0 && (
-                          <span className="text-[9px] bg-rose-500 text-white font-black px-1.5 py-0.2 rounded animate-pulse">
-                            {pendingSalurCount} Butuh Approval
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        Input Admin Write & Disetujui Approval/Super Admin
-                      </div>
-                    </div>
-                  </div>
-                  <span>›</span>
-                </button>
-
-                {!isLaporan && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('surat')}
-                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 text-white flex items-center justify-between text-left"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-slate-800 text-sky-400 flex items-center justify-center">
-                        <Mail className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold flex items-center gap-1.5">
-                          <span>7. Surat Menyurat</span>
-                          {unreadSuratAdminCount > 0 && (
-                            <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black animate-pulse">
-                              {unreadSuratAdminCount}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Terbitkan surat resmi ke WhatsApp & Email
-                        </div>
-                      </div>
-                    </div>
-                    <span>›</span>
-                  </button>
-                )}
-
-                {!isLaporan && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('chat')}
-                    className="w-full p-4 rounded-2xl bg-[#111c33] border border-slate-700/80 text-white flex items-center justify-between text-left"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-slate-800 text-amber-400 flex items-center justify-center">
-                        <MessageSquare className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold">8. Chat Online</div>
-                        <div className="text-[10px] text-slate-400">
-                          Obrolan langsung realtime dengan anggota
-                        </div>
-                      </div>
-                    </div>
-                    <span>›</span>
-                  </button>
-                )}
-
-                {isSuperAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSettingSubModal('daftar_admin');
-                      setShowSettings(true);
-                    }}
-                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 to-[#111c33] border border-amber-500/40 text-white flex items-center justify-between text-left hover:border-amber-400 transition-all shadow-md"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-black">
-                        <Shield className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold flex items-center gap-2">
-                          <span>8. Kelola Administrator</span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-amber-500 text-slate-950 font-black">
-                            {state.admins.length} Admin
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Super Admin: Edit data akun, tambah pengurus baru, atau hapus admin
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-amber-400 font-bold">›</span>
-                  </button>
-                )}
-
-                {isSuperAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSettingSubModal('log_audit');
-                      setShowSettings(true);
-                    }}
-                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-purple-500/10 to-[#111c33] border border-purple-500/40 text-white flex items-center justify-between text-left hover:border-purple-400 transition-all shadow-md"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center font-black">
-                        <Activity className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold flex items-center gap-2">
-                          <span>9. Log Audit History Multi-Platform</span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-purple-500 text-white font-black">
-                            {state.auditLogs.length} Log
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Rekam aktivitas admin dari Web, Android Mobile (.APK), iOS & PC Desktop
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-purple-400 font-bold">›</span>
-                  </button>
-                )}
-
-                {(isSuperAdmin || isApproval || isWriter) && (
-                  <button
-                    type="button"
-                    onClick={() => setShowHapusTxModal(true)}
-                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-rose-500/10 to-[#111c33] border border-rose-500/40 text-white flex items-center justify-between text-left hover:border-rose-400 transition-all shadow-md cursor-pointer"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center font-black">
-                        <Trash2 className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-extrabold flex items-center gap-2">
-                          <span>{isSuperAdmin ? '10. Hapus & Reset Mutasi Anggota ke Nol' : 'Hapus Mutasi Anggota (Pengajuan Approval)'}</span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-rose-500 text-white font-black">
-                            {isSuperAdmin ? 'Super Admin' : `Disetujui ${getRequiredApproverLabel(currentAdmin.role)}`}
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {isSuperAdmin
-                            ? 'Reset mutasi rekening anggota tertentu menjadi nol secara permanen dengan otoritas kata sandi'
-                            : `Ajukan penghapusan mutasi rekening anggota untuk disetujui oleh ${getRequiredApproverLabel(currentAdmin.role)}`}
-                        </div>
-                      </div>
-                    </div>
-                    <span className="text-rose-400 font-bold">›</span>
-                  </button>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
+            </section>
+
           </>
         ) : activeTab === 'verifikasi' ? (
           <MemberVerificationView
@@ -1904,6 +2004,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <ChatOnlineView
             state={state}
             updateState={updateState}
+            currentAdmin={currentAdmin}
+          />
+        ) : activeTab === 'tabungan_umum' ? (
+          <TabunganUmumView
+            state={state}
             currentAdmin={currentAdmin}
           />
         ) : null}

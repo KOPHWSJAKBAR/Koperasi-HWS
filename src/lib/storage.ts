@@ -19,6 +19,23 @@ import {
 import { getIsInternetConnected } from '../components/NetworkStatusGuard';
 
 const STORAGE_KEY = 'koperasi_hws_local_cache';
+const PENDING_OFFLINE_SYNC_KEY = 'koperasi_hws_pending_offline_sync';
+
+function hasPendingOfflineSync(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(PENDING_OFFLINE_SYNC_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setPendingOfflineSync(flag: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (flag) localStorage.setItem(PENDING_OFFLINE_SYNC_KEY, '1');
+    else localStorage.removeItem(PENDING_OFFLINE_SYNC_KEY);
+  } catch {}
+}
 
 export function isApprovalRole(role?: string): boolean {
   const r = String(role || '').toLowerCase();
@@ -1795,7 +1812,23 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         Array.isArray(incoming.categoriesKasKoperasi.pengeluaran))
         ? incoming.categoriesKasKoperasi
         : base.categoriesKasKoperasi || { pemasukan: [], pengeluaran: [] },
-    maintenanceLock: incoming.maintenanceLock || base.maintenanceLock || { isLocked: false },
+    maintenanceLock: (() => {
+      const baseLock = base.maintenanceLock;
+      const incLock = incoming.maintenanceLock;
+      if (!incLock || typeof incLock !== 'object') return baseLock || { isLocked: false };
+      if (!baseLock || typeof baseLock !== 'object') return incLock;
+      const baseTs = Math.max(
+        baseLock.lockedAt ? Date.parse(baseLock.lockedAt) || 0 : 0,
+        baseLock.unlockedAt ? Date.parse(baseLock.unlockedAt) || 0 : 0
+      );
+      const incTs = Math.max(
+        incLock.lockedAt ? Date.parse(incLock.lockedAt) || 0 : 0,
+        incLock.unlockedAt ? Date.parse(incLock.unlockedAt) || 0 : 0
+      );
+      if (incTs > baseTs) return incLock;
+      if (incTs === baseTs && baseTs === 0) return incLock;
+      return baseLock;
+    })(),
     auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     accountNumberSchemaVersion: 2,
     lastRunningNumber: (() => {
@@ -3251,7 +3284,7 @@ export function applyRealtimeChatMessages(incoming: ChatMessage[]): boolean {
   return true;
 }
 
-async function runFirestoreTasksInChunks(tasks: Array<() => Promise<any>>, chunkSize = 16) {
+async function runFirestoreTasksInChunks(tasks: Array<() => Promise<any>>, chunkSize = 25) {
   for (let i = 0; i < tasks.length; i += chunkSize) {
     const batch = tasks.slice(i, i + chunkSize);
     await Promise.all(batch.map((fn) => fn().catch(() => {})));
@@ -3545,7 +3578,7 @@ export async function syncShardedToFirestore(state: AppState) {
     }
 
     if (tasks.length > 0) {
-      await runFirestoreTasksInChunks(tasks, 16);
+      await runFirestoreTasksInChunks(tasks, 25);
     }
 
     // 9. Lightweight Metadata Pulse to koperasi_state/main_database ONLY when something actually changed
@@ -3577,12 +3610,12 @@ export async function syncShardedToFirestore(state: AppState) {
     const nextQueued = queuedFirestoreSyncState;
     queuedFirestoreSyncState = null;
     if (nextQueued) {
-      scheduleShardedFirestoreSync(nextQueued, 80);
+      scheduleShardedFirestoreSync(nextQueued, 10);
     }
   }
 }
 
-export function scheduleShardedFirestoreSync(state: AppState, delay = 80) {
+export function scheduleShardedFirestoreSync(state: AppState, delay = 10) {
   clearTimeout(shardedTimer);
   shardedTimer = setTimeout(() => {
     syncShardedToFirestore(state);
@@ -3612,11 +3645,12 @@ export async function syncStateToServer(state: AppState) {
 
     // 1. Post to Express realtime backend + Firestore in parallel when internet connection is active
     if (!getIsInternetConnected()) {
+      setPendingOfflineSync(true);
       queuedFirestoreSyncState = globalState;
       return;
     }
 
-    scheduleShardedFirestoreSync(globalState, 60);
+    scheduleShardedFirestoreSync(globalState, 10);
 
     try {
       const postController = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -3629,15 +3663,20 @@ export async function syncStateToServer(state: AppState) {
           signal: postController?.signal,
         });
         if (res.ok) {
+          setPendingOfflineSync(false);
           const d = await res.json().catch(() => null);
           if (d?.digest) {
             lastServerStateDigest = String(d.digest);
           }
+        } else {
+          setPendingOfflineSync(true);
         }
       } finally {
         if (postTimeout) clearTimeout(postTimeout);
       }
-    } catch {}
+    } catch {
+      setPendingOfflineSync(true);
+    }
   } catch (err) {
     // State is safely cached in localStorage
   }
@@ -3688,6 +3727,19 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
                 lastServerStateDigest = headerDigest;
               }
 
+              const wasAlreadyHydrated = hasHydratedRemoteState;
+
+              // AI Studio & client devices strictly follow authoritative live app data on first hydration
+              // unless there are genuine offline changes created on this device awaiting upload.
+              if (!wasAlreadyHydrated && !hasPendingOfflineSync()) {
+                hasHydratedRemoteState = true;
+                seedFirestoreSyncedHashesFromServer(data, true);
+                globalState = reconcileBalancesWithDeposits(data as AppState);
+                scheduleLocalStoragePersist();
+                notifyListeners();
+                return globalState;
+              }
+
               // Check if local device cache has any non-deleted records created offline missing from server
               const serverDelSet = new Set<string>([
                 ...(data.deletedMemberIds || []),
@@ -3730,20 +3782,21 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
               const serverAdminIds = new Set((data.admins || []).map((a: any) => a?.id));
 
               const hasUnsyncedLocalSlices =
-                (globalState.setoranList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSetoranIds.has(s.id)) ||
-                (globalState.kasList || []).some((k) => k?.id && !delKas.has(k.id) && !serverKasIds.has(k.id)) ||
-                (globalState.memberTransactions || []).some((t) => t?.id && !delTx.has(t.id) && !serverTxIds.has(t.id)) ||
-                (globalState.sedekahList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSedekahIds.has(s.id)) ||
-                (globalState.chatMessages || []).some(
-                  (c) =>
-                    c?.id &&
-                    !isChatMessageClearedClient(c, delChat, effChatClearedAt, effChatClearedByMember) &&
-                    !serverChatIds.has(c.id)
-                ) ||
-                (globalState.suratList || []).some(
-                  (sr) => sr?.id && !isSuratDeletedClient(sr, delSurat, effSuratResetAt) && !serverSuratIds.has(sr.id)
-                ) ||
-                (globalState.admins || []).some((a) => a?.id && !delAdmin.has(a.id) && !serverAdminIds.has(a.id));
+                hasPendingOfflineSync() &&
+                ((globalState.setoranList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSetoranIds.has(s.id)) ||
+                  (globalState.kasList || []).some((k) => k?.id && !delKas.has(k.id) && !serverKasIds.has(k.id)) ||
+                  (globalState.memberTransactions || []).some((t) => t?.id && !delTx.has(t.id) && !serverTxIds.has(t.id)) ||
+                  (globalState.sedekahList || []).some((s) => s?.id && !delSetoran.has(s.id) && !serverSedekahIds.has(s.id)) ||
+                  (globalState.chatMessages || []).some(
+                    (c) =>
+                      c?.id &&
+                      !isChatMessageClearedClient(c, delChat, effChatClearedAt, effChatClearedByMember) &&
+                      !serverChatIds.has(c.id)
+                  ) ||
+                  (globalState.suratList || []).some(
+                    (sr) => sr?.id && !isSuratDeletedClient(sr, delSurat, effSuratResetAt) && !serverSuratIds.has(sr.id)
+                  ) ||
+                  (globalState.admins || []).some((a) => a?.id && !delAdmin.has(a.id) && !serverAdminIds.has(a.id)));
 
               hasHydratedRemoteState = true;
               seedFirestoreSyncedHashesFromServer(data, true);
@@ -3751,8 +3804,8 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
               scheduleLocalStoragePersist();
               notifyListeners();
 
-              // Non-blocking restore of any missing non-deleted local members to server & Firestore
-              if (missingLocalMembers.length > 0) {
+              // Non-blocking restore ONLY when offline local mutations exist
+              if (hasPendingOfflineSync() && missingLocalMembers.length > 0) {
                 fetch('/api/members/sync-restore', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -3769,14 +3822,20 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
                   .catch(() => {});
               }
 
-              // Safely push any offline-created non-deleted local records from Android/iOS/Web/PC to server & Firestore
+              // Safely push offline-created non-deleted local records to server & Firestore
               if (hasUnsyncedLocalSlices) {
                 fetch('/api/state', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(globalState),
-                }).catch(() => {});
-                scheduleShardedFirestoreSync(globalState, 300);
+                })
+                  .then((r) => {
+                    if (r.ok) setPendingOfflineSync(false);
+                  })
+                  .catch(() => {});
+                scheduleShardedFirestoreSync(globalState, 100);
+              } else {
+                setPendingOfflineSync(false);
               }
 
               return globalState;
@@ -3954,9 +4013,14 @@ export async function fetchStateFromServer(forceFull = false): Promise<AppState>
       }
 
       if (Object.keys(patch).length > 0) {
+        const wasAlreadyHydratedFs = hasHydratedRemoteState;
         hasHydratedRemoteState = true;
         seedFirestoreSyncedHashesFromServer(patch, true);
-        globalState = mergeStates(globalState, { ...globalState, ...patch });
+        if (!wasAlreadyHydratedFs && !hasPendingOfflineSync() && Array.isArray(patch.members) && patch.members.length > 0) {
+          globalState = reconcileBalancesWithDeposits({ ...globalState, ...patch } as AppState);
+        } else {
+          globalState = mergeStates(globalState, { ...globalState, ...patch });
+        }
         scheduleLocalStoragePersist();
         notifyListeners();
       }
@@ -4036,13 +4100,16 @@ export function useKoperasiState() {
       window.addEventListener('hws:firestore_stream_recovered', handleDeviceResume);
     }
 
-    // Fast conditional digest check every 3.5s when active (~100 bytes if unchanged) + 30s Firestore keepalive
+    // Adaptive fast digest check: 2s when WebSocket disconnected (SSE/HTTP fallback), 10s safety net when WS open
     const pollInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (getIsInternetConnected()) {
-        fetchStateFromServer();
+        const wsIsOpen = typeof WebSocket !== 'undefined' && wsClient && wsClient.readyState === WebSocket.OPEN;
+        if (!wsIsOpen || Date.now() % 10000 < 2200) {
+          fetchStateFromServer();
+        }
       }
-    }, 3500);
+    }, 2000);
     const firestoreKeepAliveInterval = setInterval(() => {
       if (getIsInternetConnected()) {
         import('./firebase-init').then(({ ensureFirestoreOnline }) => ensureFirestoreOnline()).catch(() => {});
@@ -4063,6 +4130,9 @@ export function useKoperasiState() {
         if (!data || typeof data !== 'object') return;
         const evType = String(data.type || '');
         if (evType === 'PONG' || evType === 'CONNECTED') {
+          if (data.payload?.buildId && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('hws:server_build_info', { detail: data.payload }));
+          }
           const remoteDigest = data.payload?.digest;
           if (remoteDigest && remoteDigest !== lastServerStateDigest) {
             fetchStateFromServer();

@@ -1,6 +1,6 @@
 import struct, os
 
-def build_pe(url_str="https://ais-dev-ceuwz66sqfjoknexm5gbdu-284535189588.asia-southeast1.run.app"):
+def build_pe(url_str="https://ais-pre-ceuwz66sqfjoknexm5gbdu-284535189588.asia-southeast1.run.app"):
     url_bytes = url_str.encode('ascii') + b'\x00'
     open_bytes = b'open\x00'
     

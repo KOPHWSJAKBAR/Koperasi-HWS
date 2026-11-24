@@ -1,5 +1,5 @@
 // Service Worker for Koperasi HWS PWA (Android, iOS, Web, PC, AI Studio)
-const CACHE_NAME = 'koperasi-hws-v2.9.0';
+const CACHE_NAME = 'koperasi-hws-v2.10.0';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
@@ -23,9 +23,20 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
       );
-    })
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
+});
+
+self.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data) return;
+  if (data === 'SKIP_WAITING' || data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  } else if (data === 'CLEAR_CACHES' || data.type === 'CLEAR_CACHES') {
+    event.waitUntil(
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+    );
+  }
 });
 
 // Network-First for app shell & static assets so updates sync seamlessly across Android, iOS, Web, PC, and AI Studio

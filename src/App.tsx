@@ -55,9 +55,71 @@ export default function App() {
   const [backToastMessage, setBackToastMessage] = useState<string | null>(null);
   const [logoutNotice, setLogoutNotice] = useState<string | null>(null);
 
-  // Pasang penjaga kesalahan stream Firestore di level App & sinkronisasi sesi antar-tab
+  // Pasang penjaga kesalahan stream Firestore, sinkronisasi SW & versi build aplikasi lintas perangkat
   useEffect(() => {
     installFirestoreSystemErrorGuard();
+
+    const BUILD_SESSION_KEY = 'koperasi_hws_active_build_id';
+    const RELOAD_GUARD_KEY = 'koperasi_hws_build_reloaded_for';
+
+    const syncServiceWorker = async () => {
+      try {
+        if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => null);
+          reg?.update().catch(() => {});
+        }
+      } catch {}
+    };
+
+    const handleServerBuildId = async (incomingBuildId?: string) => {
+      if (!incomingBuildId) return;
+      try {
+        const known = sessionStorage.getItem(BUILD_SESSION_KEY);
+        if (!known) {
+          sessionStorage.setItem(BUILD_SESSION_KEY, incomingBuildId);
+          return;
+        }
+        if (known !== incomingBuildId && sessionStorage.getItem(RELOAD_GUARD_KEY) !== incomingBuildId) {
+          sessionStorage.setItem(RELOAD_GUARD_KEY, incomingBuildId);
+          sessionStorage.setItem(BUILD_SESSION_KEY, incomingBuildId);
+          if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations().catch(() => []);
+            regs.forEach((r) => {
+              r.waiting?.postMessage({ type: 'SKIP_WAITING' });
+              r.active?.postMessage({ type: 'CLEAR_CACHES' });
+              r.update().catch(() => {});
+            });
+          }
+          window.location.reload();
+        }
+      } catch {}
+    };
+
+    const checkAppBuildVersion = async () => {
+      if (!getIsInternetConnected()) return;
+      try {
+        const res = await fetch(`/api/version?_t=${Date.now()}`, { cache: 'no-store' });
+        if (res.ok) {
+          const info = await res.json().catch(() => null);
+          if (info?.buildId) {
+            await handleServerBuildId(String(info.buildId));
+          }
+        }
+      } catch {}
+    };
+
+    syncServiceWorker();
+    checkAppBuildVersion();
+
+    const onVisibilityOrOnline = () => {
+      if (document.visibilityState === 'visible') {
+        checkAppBuildVersion();
+      }
+    };
+    const onServerBuildInfo = (ev: any) => {
+      const bId = ev?.detail?.buildId;
+      if (bId) handleServerBuildId(String(bId));
+    };
 
     const handleStorageSync = (ev: StorageEvent) => {
       if (ev.key === SESSION_KEY) {
@@ -69,7 +131,15 @@ export default function App() {
       }
     };
     window.addEventListener('storage', handleStorageSync);
-    return () => window.removeEventListener('storage', handleStorageSync);
+    window.addEventListener('visibilitychange', onVisibilityOrOnline);
+    window.addEventListener('online', checkAppBuildVersion);
+    window.addEventListener('hws:server_build_info', onServerBuildInfo);
+    return () => {
+      window.removeEventListener('storage', handleStorageSync);
+      window.removeEventListener('visibilitychange', onVisibilityOrOnline);
+      window.removeEventListener('online', checkAppBuildVersion);
+      window.removeEventListener('hws:server_build_info', onServerBuildInfo);
+    };
   }, []);
 
   // Sinkronisasi realtime sharded telah terhubung langsung dan otomatis melalui useKoperasiState di lib/storage.ts
@@ -375,16 +445,15 @@ export default function App() {
     };
   }, []);
 
-  // Enforce Maintenance Lock: Blokir seluruh anggota & admin non-super saat sistem dikunci
+  // Enforce Maintenance Lock: Hanya mengunci akun anggota saat mode maintenance aktif (Admin tetap aktif & tidak terkunci)
   const isMaintenanceActive = !!state.maintenanceLock?.isLocked;
-  const isSuperAdminUser = currentAdmin?.role === 'super_admin';
 
-  if (isMaintenanceActive && (currentMember || (currentAdmin && !isSuperAdminUser))) {
+  if (isMaintenanceActive && currentMember) {
     return (
       <div className="min-h-screen bg-[#0a0f1d] text-white flex items-center justify-center p-4">
         <div className="w-full max-w-lg bg-[#0f172a] border-2 border-rose-500/80 rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5 animate-in fade-in">
           <div className="w-16 h-16 rounded-3xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center mx-auto shadow-lg shadow-rose-950/50">
-            <svg className="w-8 h-8 text-rose-400 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-8 h-8 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
           </div>
@@ -397,14 +466,14 @@ export default function App() {
               Sistem Dalam Pemeliharaan
             </h2>
             <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Akses akun Anda dibekukan sementara oleh Super Admin demi pemeliharaan dan rekonsiliasi data koperasi.
+              Akses aplikasi anggota dibekukan sementara oleh pengurus koperasi untuk pemeliharaan dan rekonsiliasi data. Admin tetap aktif mengelola sistem.
             </p>
           </div>
 
           {state.maintenanceLock?.note && (
             <div className="p-4 bg-slate-900/90 rounded-2xl border border-rose-500/30 text-left space-y-1 text-xs">
               <div className="font-extrabold text-amber-400 text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-                <span>⚠️ Catatan Resmi Super Admin:</span>
+                <span>⚠️ Keterangan Resmi Pengurus:</span>
               </div>
               <p className="text-slate-200 leading-relaxed italic">
                 "{state.maintenanceLock.note}"
