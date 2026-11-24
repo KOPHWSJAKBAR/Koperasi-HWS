@@ -45,6 +45,9 @@ import {
   Eye,
   EyeOff,
   Fingerprint,
+  ChevronRight,
+  LogOut,
+  Home,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -619,11 +622,24 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     return points;
   }, [state.memberTransactions, currentMember]);
 
+  const activeMemberMenuTitle =
+    activeMenu === 'setoran'
+      ? 'Verifikasi Setoran'
+      : activeMenu === 'mutasi'
+      ? 'Mutasi Rekening'
+      : activeMenu === 'zakat'
+      ? 'Zakat & Qurban'
+      : activeMenu === 'surat'
+      ? 'Surat Menyurat'
+      : activeMenu === 'chat'
+      ? 'Chat Online'
+      : 'Dashboard Utama';
+
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* ================= HEADER (Matching Anggota PC Dashboard.png & Mobile) ================= */}
       <header className="sticky top-0 z-40 bg-[#0d1424]/90 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-2.5 sm:py-3">
-        <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
+        <div className={`${activeMenu === 'dashboard' ? 'max-w-md md:max-w-4xl lg:max-w-6xl xl:max-w-7xl' : 'max-w-md md:max-w-4xl lg:max-w-[1440px]'} mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4`}>
           {/* Top Row: Logo & Member Info */}
           <div className="flex items-center justify-between sm:justify-start gap-3">
             <div className="flex items-center gap-2.5 sm:gap-3">
@@ -729,10 +745,10 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
         </div>
       </header>
 
-      {/* ================= BACK BUTTON ON SUBMENUS ================= */}
+      {/* ================= BACK BUTTON ON SUBMENUS (MOBILE & TABLET ONLY) ================= */}
       {activeMenu !== 'dashboard' && (
-        <div className="bg-[#111c33] border-b border-slate-800 px-3 sm:px-4 py-2.5">
-          <div className="max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex items-center justify-between">
+        <div className="lg:hidden bg-[#111c33] border-b border-slate-800 px-3 sm:px-4 py-2.5">
+          <div className="max-w-md md:max-w-4xl mx-auto flex items-center justify-between">
             <button
               type="button"
               onClick={handleSubmenuBack}
@@ -742,18 +758,250 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
               <span>Kembali ke Dashboard Utama</span>
             </button>
             <span className="text-xs text-slate-400 font-semibold uppercase">
-              {activeMenu === 'setoran' && 'Verifikasi Setoran'}
-              {activeMenu === 'mutasi' && 'Mutasi Rekening'}
-              {activeMenu === 'zakat' && 'Zakat & Qurban'}
-              {activeMenu === 'surat' && 'Surat Menyurat'}
-              {activeMenu === 'chat' && 'Chat Online'}
+              {activeMemberMenuTitle}
             </span>
           </div>
         </div>
       )}
 
-      {/* ================= MAIN BODY CONTAINER (Anti Melebar Kesamping di Mobile) ================= */}
-      <main className={`w-full max-w-md md:max-w-4xl lg:max-w-5xl mx-auto flex-1 overflow-x-hidden ${activeMenu === 'chat' ? 'p-2 sm:p-4 flex flex-col min-h-0' : 'p-3 sm:p-6 space-y-5 sm:space-y-6'}`}>
+      {/* ================= DESKTOP SUBMENU WORKSPACE (SIDEBAR + BREADCRUMB + MAIN BODY) ================= */}
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+        {activeMenu !== 'dashboard' && (
+          <aside
+            aria-label="Sidebar Navigasi Anggota PC"
+            className="hidden lg:flex lg:w-64 xl:w-72 shrink-0 flex-col bg-[#0d1424] border-r border-slate-800/80"
+          >
+            <div className="p-3.5 border-b border-slate-800/80 space-y-2">
+              <button
+                type="button"
+                onClick={handleSubmenuBack}
+                className="w-full py-2 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/40 text-amber-400 text-xs font-extrabold flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4 shrink-0" />
+                <span className="truncate">Kembali ke Dashboard</span>
+              </button>
+              <div className="px-1 pt-1 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                Menu Layanan Anggota
+              </div>
+            </div>
+
+            <nav className="flex-1 overflow-y-auto p-2.5 space-y-1 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setActiveMenu('dashboard')}
+                className="w-full px-3 py-2 rounded-xl border border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer"
+              >
+                <div className="w-7 h-7 rounded-lg bg-slate-900 border border-slate-800 text-amber-400 flex items-center justify-center shrink-0">
+                  <Home className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate">Dashboard Utama</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveMenu('setoran')}
+                className={`w-full px-3 py-2 rounded-xl border flex items-center gap-2.5 transition-colors cursor-pointer ${
+                  activeMenu === 'setoran'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                    : 'border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+                }`}
+              >
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    activeMenu === 'setoran'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-900 border border-slate-800 text-sky-400'
+                  }`}
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate">Verifikasi Setoran</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowKtaModal(true)}
+                className="w-full px-3 py-2 rounded-xl border border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer"
+              >
+                <div className="w-7 h-7 rounded-lg bg-slate-900 border border-slate-800 text-emerald-400 flex items-center justify-center shrink-0">
+                  <User className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate">KTA Digital Anggota</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveMenu('mutasi')}
+                className={`w-full px-3 py-2 rounded-xl border flex items-center gap-2.5 transition-colors cursor-pointer ${
+                  activeMenu === 'mutasi'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                    : 'border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+                }`}
+              >
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    activeMenu === 'mutasi'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-900 border border-slate-800 text-amber-400'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate">Mutasi Rekening</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveMenu('zakat')}
+                className={`w-full px-3 py-2 rounded-xl border flex items-center gap-2.5 transition-colors cursor-pointer ${
+                  activeMenu === 'zakat'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                    : 'border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+                }`}
+              >
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    activeMenu === 'zakat'
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-900 border border-slate-800 text-emerald-400'
+                  }`}
+                >
+                  <HeartHandshake className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate">Zakat & Qurban</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveMenu('surat')}
+                className={`w-full px-3 py-2 rounded-xl border flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                  activeMenu === 'surat'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                    : 'border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                      activeMenu === 'surat'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-slate-900 border border-slate-800 text-sky-400'
+                    }`}
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="truncate">Surat Menyurat</span>
+                </div>
+                {unreadSuratCount > 0 && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center font-mono tabular-nums shrink-0">
+                    {unreadSuratCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveMenu('chat')}
+                className={`w-full px-3 py-2 rounded-xl border flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                  activeMenu === 'chat'
+                    ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                    : 'border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                      activeMenu === 'chat'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-slate-900 border border-slate-800 text-amber-400'
+                    }`}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="truncate">Chat Online</span>
+                </div>
+                {unreadChatCount > 0 && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black flex items-center justify-center font-mono tabular-nums shrink-0">
+                    {unreadChatCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowBerbagiModal(true)}
+                className="w-full px-3 py-2 rounded-xl border border-transparent text-rose-300 hover:bg-rose-950/30 hover:border-rose-500/40 flex items-center gap-2.5 transition-colors cursor-pointer"
+              >
+                <div className="w-7 h-7 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                  <Heart className="w-3.5 h-3.5" />
+                </div>
+                <span className="truncate">Menu Berbagi</span>
+              </button>
+            </nav>
+
+            <div className="p-3 border-t border-slate-800/80 space-y-2 bg-[#0b1120]/60">
+              <button
+                type="button"
+                onClick={() => setShowSettings(true)}
+                className="w-full py-2 px-3 rounded-xl bg-[#111c33] hover:bg-slate-800 border border-amber-500/35 text-amber-300 text-xs font-extrabold flex items-center justify-between transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <Settings className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Pengaturan Web</span>
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-amber-400/70" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onLogout()}
+                className="w-full py-2 px-3 rounded-xl bg-rose-950/35 hover:bg-rose-900/50 border border-rose-500/35 text-rose-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Keluar Akun</span>
+              </button>
+            </div>
+          </aside>
+        )}
+
+        <div className="flex-1 min-w-0 flex flex-col">
+          {activeMenu !== 'dashboard' && (
+            <div className="hidden lg:flex items-center justify-between px-6 py-3 bg-[#0f172a]/75 border-b border-slate-800/80 shrink-0">
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setActiveMenu('dashboard')}
+                  className="text-slate-400 hover:text-amber-400 font-semibold transition-colors cursor-pointer"
+                >
+                  Dashboard Anggota
+                </button>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
+                <span className="text-white font-extrabold tracking-wide">
+                  {activeMemberMenuTitle}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSubmenuBack}
+                className="px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <ChevronLeft className="w-3.5 h-3.5 text-amber-400" />
+                <span>Dashboard Utama</span>
+              </button>
+            </div>
+          )}
+
+          {/* ================= MAIN BODY CONTAINER (Anti Melebar Kesamping di Mobile, Spacious di PC) ================= */}
+          <main
+            className={`w-full ${
+              activeMenu === 'dashboard'
+                ? 'max-w-md md:max-w-4xl lg:max-w-6xl xl:max-w-7xl'
+                : 'max-w-md md:max-w-4xl lg:max-w-[1440px]'
+            } mx-auto flex-1 overflow-x-hidden ${
+              activeMenu === 'chat'
+                ? 'p-2 sm:p-4 lg:p-6 flex flex-col min-h-0'
+                : 'p-3 sm:p-6 lg:p-7 space-y-5 sm:space-y-6'
+            }`}
+          >
         {activeMenu === 'dashboard' ? (
           <>
             {isMemberBiodataIncomplete(currentMember) && (
@@ -1338,7 +1586,9 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             currentMember={currentMember}
           />
         ) : null}
-      </main>
+          </main>
+        </div>
+      </div>
 
       {/* ================= MODAL: TRANSFER SESAMA ANGGOTA ================= */}
       {showTransferModal && (

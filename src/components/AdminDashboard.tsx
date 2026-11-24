@@ -64,6 +64,7 @@ import {
   Trash2,
   CheckCheck,
   Wallet,
+  ChevronRight,
 } from 'lucide-react';
 
 interface AdminToast {
@@ -578,11 +579,190 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }).catch(() => {});
   }, [activeTab, currentAdmin.role, currentAdmin.nama]);
 
+  const activeTabTitle =
+    activeTab === 'verifikasi'
+      ? 'Verifikasi Setoran'
+      : activeTab === 'anggota'
+      ? 'Data Anggota'
+      : activeTab === 'kas'
+      ? 'Buku Kas Neraca'
+      : activeTab === 'penyesuaian_saldo'
+      ? 'Penyesuaian Saldo'
+      : activeTab === 'zakat'
+      ? 'Zakat & Qurban'
+      : activeTab === 'surat'
+      ? 'Surat Menyurat'
+      : activeTab === 'chat'
+      ? 'Chat Online'
+      : activeTab === 'tabungan_umum'
+      ? 'Tabungan Umum'
+      : 'Dashboard Utama';
+
+  const logoMenuItems = [
+    !isLaporan && {
+      id: 'verifikasi',
+      label: 'Verifikasi Setoran',
+      icon: CheckCircle2,
+      iconClass: 'text-sky-400',
+      badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
+      active: activeTab === 'verifikasi',
+      badge: pendingDepositsCount > 0 ? pendingDepositsCount : null,
+      badgeColor: 'bg-amber-500 text-slate-950',
+      onClick: () => setActiveTab('verifikasi'),
+    },
+    {
+      id: 'anggota',
+      label: 'Data Anggota',
+      icon: Users,
+      iconClass: 'text-emerald-400',
+      badgeBgClass: 'bg-emerald-500/15 border-emerald-500/25',
+      active: activeTab === 'anggota',
+      badge:
+        pendingLockPokokCount + pendingMutasiCount > 0 && (isSuperAdmin || isApproval)
+          ? pendingLockPokokCount + pendingMutasiCount
+          : state.members.length,
+      badgeColor:
+        pendingLockPokokCount + pendingMutasiCount > 0 && (isSuperAdmin || isApproval)
+          ? 'bg-sky-500 text-slate-950'
+          : 'bg-slate-800 text-slate-300 border border-slate-700',
+      onClick: () => setActiveTab('anggota'),
+    },
+    {
+      id: 'kas',
+      label: 'Buku Kas Neraca',
+      icon: BookOpen,
+      iconClass: 'text-amber-400',
+      badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+      active: activeTab === 'kas',
+      badge: pendingKasCount > 0 && (isSuperAdmin || isApproval) ? pendingKasCount : null,
+      badgeColor: 'bg-amber-500 text-slate-950',
+      onClick: () => setActiveTab('kas'),
+    },
+    !isLaporan && {
+      id: 'penyesuaian_saldo',
+      label: 'Penyesuaian Saldo',
+      icon: SlidersHorizontal,
+      iconClass: 'text-amber-300',
+      badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+      active: activeTab === 'penyesuaian_saldo',
+      badge: null,
+      badgeColor: '',
+      onClick: () => setActiveTab('penyesuaian_saldo'),
+    },
+    {
+      id: 'zakat',
+      label: 'Zakat & Qurban',
+      icon: HeartHandshake,
+      iconClass: 'text-emerald-400',
+      badgeBgClass: 'bg-emerald-500/15 border-emerald-500/25',
+      active: activeTab === 'zakat',
+      badge: null,
+      badgeColor: '',
+      onClick: () => setActiveTab('zakat'),
+    },
+    {
+      id: 'penyaluran',
+      label: 'Penyaluran',
+      icon: Send,
+      iconClass: 'text-amber-400',
+      badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+      active: false,
+      badge: pendingSalurCount > 0 ? pendingSalurCount : null,
+      badgeColor: 'bg-rose-500 text-white',
+      onClick: () => {
+        setBerbagiInitialTab('salurkan');
+        setShowBerbagiModal(true);
+      },
+    },
+    {
+      id: 'sedekah',
+      label: 'Sedekah',
+      icon: Heart,
+      iconClass: 'text-rose-400',
+      badgeBgClass: 'bg-rose-500/15 border-rose-500/25',
+      active: false,
+      badge: null,
+      badgeColor: '',
+      onClick: () => {
+        setBerbagiInitialTab('laporan');
+        setShowBerbagiModal(true);
+      },
+    },
+    !isLaporan && {
+      id: 'surat',
+      label: 'Surat Menyurat',
+      icon: Mail,
+      iconClass: 'text-sky-400',
+      badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
+      active: activeTab === 'surat',
+      badge: unreadSuratAdminCount > 0 ? unreadSuratAdminCount : null,
+      badgeColor: 'bg-rose-500 text-white',
+      onClick: () => setActiveTab('surat'),
+    },
+    !isLaporan && {
+      id: 'chat',
+      label: 'Chat Online',
+      icon: MessageSquare,
+      iconClass: 'text-amber-400',
+      badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
+      active: activeTab === 'chat',
+      badge: unreadChatCount > 0 ? unreadChatCount : null,
+      badgeColor: 'bg-sky-500 text-slate-950',
+      onClick: () => setActiveTab('chat'),
+    },
+    isSuperAdmin && {
+      id: 'log_audit',
+      label: 'Log Audit',
+      icon: Activity,
+      iconClass: 'text-purple-400',
+      badgeBgClass: 'bg-purple-500/15 border-purple-500/25',
+      active: false,
+      badge: null,
+      badgeColor: '',
+      onClick: () => {
+        setSettingSubModal('log_audit');
+        setShowSettings(true);
+      },
+    },
+    (isSuperAdmin || isApproval || isWriter) && {
+      id: 'hapus_mutasi',
+      label: 'Hapus Mutasi',
+      icon: Trash2,
+      iconClass: 'text-rose-400',
+      badgeBgClass: 'bg-rose-500/15 border-rose-500/25',
+      active: false,
+      badge: null,
+      badgeColor: '',
+      onClick: () => setShowHapusTxModal(true),
+    },
+    {
+      id: 'tabungan_umum',
+      label: 'Tabungan Umum',
+      icon: Wallet,
+      iconClass: 'text-sky-400',
+      badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
+      active: activeTab === 'tabungan_umum',
+      badge: tabunganUmumMembersCount > 0 ? tabunganUmumMembersCount : null,
+      badgeColor: 'bg-sky-500/20 text-sky-300 border border-sky-500/40',
+      onClick: () => setActiveTab('tabungan_umum'),
+    },
+  ].filter(Boolean) as Array<{
+    id: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    iconClass: string;
+    badgeBgClass: string;
+    active: boolean;
+    badge: number | null;
+    badgeColor: string;
+    onClick: () => void;
+  }>;
+
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* ================= HEADER ================= */}
       <header className="sticky top-0 z-40 bg-[#0d1424]/95 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-2 sm:py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-3">
+        <div className={`${activeTab === 'dashboard' ? 'max-w-7xl' : 'max-w-[1440px]'} mx-auto flex items-center justify-between gap-2 sm:gap-3`}>
           {/* Left Brand & Admin Badge */}
           <button
             type="button"
@@ -876,388 +1056,339 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </header>
 
-      {(() => {
-        const logoMenuItems = [
-          !isLaporan && {
-            id: 'verifikasi',
-            label: 'Verifikasi Setoran',
-            icon: CheckCircle2,
-            iconClass: 'text-sky-400',
-            badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
-            active: activeTab === 'verifikasi',
-            badge: pendingDepositsCount > 0 ? pendingDepositsCount : null,
-            badgeColor: 'bg-amber-500 text-slate-950',
-            onClick: () => setActiveTab('verifikasi'),
-          },
-          {
-            id: 'anggota',
-            label: 'Data Anggota',
-            icon: Users,
-            iconClass: 'text-emerald-400',
-            badgeBgClass: 'bg-emerald-500/15 border-emerald-500/25',
-            active: activeTab === 'anggota',
-            badge:
-              pendingLockPokokCount + pendingMutasiCount > 0 && (isSuperAdmin || isApproval)
-                ? pendingLockPokokCount + pendingMutasiCount
-                : state.members.length,
-            badgeColor:
-              pendingLockPokokCount + pendingMutasiCount > 0 && (isSuperAdmin || isApproval)
-                ? 'bg-sky-500 text-slate-950'
-                : 'bg-slate-800 text-slate-300 border border-slate-700',
-            onClick: () => setActiveTab('anggota'),
-          },
-          {
-            id: 'kas',
-            label: 'Buku Kas Neraca',
-            icon: BookOpen,
-            iconClass: 'text-amber-400',
-            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
-            active: activeTab === 'kas',
-            badge: pendingKasCount > 0 && (isSuperAdmin || isApproval) ? pendingKasCount : null,
-            badgeColor: 'bg-amber-500 text-slate-950',
-            onClick: () => setActiveTab('kas'),
-          },
-          !isLaporan && {
-            id: 'penyesuaian_saldo',
-            label: 'Penyesuaian Saldo',
-            icon: SlidersHorizontal,
-            iconClass: 'text-amber-300',
-            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
-            active: activeTab === 'penyesuaian_saldo',
-            badge: null,
-            badgeColor: '',
-            onClick: () => setActiveTab('penyesuaian_saldo'),
-          },
-          {
-            id: 'zakat',
-            label: 'Zakat & Qurban',
-            icon: HeartHandshake,
-            iconClass: 'text-emerald-400',
-            badgeBgClass: 'bg-emerald-500/15 border-emerald-500/25',
-            active: activeTab === 'zakat',
-            badge: null,
-            badgeColor: '',
-            onClick: () => setActiveTab('zakat'),
-          },
-          {
-            id: 'penyaluran',
-            label: 'Penyaluran',
-            icon: Send,
-            iconClass: 'text-amber-400',
-            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
-            active: false,
-            badge: pendingSalurCount > 0 ? pendingSalurCount : null,
-            badgeColor: 'bg-rose-500 text-white',
-            onClick: () => {
-              setBerbagiInitialTab('salurkan');
-              setShowBerbagiModal(true);
-            },
-          },
-          {
-            id: 'sedekah',
-            label: 'Sedekah',
-            icon: Heart,
-            iconClass: 'text-rose-400',
-            badgeBgClass: 'bg-rose-500/15 border-rose-500/25',
-            active: false,
-            badge: null,
-            badgeColor: '',
-            onClick: () => {
-              setBerbagiInitialTab('laporan');
-              setShowBerbagiModal(true);
-            },
-          },
-          !isLaporan && {
-            id: 'surat',
-            label: 'Surat Menyurat',
-            icon: Mail,
-            iconClass: 'text-sky-400',
-            badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
-            active: activeTab === 'surat',
-            badge: unreadSuratAdminCount > 0 ? unreadSuratAdminCount : null,
-            badgeColor: 'bg-rose-500 text-white',
-            onClick: () => setActiveTab('surat'),
-          },
-          !isLaporan && {
-            id: 'chat',
-            label: 'Chat Online',
-            icon: MessageSquare,
-            iconClass: 'text-amber-400',
-            badgeBgClass: 'bg-amber-500/15 border-amber-500/25',
-            active: activeTab === 'chat',
-            badge: unreadChatCount > 0 ? unreadChatCount : null,
-            badgeColor: 'bg-sky-500 text-slate-950',
-            onClick: () => setActiveTab('chat'),
-          },
-          isSuperAdmin && {
-            id: 'log_audit',
-            label: 'Log Audit',
-            icon: Activity,
-            iconClass: 'text-purple-400',
-            badgeBgClass: 'bg-purple-500/15 border-purple-500/25',
-            active: false,
-            badge: null,
-            badgeColor: '',
-            onClick: () => {
-              setSettingSubModal('log_audit');
-              setShowSettings(true);
-            },
-          },
-          (isSuperAdmin || isApproval || isWriter) && {
-            id: 'hapus_mutasi',
-            label: 'Hapus Mutasi',
-            icon: Trash2,
-            iconClass: 'text-rose-400',
-            badgeBgClass: 'bg-rose-500/15 border-rose-500/25',
-            active: false,
-            badge: null,
-            badgeColor: '',
-            onClick: () => setShowHapusTxModal(true),
-          },
-          {
-            id: 'tabungan_umum',
-            label: 'Tabungan Umum',
-            icon: Wallet,
-            iconClass: 'text-sky-400',
-            badgeBgClass: 'bg-sky-500/15 border-sky-500/25',
-            active: activeTab === 'tabungan_umum',
-            badge: tabunganUmumMembersCount > 0 ? tabunganUmumMembersCount : null,
-            badgeColor: 'bg-sky-500/20 text-sky-300 border border-sky-500/40',
-            onClick: () => setActiveTab('tabungan_umum'),
-          },
-        ].filter(Boolean) as Array<{
-          id: string;
-          label: string;
-          icon: React.ComponentType<{ className?: string }>;
-          iconClass: string;
-          badgeBgClass: string;
-          active: boolean;
-          badge: number | null;
-          badgeColor: string;
-          onClick: () => void;
-        }>;
-
-        return (
-          <>
-            {/* ================= DESKTOP: MENU LOGO + TULISAN KECIL DI BAWAH MENU SETTING ================= */}
-            <nav
-              aria-label="Menu Utama Admin Desktop"
-              className="hidden lg:block bg-[#0d1424]/95 border-b border-slate-800/80 px-6 py-2.5"
+      {/* ================= DESKTOP OVERVIEW MENU BAR (SAAT DI DASHBOARD UTAMA) ================= */}
+      {activeTab === 'dashboard' && (
+        <nav
+          aria-label="Menu Utama Admin Desktop"
+          className="hidden lg:block bg-[#0d1424]/95 border-b border-slate-800/80 px-6 py-2.5"
+        >
+          <div className="max-w-7xl mx-auto flex items-stretch [&>button]:flex-1 [&>button]:min-w-0 gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveTab('dashboard')}
+              title="Dashboard"
+              className="group relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl border transition-all cursor-pointer min-h-[60px] bg-amber-500/15 border-amber-500/60 text-amber-300"
             >
-              <div className="max-w-7xl mx-auto flex items-stretch [&>button]:flex-1 [&>button]:min-w-0 gap-1.5">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-amber-500 text-slate-950">
+                <Layers className="w-4 h-4" />
+              </div>
+              <span className="text-[10px] font-bold leading-tight text-center line-clamp-2">
+                Dashboard
+              </span>
+            </button>
+
+            {logoMenuItems.map((item) => {
+              const IconComp = item.icon;
+              const isTabunganActive = item.id === 'tabungan_umum' && item.active;
+              return (
                 <button
+                  key={item.id}
                   type="button"
-                  onClick={() => setActiveTab('dashboard')}
-                  title="Dashboard"
+                  onClick={item.onClick}
+                  title={item.label}
                   className={`group relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl border transition-all cursor-pointer min-h-[60px] ${
-                    activeTab === 'dashboard'
+                    isTabunganActive
+                      ? 'bg-sky-500/15 border-sky-500/60 text-sky-300'
+                      : item.active
                       ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
                       : 'bg-slate-900/60 border-slate-800/80 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700 hover:text-white'
                   }`}
                 >
+                  {item.badge !== null && (
+                    <span
+                      className={`absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
                   <div
                     className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                      activeTab === 'dashboard' ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-amber-400'
+                      isTabunganActive
+                        ? 'bg-sky-500 text-slate-950'
+                        : item.active
+                        ? 'bg-amber-500 text-slate-950'
+                        : `bg-slate-800 ${item.iconClass}`
                     }`}
                   >
-                    <Layers className="w-4 h-4" />
+                    <IconComp className="w-4 h-4" />
                   </div>
                   <span className="text-[10px] font-bold leading-tight text-center line-clamp-2">
-                    Dashboard
+                    {item.label}
                   </span>
                 </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
 
-                {logoMenuItems.map((item) => {
-                  const IconComp = item.icon;
-                  const isTabunganActive = item.id === 'tabungan_umum' && item.active;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={item.onClick}
-                      title={item.label}
-                      className={`group relative flex flex-col items-center justify-center gap-1 py-2 px-1 rounded-xl border transition-all cursor-pointer min-h-[60px] ${
+      {/* ================= MOBILE DASHBOARD: 12 LOGO + LABEL MENU LAUNCHER DI BAWAH MENU SETTING ================= */}
+      {activeTab === 'dashboard' && (
+        <section
+          aria-label="Menu Dashboard Mobile Admin"
+          className="lg:hidden bg-[#0b1120] px-3 pt-3 pb-1"
+        >
+          <div className="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-3 shadow-lg">
+            <div className="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-slate-800/80">
+              <div className="flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-200">
+                  Menu Layanan Admin
+                </span>
+              </div>
+              <span className="text-[10px] font-mono tabular-nums text-emerald-400 font-bold">
+                {wibTime} WIB
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              {logoMenuItems.map((item) => {
+                const IconComp = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.onClick}
+                    title={item.label}
+                    className="relative flex flex-col items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-2xl border bg-[#111c33]/85 border-slate-800/90 hover:border-amber-500/40 active:scale-[0.97] transition-all cursor-pointer min-h-[84px]"
+                  >
+                    {item.badge !== null && (
+                      <span
+                        className={`absolute top-1.5 right-1.5 min-w-[17px] h-[17px] px-1 rounded-full text-[9px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                    <div
+                      className={`w-10 h-10 rounded-xl border flex items-center justify-center ${item.badgeBgClass} ${item.iconClass}`}
+                    >
+                      <IconComp className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10.5px] font-bold leading-tight text-center text-slate-200 line-clamp-2">
+                      {item.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ================= MOBILE SUBMENU BACK BAR + QUICK LOGO STRIP (< LG ONLY) ================= */}
+      {activeTab !== 'dashboard' && (
+        <div className="lg:hidden">
+          <div className="bg-[#111c33] border-b border-slate-800 px-3 sm:px-4 py-2">
+            <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleSubmenuBack}
+                className="inline-flex items-center gap-1.5 min-h-[36px] text-xs sm:text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4 shrink-0" />
+                <span>Kembali ke Dashboard Admin</span>
+              </button>
+              <span className="text-[10px] sm:text-xs text-slate-400 font-semibold uppercase truncate">
+                {activeTabTitle}
+              </span>
+            </div>
+          </div>
+
+          <nav
+            aria-label="Navigasi Cepat Mobile Admin"
+            className="bg-[#0d1424]/95 border-b border-slate-800/80 px-3 py-2"
+          >
+            <div className="flex items-stretch gap-1.5 overflow-x-auto pb-0.5">
+              <button
+                type="button"
+                onClick={() => setActiveTab('dashboard')}
+                className="shrink-0 w-[68px] min-h-[56px] flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-xl border bg-slate-900/70 border-slate-800 text-slate-300 active:scale-95 transition-all cursor-pointer"
+              >
+                <div className="w-7 h-7 rounded-lg bg-slate-800 text-amber-400 flex items-center justify-center">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <span className="text-[9.5px] font-bold leading-tight text-center line-clamp-1">
+                  Dashboard
+                </span>
+              </button>
+              {logoMenuItems.map((item) => {
+                const IconComp = item.icon;
+                const isTabunganActive = item.id === 'tabungan_umum' && item.active;
+                return (
+                  <button
+                    key={`mob-strip-${item.id}`}
+                    type="button"
+                    onClick={item.onClick}
+                    className={`relative shrink-0 w-[72px] min-h-[56px] flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-xl border active:scale-95 transition-all cursor-pointer ${
+                      isTabunganActive
+                        ? 'bg-sky-500/15 border-sky-500/60 text-sky-300'
+                        : item.active
+                        ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
+                        : 'bg-slate-900/70 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    {item.badge !== null && (
+                      <span
+                        className={`absolute top-1 right-1 min-w-[15px] h-[15px] px-1 rounded-full text-[8.5px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                    <div
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center ${
                         isTabunganActive
-                          ? 'bg-sky-500/15 border-sky-500/60 text-sky-300'
+                          ? 'bg-sky-500 text-slate-950'
                           : item.active
-                          ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
-                          : 'bg-slate-900/60 border-slate-800/80 text-slate-300 hover:bg-slate-800/80 hover:border-slate-700 hover:text-white'
+                          ? 'bg-amber-500 text-slate-950'
+                          : `bg-slate-800 ${item.iconClass}`
                       }`}
                     >
-                      {item.badge !== null && (
-                        <span
-                          className={`absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
-                        >
-                          {item.badge}
-                        </span>
-                      )}
+                      <IconComp className="w-4 h-4" />
+                    </div>
+                    <span className="text-[9.5px] font-bold leading-tight text-center line-clamp-2">
+                      {item.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        </div>
+      )}
+
+      {/* ================= DESKTOP SUBMENU WORKSPACE (SIDEBAR + CONTEXTUAL WORKSPACE PANEL) ================= */}
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+        {activeTab !== 'dashboard' && (
+          <aside
+            aria-label="Sidebar Navigasi Menu Admin PC"
+            className="hidden lg:flex lg:w-64 xl:w-72 shrink-0 flex-col bg-[#0d1424] border-r border-slate-800/80"
+          >
+            <div className="p-3.5 border-b border-slate-800/80 space-y-2">
+              <button
+                type="button"
+                onClick={handleSubmenuBack}
+                className="w-full py-2 px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-amber-500/40 text-amber-400 text-xs font-extrabold flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4 shrink-0" />
+                <span className="truncate">Kembali ke Dashboard</span>
+              </button>
+              <div className="px-1 pt-1 flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-slate-400">
+                <span>Menu Layanan Admin</span>
+                <span className="font-mono tabular-nums text-emerald-400">{wibTime}</span>
+              </div>
+            </div>
+
+            <nav className="flex-1 overflow-y-auto p-2.5 space-y-1">
+              {logoMenuItems.map((item) => {
+                const IconComp = item.icon;
+                const isTabunganActive = item.id === 'tabungan_umum' && item.active;
+                return (
+                  <button
+                    key={`pc-side-${item.id}`}
+                    type="button"
+                    onClick={item.onClick}
+                    className={`w-full px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs font-bold transition-colors cursor-pointer ${
+                      isTabunganActive
+                        ? 'bg-sky-500/15 border-sky-500/50 text-sky-300'
+                        : item.active
+                        ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                        : 'bg-transparent border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
                       <div
-                        className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
                           isTabunganActive
                             ? 'bg-sky-500 text-slate-950'
                             : item.active
                             ? 'bg-amber-500 text-slate-950'
-                            : `bg-slate-800 ${item.iconClass}`
+                            : `bg-slate-900 border border-slate-800 ${item.iconClass}`
                         }`}
                       >
-                        <IconComp className="w-4 h-4" />
+                        <IconComp className="w-3.5 h-3.5" />
                       </div>
-                      <span className="text-[10px] font-bold leading-tight text-center line-clamp-2">
-                        {item.label}
+                      <span className="truncate">{item.label}</span>
+                    </div>
+                    {item.badge !== null && (
+                      <span
+                        className={`min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-black flex items-center justify-center font-mono tabular-nums shrink-0 ${item.badgeColor}`}
+                      >
+                        {item.badge}
                       </span>
-                    </button>
-                  );
-                })}
-              </div>
+                    )}
+                  </button>
+                );
+              })}
             </nav>
 
-            {/* ================= MOBILE DASHBOARD: 12 LOGO + LABEL MENU LAUNCHER DI BAWAH MENU SETTING ================= */}
-            {activeTab === 'dashboard' && (
-              <section
-                aria-label="Menu Dashboard Mobile Admin"
-                className="lg:hidden bg-[#0b1120] px-3 pt-3 pb-1"
+            <div className="p-3 border-t border-slate-800/80 space-y-2 bg-[#0b1120]/60">
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingSubModal(null);
+                  setShowSettings(true);
+                }}
+                className="w-full py-2 px-3 rounded-xl bg-[#111c33] hover:bg-slate-800 border border-amber-500/35 text-amber-300 text-xs font-extrabold flex items-center justify-between transition-colors cursor-pointer"
               >
-                <div className="bg-[#0d1424] border border-slate-800/90 rounded-2xl p-3 shadow-lg">
-                  <div className="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-slate-800/80">
-                    <div className="flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-amber-400" />
-                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-200">
-                        Menu Layanan Admin
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono tabular-nums text-emerald-400 font-bold">
-                      {wibTime} WIB
-                    </span>
-                  </div>
+                <span className="flex items-center gap-2">
+                  <Settings className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Menu Setting Web</span>
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-amber-400/70" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onLogout()}
+                className="w-full py-2 px-3 rounded-xl bg-rose-950/35 hover:bg-rose-900/50 border border-rose-500/35 text-rose-300 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Keluar Akun</span>
+              </button>
+            </div>
+          </aside>
+        )}
 
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                    {logoMenuItems.map((item) => {
-                      const IconComp = item.icon;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={item.onClick}
-                          title={item.label}
-                          className="relative flex flex-col items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-2xl border bg-[#111c33]/85 border-slate-800/90 hover:border-amber-500/40 active:scale-[0.97] transition-all cursor-pointer min-h-[84px]"
-                        >
-                          {item.badge !== null && (
-                            <span
-                              className={`absolute top-1.5 right-1.5 min-w-[17px] h-[17px] px-1 rounded-full text-[9px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
-                            >
-                              {item.badge}
-                            </span>
-                          )}
-                          <div
-                            className={`w-10 h-10 rounded-xl border flex items-center justify-center ${item.badgeBgClass} ${item.iconClass}`}
-                          >
-                            <IconComp className="w-5 h-5" />
-                          </div>
-                          <span className="text-[10.5px] font-bold leading-tight text-center text-slate-200 line-clamp-2">
-                            {item.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {/* ================= BACK BUTTON + MOBILE QUICK LOGO STRIP ON SUBMENUS ================= */}
-            {activeTab !== 'dashboard' && (
-              <>
-                <div className="bg-[#111c33] border-b border-slate-800 px-3 sm:px-4 py-2">
-                  <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSubmenuBack}
-                      className="inline-flex items-center gap-1.5 min-h-[36px] text-xs sm:text-sm font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
-                    >
-                      <ChevronLeft className="w-4 h-4 shrink-0" />
-                      <span>Kembali ke Dashboard Admin</span>
-                    </button>
-                    <span className="text-[10px] sm:text-xs text-slate-400 font-semibold uppercase truncate">
-                      {activeTab === 'verifikasi' && 'Verifikasi Setoran'}
-                      {activeTab === 'anggota' && 'Data Anggota'}
-                      {activeTab === 'kas' && 'Buku Kas Neraca'}
-                      {activeTab === 'penyesuaian_saldo' && 'Penyesuaian Saldo'}
-                      {activeTab === 'zakat' && 'Zakat & Qurban'}
-                      {activeTab === 'surat' && 'Surat Menyurat'}
-                      {activeTab === 'chat' && 'Chat Online'}
-                      {activeTab === 'tabungan_umum' && 'Tabungan Umum'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Mobile Submenu Quick Horizontal Logo Switcher */}
-                <nav
-                  aria-label="Navigasi Cepat Mobile Admin"
-                  className="lg:hidden bg-[#0d1424]/95 border-b border-slate-800/80 px-3 py-2"
+        <div className="flex-1 min-w-0 flex flex-col">
+          {activeTab !== 'dashboard' && (
+            <div className="hidden lg:flex items-center justify-between px-6 py-3 bg-[#0f172a]/75 border-b border-slate-800/80 shrink-0">
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('dashboard')}
+                  className="text-slate-400 hover:text-amber-400 font-semibold transition-colors cursor-pointer"
                 >
-                  <div className="flex items-stretch gap-1.5 overflow-x-auto pb-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('dashboard')}
-                      className="shrink-0 w-[68px] min-h-[56px] flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-xl border bg-slate-900/70 border-slate-800 text-slate-300 active:scale-95 transition-all cursor-pointer"
-                    >
-                      <div className="w-7 h-7 rounded-lg bg-slate-800 text-amber-400 flex items-center justify-center">
-                        <Layers className="w-4 h-4" />
-                      </div>
-                      <span className="text-[9.5px] font-bold leading-tight text-center line-clamp-1">
-                        Dashboard
-                      </span>
-                    </button>
-                    {logoMenuItems.map((item) => {
-                      const IconComp = item.icon;
-                      const isTabunganActive = item.id === 'tabungan_umum' && item.active;
-                      return (
-                        <button
-                          key={`mob-strip-${item.id}`}
-                          type="button"
-                          onClick={item.onClick}
-                          className={`relative shrink-0 w-[72px] min-h-[56px] flex flex-col items-center justify-center gap-1 py-1.5 px-1 rounded-xl border active:scale-95 transition-all cursor-pointer ${
-                            isTabunganActive
-                              ? 'bg-sky-500/15 border-sky-500/60 text-sky-300'
-                              : item.active
-                              ? 'bg-amber-500/15 border-amber-500/60 text-amber-300'
-                              : 'bg-slate-900/70 border-slate-800 text-slate-300'
-                          }`}
-                        >
-                          {item.badge !== null && (
-                            <span
-                              className={`absolute top-1 right-1 min-w-[15px] h-[15px] px-1 rounded-full text-[8.5px] font-black flex items-center justify-center font-mono tabular-nums ${item.badgeColor}`}
-                            >
-                              {item.badge}
-                            </span>
-                          )}
-                          <div
-                            className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                              isTabunganActive
-                                ? 'bg-sky-500 text-slate-950'
-                                : item.active
-                                ? 'bg-amber-500 text-slate-950'
-                                : `bg-slate-800 ${item.iconClass}`
-                            }`}
-                          >
-                            <IconComp className="w-4 h-4" />
-                          </div>
-                          <span className="text-[9.5px] font-bold leading-tight text-center line-clamp-2">
-                            {item.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </nav>
-              </>
-            )}
-          </>
-        );
-      })()}
+                  Dashboard Admin
+                </button>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
+                <span className="text-white font-extrabold tracking-wide">
+                  {activeTabTitle}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSubmenuBack}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Dashboard Utama</span>
+                </button>
+              </div>
+            </div>
+          )}
 
-      {/* ================= MAIN CONTENT BODY ================= */}
-      <main className={`max-w-7xl w-full mx-auto flex-1 overflow-x-hidden ${activeTab === 'chat' ? 'p-2 sm:p-4 flex flex-col min-h-0' : 'p-4 sm:p-6 space-y-6'}`}>
+          {/* ================= MAIN CONTENT BODY ================= */}
+          <main
+            className={`${
+              activeTab === 'dashboard'
+                ? 'max-w-7xl'
+                : 'max-w-[1440px]'
+            } w-full mx-auto flex-1 overflow-x-hidden ${
+              activeTab === 'chat'
+                ? 'p-2 sm:p-4 lg:p-6 flex flex-col min-h-0'
+                : 'p-4 sm:p-6 lg:p-7 space-y-6'
+            }`}
+          >
         {activeTab === 'dashboard' ? (
           <>
             {/* PENDING LOCK POKOK APPROVAL ALERT BANNER (Req 7) */}
@@ -2012,7 +2143,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             currentAdmin={currentAdmin}
           />
         ) : null}
-      </main>
+          </main>
+        </div>
+      </div>
 
       {/* ================= FLOATING NOTIFICATION TOASTS ================= */}
       {toasts.length > 0 && (

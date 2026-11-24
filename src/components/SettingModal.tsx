@@ -61,6 +61,9 @@ import {
   Fingerprint,
   Heart,
   Download,
+  ChevronLeft,
+  ChevronRight,
+  LayoutGrid,
 } from 'lucide-react';
 import { registerBiometricCredentials, clearBiometricData } from '../lib/webauthn';
 
@@ -2357,9 +2360,89 @@ export const SettingModal: React.FC<SettingModalProps> = ({
     }
   };
 
+  const isInlineSubModal =
+    (subModal === 'edit_profile' && (isMember || !!currentAdmin)) ||
+    (subModal === 'daftar_admin' && isSuperAdmin) ||
+    subModal === 'profil_koperasi' ||
+    (subModal === 'tambah_admin' && isSuperAdmin) ||
+    (subModal === 'edit_admin' && isSuperAdmin && !!selectedAdminToEdit) ||
+    (subModal === 'log_audit' && isSuperAdmin) ||
+    (subModal === 'sesuaikan_saldo' && isSuperAdmin) ||
+    (subModal === 'realtime_analytics' && isSuperAdmin) ||
+    (subModal === 'cloud_server' && isSuperAdmin) ||
+    (subModal === 'analisis_error' && isSuperAdmin) ||
+    (subModal === 'pengaturan_berbagi' && canEditPengaturanBerbagi) ||
+    (subModal === 'kelola_setoran' && isSuperAdmin);
+
+  const activeSectionTitle =
+    subModal === 'edit_profile'
+      ? isMember
+        ? 'Ubah Data Diri & Password'
+        : 'Ubah Profil & Password Pengurus'
+      : subModal === 'daftar_admin'
+      ? 'Kelola Administrator & Pengurus'
+      : subModal === 'tambah_admin'
+      ? 'Tambah Admin / Pengurus Baru'
+      : subModal === 'edit_admin'
+      ? `Edit Pengurus: ${selectedAdminToEdit?.nama || ''}`
+      : subModal === 'profil_koperasi'
+      ? 'Biodata & QRIS Resmi Koperasi'
+      : subModal === 'pengaturan_berbagi'
+      ? 'Pengaturan Menu Berbagi'
+      : subModal === 'kelola_setoran'
+      ? 'Kelola & Hapus Verifikasi Setoran'
+      : subModal === 'realtime_analytics'
+      ? 'Firebase Realtime Analytics'
+      : subModal === 'analisis_error'
+      ? 'Analisis Sistem & Diagnostik'
+      : subModal === 'cloud_server'
+      ? 'Server Firebase Cloud Firestore'
+      : subModal === 'log_audit'
+      ? 'Log Audit Aktivitas (60 Hari)'
+      : subModal === 'sesuaikan_saldo'
+      ? 'Penyesuaian Saldo Anggota'
+      : 'Ikhtisar & Keamanan';
+
+  const renderDesktopSidebarBtn = (
+    active: boolean,
+    label: string,
+    IconComp: React.ComponentType<{ className?: string }>,
+    iconClass: string,
+    onClick: () => void,
+    badge?: string | number | null
+  ) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs font-bold transition-colors cursor-pointer text-left ${
+        active
+          ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+          : 'border-transparent text-slate-300 hover:bg-slate-900/90 hover:border-slate-800 hover:text-white'
+      }`}
+    >
+      <span className="flex items-center gap-2.5 min-w-0">
+        <span
+          className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+            active
+              ? 'bg-amber-500 text-slate-950'
+              : `bg-slate-900 border border-slate-800 ${iconClass}`
+          }`}
+        >
+          <IconComp className="w-3.5 h-3.5" />
+        </span>
+        <span className="truncate">{label}</span>
+      </span>
+      {badge !== undefined && badge !== null && (
+        <span className="px-1.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-[10px] font-mono tabular-nums text-slate-300 shrink-0">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
-      <div className="bg-[#0b1120] text-slate-100 border border-slate-800 w-full max-w-md lg:max-w-5xl rounded-3xl shadow-2xl overflow-hidden my-4 max-h-[92vh] flex flex-col">
+      <div className="bg-[#0b1120] text-slate-100 border border-slate-800 w-full max-w-md lg:max-w-6xl xl:max-w-7xl lg:h-[88vh] rounded-3xl shadow-2xl overflow-hidden my-4 max-h-[92vh] flex flex-col">
         {/* Header */}
         <div className="px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 flex items-center justify-between bg-[#0f172a] shrink-0">
           <div className="flex items-center gap-2.5">
@@ -2394,9 +2477,291 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           </div>
         </div>
 
-        {/* Content Body: Stacked on Mobile (< lg), 2-Column Workspace on PC & Web (lg+) */}
-        <div className="p-4 sm:p-6 overflow-y-auto flex-1">
-          <div className="space-y-4 lg:grid lg:grid-cols-[320px_1fr] lg:grid-rows-[auto_1fr] lg:gap-5 lg:space-y-0 lg:items-start">
+        {/* Workspace Container: Mobile Stacked (< lg), Desktop Left Sidebar + Right Workspace (lg+) */}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+          {/* ================= PC & WEB LEFT SIDEBAR NAVIGATION (lg+) ================= */}
+          <aside
+            aria-label="Navigasi Pengaturan Web"
+            className="hidden lg:flex lg:w-72 shrink-0 flex-col bg-[#0d1424] border-r border-slate-800 min-h-0"
+          >
+            {/* Compact Identity Strip */}
+            <div className="p-4 border-b border-slate-800/80 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-950 font-black flex items-center justify-center text-base shrink-0">
+                {(isMember ? currentMember?.nama : currentAdmin?.nama)?.charAt(0).toUpperCase() || 'U'}
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-extrabold text-white truncate">
+                  {isMember ? currentMember?.nama : currentAdmin?.nama}
+                </div>
+                <div className="text-[10px] text-amber-400 font-mono truncate">
+                  {isMember
+                    ? currentMember?.nomorRekening || currentMember?.nomorAnggota
+                    : `@${currentAdmin?.username}`}
+                </div>
+              </div>
+            </div>
+
+            {/* Sidebar Category Links */}
+            <nav className="flex-1 overflow-y-auto p-3 space-y-4">
+              <div className="space-y-1">
+                <div className="px-2 pb-1 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                  Akun & Keamanan
+                </div>
+                {renderDesktopSidebarBtn(
+                  !isInlineSubModal,
+                  'Ikhtisar & Keamanan',
+                  LayoutGrid,
+                  'text-amber-400',
+                  () => setSubModal(null)
+                )}
+                {renderDesktopSidebarBtn(
+                  subModal === 'edit_profile',
+                  isMember ? 'Ubah Data Diri & Password' : 'Ubah Profil & Password',
+                  Edit2,
+                  'text-sky-400',
+                  () => setSubModal('edit_profile')
+                )}
+              </div>
+
+              {isMember ? (
+                <div className="space-y-1">
+                  <div className="px-2 pb-1 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    Layanan & Aplikasi
+                  </div>
+                  {renderDesktopSidebarBtn(false, 'Lihat KTA Digital', CheckCircle2, 'text-emerald-400', () => {
+                    onClose();
+                    onOpenKta?.();
+                  })}
+                  {renderDesktopSidebarBtn(false, 'Cetak Rekening Koran', FileText, 'text-amber-400', () => {
+                    onClose();
+                    onOpenMutasi?.();
+                  })}
+                  {renderDesktopSidebarBtn(false, 'Bantuan Pengurus (Chat)', Server, 'text-sky-400', () => {
+                    onClose();
+                    onOpenChat?.();
+                  })}
+                  {renderDesktopSidebarBtn(
+                    subModal === 'install_pwa',
+                    'Instal Aplikasi HWS',
+                    Smartphone,
+                    'text-emerald-400',
+                    () => setSubModal('install_pwa')
+                  )}
+                </div>
+              ) : isSuperAdmin ? (
+                <>
+                  <div className="space-y-1">
+                    <div className="px-2 pb-1 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                      Koperasi & Pengurus
+                    </div>
+                    {renderDesktopSidebarBtn(
+                      subModal === 'tambah_admin',
+                      'Tambah Admin Baru',
+                      Plus,
+                      'text-amber-400',
+                      handleOpenTambahAdmin
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'daftar_admin' || subModal === 'edit_admin',
+                      'Kelola Administrator',
+                      Shield,
+                      'text-sky-400',
+                      () => setSubModal('daftar_admin'),
+                      state.admins.length
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'profil_koperasi',
+                      'Biodata & QRIS Koperasi',
+                      Building,
+                      'text-emerald-400',
+                      () => setSubModal('profil_koperasi')
+                    )}
+                    {canEditPengaturanBerbagi &&
+                      renderDesktopSidebarBtn(
+                        subModal === 'pengaturan_berbagi',
+                        'Pengaturan Menu Berbagi',
+                        Heart,
+                        'text-rose-400',
+                        () => setSubModal('pengaturan_berbagi')
+                      )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="px-2 pb-1 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                      Cloud & Diagnostik
+                    </div>
+                    {renderDesktopSidebarBtn(
+                      subModal === 'realtime_analytics',
+                      'Realtime Analytics',
+                      Activity,
+                      'text-emerald-400',
+                      () => {
+                        setSyncFeedback('');
+                        setSubModal('realtime_analytics');
+                      },
+                      realtimeAnalytics.onlineCount
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'analisis_error',
+                      'Analisis Error & Speed',
+                      Activity,
+                      'text-rose-400',
+                      () => {
+                        setSubModal('analisis_error');
+                        fetchDiagnostics();
+                      }
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'cloud_server',
+                      'Server Cloud Firestore',
+                      Server,
+                      'text-purple-400',
+                      () => setSubModal('cloud_server')
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'log_audit',
+                      'Log Audit (60 Hari)',
+                      FileText,
+                      'text-sky-400',
+                      () => setSubModal('log_audit'),
+                      state.auditLogs.length
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'google_drive',
+                      'Cadangan Google Drive',
+                      Cloud,
+                      'text-amber-400',
+                      () => setSubModal('google_drive')
+                    )}
+                    {renderDesktopSidebarBtn(
+                      subModal === 'install_pwa',
+                      'Instal Aplikasi Multi-OS',
+                      Smartphone,
+                      'text-emerald-400',
+                      () => setSubModal('install_pwa')
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="px-2 pb-1 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                      Pemeliharaan & Data
+                    </div>
+                    {renderDesktopSidebarBtn(
+                      subModal === 'kelola_setoran',
+                      'Kelola Verifikasi Setoran',
+                      Trash2,
+                      'text-rose-400',
+                      () => setSubModal('kelola_setoran'),
+                      state.setoranList.length
+                    )}
+                    {renderDesktopSidebarBtn(
+                      false,
+                      'Hapus Transaksi Anggota',
+                      Trash2,
+                      'text-rose-400',
+                      () => setShowHapusTxModal(true)
+                    )}
+                    {renderDesktopSidebarBtn(
+                      false,
+                      state.maintenanceLock?.isLocked ? 'Buka Kunci Maintenance' : 'Kunci Maintenance Anggota',
+                      Lock,
+                      'text-rose-400',
+                      () => {
+                        if (state.maintenanceLock?.isLocked) {
+                          setMaintenanceModeAction('unlock');
+                        } else {
+                          setMaintenanceModeAction('lock');
+                          setMaintenanceNote('');
+                          setMaintenanceAgreed(false);
+                        }
+                        setMaintenancePassword('');
+                        setMaintenanceError('');
+                        setShowMaintenanceModal(true);
+                      }
+                    )}
+                    {renderDesktopSidebarBtn(
+                      false,
+                      'Reset Aplikasi Dari 0',
+                      AlertTriangle,
+                      'text-rose-500',
+                      () => setShowResetAppModal(true)
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-1">
+                  <div className="px-2 pb-1 text-[10px] font-black uppercase tracking-wider text-slate-500">
+                    Kewenangan Admin
+                  </div>
+                  {renderDesktopSidebarBtn(
+                    subModal === 'profil_koperasi',
+                    'Biodata & QRIS Koperasi',
+                    Building,
+                    'text-emerald-400',
+                    () => setSubModal('profil_koperasi')
+                  )}
+                  {canEditPengaturanBerbagi &&
+                    renderDesktopSidebarBtn(
+                      subModal === 'pengaturan_berbagi',
+                      'Pengaturan Menu Berbagi',
+                      Heart,
+                      'text-rose-400',
+                      () => setSubModal('pengaturan_berbagi')
+                    )}
+                  {canRequestHapusMutasi &&
+                    renderDesktopSidebarBtn(
+                      false,
+                      'Ajukan Hapus Transaksi',
+                      Trash2,
+                      'text-rose-400',
+                      () => setShowHapusTxModal(true)
+                    )}
+                </div>
+              )}
+            </nav>
+
+            <div className="p-3 border-t border-slate-800 bg-[#0b1120]/70 shrink-0">
+              <button
+                type="button"
+                onClick={() => onLogout()}
+                className="w-full py-2.5 bg-red-950/40 hover:bg-red-900/60 border border-red-500/40 text-red-300 hover:text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Keluar dari Akun</span>
+              </button>
+            </div>
+          </aside>
+
+          {/* ================= RIGHT WORKSPACE PANE ================= */}
+          <div className="flex-1 min-w-0 flex flex-col bg-[#0b1120] min-h-0">
+            {/* Desktop Contextual Breadcrumb Bar */}
+            <div className="hidden lg:flex items-center justify-between px-6 py-3 bg-[#0f172a]/70 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-2 text-xs min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setSubModal(null)}
+                  className="text-slate-400 hover:text-amber-400 font-semibold transition-colors cursor-pointer shrink-0"
+                >
+                  Pengaturan Web
+                </button>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                <span className="text-white font-extrabold truncate">{activeSectionTitle}</span>
+              </div>
+              {isInlineSubModal && (
+                <button
+                  type="button"
+                  onClick={() => setSubModal(null)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Kembali ke Ikhtisar</span>
+                </button>
+              )}
+            </div>
+
+            {/* Scrollable Body (Overview Grid + Desktop Inline Settings Panels) */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1">
+              <div className={`${isInlineSubModal ? 'lg:hidden' : ''} space-y-4 lg:grid lg:grid-cols-[300px_1fr] lg:gap-5 lg:space-y-0 lg:items-start`}>
             {/* ================= LEFT RAIL: PROFILE & DEVICE SECURITY ================= */}
             <div className="space-y-4 lg:col-start-1 lg:row-start-1">
               {/* PROFILE CARD */}
@@ -3166,8 +3531,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               )}
             </div>
 
-            {/* ================= LOGOUT BUTTON (Left Rail bottom on PC, Bottom on Mobile) ================= */}
-            <div className="pt-2 lg:pt-0 lg:col-start-1 lg:row-start-2">
+            {/* ================= LOGOUT BUTTON (Mobile Only, Desktop uses Sidebar Footer) ================= */}
+            <div className="pt-2 lg:hidden">
               <button
                 type="button"
                 onClick={() => onLogout()}
@@ -3178,18 +3543,16 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      </div>
 
       {/* ================= SUB-MODAL: EDIT PROFIL ANGGOTA ATAU ADMIN ================= */}
       {subModal === 'edit_profile' && (isMember || currentAdmin) && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
               <h3 className="text-sm font-extrabold text-white">
                 {isMember ? 'Ubah Data Diri & Password Anggota' : 'Ubah Profil & Password Admin'}
               </h3>
-              <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -3510,8 +3873,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: DAFTAR PENGURUS KOPERASI ================= */}
       {subModal === 'daftar_admin' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
               <div>
                 <h3 className="text-sm font-extrabold text-white">
@@ -3521,7 +3884,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   Kelola struktur kepengurusan dan hak akses pengurus aplikasi
                 </p>
               </div>
-              <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -3853,8 +4216,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: PROFIL, BIODATA & QRIS RESMI KOPERASI ================= */}
       {subModal === 'profil_koperasi' && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
               <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
                 <div>
                   <h3 className="text-sm font-extrabold text-white">
@@ -3876,7 +4239,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     </div>
                   )}
                 </div>
-                <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+                <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -4207,8 +4570,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: TAMBAH ADMIN BARU ================= */}
       {subModal === 'tambah_admin' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
               <div>
                 <h3 className="text-sm font-extrabold text-white">Tambah Pengurus / Admin Baru</h3>
@@ -4216,7 +4579,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   Wajib mengisi data diri lengkap sesuai formulir pendaftaran anggota koperasi (Req 1)
                 </p>
               </div>
-              <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -4530,8 +4893,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: EDIT AKUN ADMIN (SUPER ADMIN) ================= */}
       {subModal === 'edit_admin' && isSuperAdmin && selectedAdminToEdit && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl max-h-[88vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-4">
               <div>
                 <h3 className="text-sm font-extrabold text-white">
@@ -4546,7 +4909,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   setSelectedAdminToEdit(null);
                   setSubModal('daftar_admin');
                 }}
-                className="text-slate-400 hover:text-white"
+                className="lg:hidden text-slate-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -4864,8 +5227,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: LOG AUDIT (60 HARI) ================= */}
       {subModal === 'log_audit' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-3xl rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-3xl rounded-3xl p-5 shadow-2xl max-h-[85vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-700 mb-3 gap-2">
               <div>
                 <h3 className="text-sm font-extrabold text-white flex items-center gap-2">
@@ -4903,7 +5266,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                     <span>Hapus History Log</span>
                   </button>
                 )}
-                <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+                <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -5035,11 +5398,11 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: PENYESUAIAN SALDO ================= */}
       {subModal === 'sesuaikan_saldo' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl lg:max-w-2xl lg:rounded-2xl lg:border-slate-800 lg:shadow-none">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700 mb-3">
               <h3 className="text-sm font-extrabold text-white">Penyesuaian Saldo Anggota</h3>
-              <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -5360,8 +5723,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
         ).length;
 
         return (
-          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-            <div className="bg-gradient-to-br from-[#0d1424] via-[#111c33] to-[#0f172a] border border-emerald-500/40 w-full max-w-lg rounded-3xl p-4 sm:p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+            <div className="bg-gradient-to-br from-[#0d1424] via-[#111c33] to-[#0f172a] border border-emerald-500/40 w-full max-w-lg rounded-3xl p-4 sm:p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:shadow-none lg:max-h-none lg:overflow-visible">
               {/* Header */}
               <div className="flex items-start justify-between gap-2 pb-3 border-b border-slate-800">
                 <div className="flex items-start gap-2.5 min-w-0">
@@ -5389,7 +5752,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setSubModal(null)}
-                  className="text-slate-400 hover:text-white p-1 shrink-0"
+                  className="lg:hidden text-slate-400 hover:text-white p-1 shrink-0"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -5412,8 +5775,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                 </div>
               )}
 
-              {/* 4 Kotak Disusun Ke Bawah (Vertikal) Agar Angka Tidak Melewati Kotak di Mobile */}
-              <div className="flex flex-col gap-3 text-xs">
+              {/* 4 Kotak: Vertikal di Mobile (< lg), Grid 2x2 di PC & Web (lg+) */}
+              <div className="flex flex-col lg:grid lg:grid-cols-2 gap-3 text-xs">
                 <div className="p-3.5 rounded-2xl bg-[#162035]/90 border border-slate-700/80 min-w-0 overflow-hidden">
                   <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">
                     Perangkat Aktif Online
@@ -5470,13 +5833,13 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: CLOUD SERVER FIREBASE FIRESTORE ================= */}
       {subModal === 'cloud_server' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl text-xs space-y-3">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl text-xs space-y-3 lg:max-w-2xl lg:rounded-2xl lg:border-slate-800 lg:shadow-none">
             <div className="flex justify-between items-center pb-2 border-b border-slate-700">
               <h3 className="font-extrabold text-white text-sm">
                 Server Firebase Firestore Realtime
               </h3>
-              <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -5503,8 +5866,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: ANALISIS ERROR & DIAGNOSTIK SISTEM (REQ 2, 5, 7, 10, 13, 15, 16) ================= */}
       {subModal === 'analisis_error' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl text-xs space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0">
+          <div className="bg-[#0f172a] border border-slate-700 w-full max-w-xl rounded-3xl p-5 shadow-2xl text-xs space-y-4 max-h-[90vh] overflow-y-auto lg:max-w-none lg:rounded-2xl lg:border-slate-800 lg:shadow-none lg:max-h-none lg:overflow-visible">
             <div className="flex justify-between items-center pb-2.5 border-b border-slate-700">
               <div className="flex items-center gap-2">
                 <Activity className="w-5 h-5 text-red-400" />
@@ -5522,7 +5885,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
                   </p>
                 </div>
               </div>
-              <button onClick={() => setSubModal(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setSubModal(null)} className="lg:hidden text-slate-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -5874,8 +6237,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
 
       {/* ================= SUB-MODAL: PENGATURAN MENU BERBAGI (NAMA SEDEKAH & QRIS) ================= */}
       {subModal === 'pengaturan_berbagi' && canEditPengaturanBerbagi && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] text-slate-100 border border-rose-500/50 w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-auto relative animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0 lg:overflow-visible">
+          <div className="bg-[#0f172a] text-slate-100 border border-rose-500/50 w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 my-auto relative animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col lg:max-w-3xl lg:rounded-2xl lg:shadow-none lg:my-0 lg:max-h-none lg:animate-none">
             <div className="flex items-center justify-between pb-3 border-b border-rose-500/30 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0">
@@ -5893,7 +6256,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setSubModal(null)}
-                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer transition-colors"
+                className="lg:hidden w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center cursor-pointer transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -6477,8 +6840,8 @@ export const SettingModal: React.FC<SettingModalProps> = ({
       )}
       {/* ================= SUB-MODAL: KELOLA & HAPUS VERIFIKASI SETORAN (HANYA SUPER ADMIN) ================= */}
       {subModal === 'kelola_setoran' && isSuperAdmin && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-slate-700/80 w-full max-w-3xl rounded-3xl shadow-2xl p-5 my-4 max-h-[90vh] flex flex-col space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 overflow-y-auto lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:backdrop-blur-none lg:block lg:p-0 lg:overflow-visible">
+          <div className="bg-[#0f172a] border border-slate-700/80 w-full max-w-3xl rounded-3xl shadow-2xl p-5 my-4 max-h-[90vh] flex flex-col space-y-4 lg:max-w-none lg:rounded-2xl lg:shadow-none lg:my-0 lg:max-h-none">
             <div className="flex items-center justify-between pb-3 border-b border-slate-700 shrink-0">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/40">
@@ -6496,7 +6859,7 @@ export const SettingModal: React.FC<SettingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setSubModal(null)}
-                className="w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
+                className="lg:hidden w-8 h-8 rounded-xl bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -6692,6 +7055,10 @@ export const SettingModal: React.FC<SettingModalProps> = ({
           </div>
         </div>
       )}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
