@@ -1099,23 +1099,9 @@ function mergeServerState(current: any, incoming: any): any {
       ? incoming.categoriesKasKoperasi
       : current.categoriesKasKoperasi;
 
-  const getMaintTs = (lk: any): number => {
-    if (!lk || typeof lk !== 'object') return 0;
-    const tLock = lk.lockedAt ? Date.parse(lk.lockedAt) || 0 : 0;
-    const tUnlock = lk.unlockedAt ? Date.parse(lk.unlockedAt) || 0 : 0;
-    return Math.max(tLock, tUnlock);
-  };
-  const currMaintTs = getMaintTs(current.maintenanceLock);
-  const incMaintTs = getMaintTs(incoming.maintenanceLock);
   const mergedMaintenanceLock =
     incoming.maintenanceLock && typeof incoming.maintenanceLock === 'object'
-      ? incMaintTs > currMaintTs
-        ? incoming.maintenanceLock
-        : incMaintTs === currMaintTs && currMaintTs === 0
-        ? incoming.maintenanceLock
-        : incMaintTs === currMaintTs && incoming.maintenanceLock.isLocked !== current.maintenanceLock?.isLocked
-        ? current.maintenanceLock || incoming.maintenanceLock
-        : current.maintenanceLock || incoming.maintenanceLock
+      ? incoming.maintenanceLock
       : current.maintenanceLock || { isLocked: false };
 
   const isSchemaV2 =
@@ -1525,7 +1511,6 @@ async function ensureServerFirestore() {
         serverFirestoreInstance = initializeFirestore(
           fbApp,
           {
-            experimentalForceLongPolling: true,
             ignoreUndefinedProperties: true,
           },
           cfg.firestoreDatabaseId || undefined
@@ -8079,11 +8064,10 @@ async function startServer() {
   // ================= ENDPOINTS LOCK MAINTENANCE SISTEM (Req 3) =================
   // Status Maintenance
   app.get('/api/maintenance/status', (req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.json(currentState.maintenanceLock || { isLocked: false });
   });
 
-  // Kunci / Bekukan Akses Anggota (Admin tetap aktif & tidak terkunci)
+  // Kunci / Bekukan Sistem (Hanya Super Admin)
   app.post('/api/maintenance/lock', (req: Request, res: Response) => {
     try {
       const { note, password, adminName } = req.body;
@@ -8118,7 +8102,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Lock Maintenance Sistem',
-        detail: `Super Admin mengaktifkan KUNCI MAINTENANCE khusus seluruh anggota (semua Admin tetap aktif & tidak terkunci). Alasan: "${note.trim()}"`,
+        detail: `Super Admin mengaktifkan KUNCI MAINTENANCE sistem untuk semua anggota dan admin. Alasan: "${note.trim()}"`,
       });
 
       saveDatabase(currentState);
@@ -8129,7 +8113,7 @@ async function startServer() {
     }
   });
 
-  // Buka Kunci / Unfreeze Maintenance Anggota
+  // Buka Kunci / Unfreeze Maintenance (Hanya Super Admin)
   app.post('/api/maintenance/unlock', (req: Request, res: Response) => {
     try {
       const { password, adminName } = req.body;
@@ -8160,7 +8144,7 @@ async function startServer() {
         adminNama: adminName || 'Super Admin',
         adminRole: 'super_admin',
         action: 'Buka Lock Maintenance Sistem',
-        detail: `Super Admin MEMBUKA KUNCI MAINTENANCE anggota. Seluruh anggota kini dapat login dan mengakses kembali secara normal.`,
+        detail: `Super Admin MEMBUKA KUNCI MAINTENANCE sistem. Seluruh anggota dan admin kini dapat login dan mengakses kembali secara normal.`,
       });
 
       saveDatabase(currentState);

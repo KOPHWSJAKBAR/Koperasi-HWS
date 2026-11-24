@@ -7,23 +7,14 @@ import {
   doc,
   setDoc,
   getDocFromServer,
+  enableNetwork,
 } from 'firebase/firestore';
 import { getAuth, Auth } from 'firebase/auth';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
+import appletFirebaseConfig from '../../firebase-applet-config.json';
 
-// Centralized Firebase configuration for multi-platform sync (Web, Android, iOS, PC, AI Studio)
-export const firebaseConfig = {
-  projectId: "gen-lang-client-0761736071",
-  appId: "1:697954213543:web:6db9f5f24c364ea8198582",
-  apiKey: "AIzaSyAXim9MUr_YKpVJAo6djUmcIF4qya3-mgc",
-  authDomain: "gen-lang-client-0761736071.firebaseapp.com",
-  firestoreDatabaseId: "ai-studio-koperasihimpunan-610ec60a-11c8-4d4d-b14c-85afbabb0f69",
-  storageBucket: "gen-lang-client-0761736071.firebasestorage.app",
-  messagingSenderId: "697954213543",
-  measurementId: "G-7PGPBDM652",
-  oAuthClientId: "697954213543-3q3o605nabhq0ogqiapcjjsr9b0ckcub.apps.googleusercontent.com",
-  recaptchaSiteKey: ""
-};
+// Centralized Firebase configuration sourced directly from firebase-applet-config.json
+export const firebaseConfig = appletFirebaseConfig;
 
 // Singleton instances to guarantee no double-initialization
 let cachedApp: FirebaseApp | null = null;
@@ -50,13 +41,20 @@ export function getFirebaseApp(): FirebaseApp {
 export function getFirebaseFirestore(): Firestore {
   if (!cachedDb) {
     const currentApp = getFirebaseApp();
+    const isBrowser = typeof window !== 'undefined';
     try {
       cachedDb = initializeFirestore(
         currentApp,
-        {
-          experimentalForceLongPolling: true,
-          ignoreUndefinedProperties: true,
-        },
+        isBrowser
+          ? {
+              // Long polling avoids WebChannel HTTP/2 stream stalls in sandboxed iframes, proxies, and mobile WebViews
+              experimentalForceLongPolling: true,
+              experimentalLongPollingOptions: { timeoutSeconds: 15 },
+              ignoreUndefinedProperties: true,
+            }
+          : {
+              ignoreUndefinedProperties: true,
+            },
         firebaseConfig.firestoreDatabaseId || undefined
       );
     } catch {
@@ -139,58 +137,83 @@ export const storage: FirebaseStorage = getFirebaseStorage();
 let activeOnlineCheckPromise: Promise<boolean> | null = null;
 let lastOnlineCheckTime = 0;
 let lastOnlineCheckResult = true;
+let hasTestedStartupConnection = false;
 
-async function verifyFirestoreRestReachability(): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const dbId = encodeURIComponent(firebaseConfig.firestoreDatabaseId || '(default)');
-    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${dbId}/documents/koperasi_state/main_database?key=${encodeURIComponent(firebaseConfig.apiKey)}`;
-    const res = await fetch(url, { method: 'GET', cache: 'no-store', signal: controller.signal });
-    clearTimeout(timer);
-    return res.ok || res.status === 404 || res.status === 403;
-  } catch {
+async function probeFirestoreServerWithRecovery(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    lastOnlineCheckResult = false;
     return false;
+  }
+
+  const readOnce = () =>
+    Promise.race([
+      getDocFromServer(doc(db, 'koperasi_state', 'main_database')),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+    ]);
+
+  try {
+    await readOnce();
+    lastOnlineCheckTime = Date.now();
+    lastOnlineCheckResult = true;
+    return true;
+  } catch (firstErr) {
+    const firstMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+    // Only invoke enableNetwork if SDK explicitly entered offline state while browser reports online
+    if (firstMsg.includes('client is offline') || firstMsg.includes('unavailable') || firstMsg === 'timeout') {
+      try {
+        if (firstMsg.includes('client is offline')) {
+          await enableNetwork(db).catch(() => {});
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await readOnce();
+        lastOnlineCheckTime = Date.now();
+        lastOnlineCheckResult = true;
+        return true;
+      } catch {
+        // Fallback: verify Firestore REST API reachability quietly so transient WebChannel/long-poll warmup never emits false offline warnings
+        try {
+          const restUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/koperasi_state/main_database?key=${firebaseConfig.apiKey}`;
+          const res = await fetch(restUrl, { method: 'GET', cache: 'no-store' });
+          if (res.ok) {
+            lastOnlineCheckTime = Date.now();
+            lastOnlineCheckResult = true;
+            return true;
+          }
+        } catch {}
+      }
+    } else if (firstMsg.includes('permission-denied') || firstMsg.includes('Missing or insufficient permissions')) {
+      console.error('Firestore configuration/rules check failed:', firstMsg);
+    }
+
+    lastOnlineCheckTime = Date.now();
+    lastOnlineCheckResult = typeof navigator !== 'undefined' ? navigator.onLine : false;
+    return lastOnlineCheckResult;
   }
 }
 
 export async function testFirestoreConnection(): Promise<boolean> {
-  return ensureFirestoreOnline();
+  if (hasTestedStartupConnection) return lastOnlineCheckResult;
+  hasTestedStartupConnection = true;
+  return ensureFirestoreOnline(true);
 }
 
-// Passive server reachability check: NEVER invokes enableNetwork(db) or disableNetwork(db),
-// because mutating network state mid-stream triggers PersistentWriteStream.onNext assertion failures.
-export async function ensureFirestoreOnline(): Promise<boolean> {
+// Deduplicated server reachability check: only wakes Firestore network if client actually stalled offline
+export async function ensureFirestoreOnline(force = false): Promise<boolean> {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     lastOnlineCheckResult = false;
     return false;
   }
   const now = Date.now();
-  if (now - lastOnlineCheckTime < 5000 && lastOnlineCheckResult) {
+  if (!force && now - lastOnlineCheckTime < 5000 && lastOnlineCheckResult) {
     return true;
   }
   if (activeOnlineCheckPromise) {
     return activeOnlineCheckPromise;
   }
 
-  activeOnlineCheckPromise = (async () => {
-    try {
-      await Promise.race([
-        getDocFromServer(doc(db, 'koperasi_state', 'main_database')),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000)),
-      ]);
-      lastOnlineCheckTime = Date.now();
-      lastOnlineCheckResult = true;
-      return true;
-    } catch {
-      const restOk = await verifyFirestoreRestReachability();
-      lastOnlineCheckTime = Date.now();
-      lastOnlineCheckResult = restOk || (typeof navigator !== 'undefined' ? navigator.onLine : false);
-      return lastOnlineCheckResult;
-    } finally {
-      activeOnlineCheckPromise = null;
-    }
-  })();
+  activeOnlineCheckPromise = probeFirestoreServerWithRecovery().finally(() => {
+    activeOnlineCheckPromise = null;
+  });
 
   return activeOnlineCheckPromise;
 }
@@ -208,6 +231,7 @@ export function installFirestoreSystemErrorGuard() {
     const stack = String(reason?.stack || '');
     const isTransientFirestoreInternal =
       msg.includes('INTERNAL ASSERTION FAILED') ||
+      msg.includes('client is offline') ||
       msg.includes('49232') ||
       msg.includes('47125') ||
       msg.includes('12678') ||

@@ -1812,23 +1812,7 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
         Array.isArray(incoming.categoriesKasKoperasi.pengeluaran))
         ? incoming.categoriesKasKoperasi
         : base.categoriesKasKoperasi || { pemasukan: [], pengeluaran: [] },
-    maintenanceLock: (() => {
-      const baseLock = base.maintenanceLock;
-      const incLock = incoming.maintenanceLock;
-      if (!incLock || typeof incLock !== 'object') return baseLock || { isLocked: false };
-      if (!baseLock || typeof baseLock !== 'object') return incLock;
-      const baseTs = Math.max(
-        baseLock.lockedAt ? Date.parse(baseLock.lockedAt) || 0 : 0,
-        baseLock.unlockedAt ? Date.parse(baseLock.unlockedAt) || 0 : 0
-      );
-      const incTs = Math.max(
-        incLock.lockedAt ? Date.parse(incLock.lockedAt) || 0 : 0,
-        incLock.unlockedAt ? Date.parse(incLock.unlockedAt) || 0 : 0
-      );
-      if (incTs > baseTs) return incLock;
-      if (incTs === baseTs && baseTs === 0) return incLock;
-      return baseLock;
-    })(),
+    maintenanceLock: incoming.maintenanceLock || base.maintenanceLock || { isLocked: false },
     auditLogs: mergedAuditLogs.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1)),
     accountNumberSchemaVersion: 2,
     lastRunningNumber: (() => {
@@ -3047,7 +3031,7 @@ export enum OperationType {
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const errMsg = error instanceof Error ? error.message : String(error);
-  // Silently ignore normal WebChannel listen stream dropped / reconnecting events
+  // Silently ignore normal WebChannel / long-polling reconnect events
   if (
     !errMsg ||
     errMsg.includes('Listen') ||
@@ -3058,6 +3042,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     errMsg.includes('cancelled') ||
     errMsg.includes('unavailable') ||
     errMsg.includes('offline mode') ||
+    errMsg.includes('client is offline') ||
+    errMsg.includes('network-request-failed') ||
     errMsg.includes('Could not reach Cloud Firestore') ||
     errMsg.includes('The operation could not be completed') ||
     errMsg.includes('permission')
@@ -4049,9 +4035,8 @@ export function useKoperasiState() {
     // Initial fetch + live Firestore connection check & activation whenever app opens
     if (getIsInternetConnected()) {
       import('./firebase-init')
-        .then(({ testFirestoreConnection, ensureFirestoreOnline }) => {
+        .then(({ testFirestoreConnection }) => {
           testFirestoreConnection().catch(() => {});
-          ensureFirestoreOnline().catch(() => {});
         })
         .catch(() => {});
       fetchStateFromServer();
