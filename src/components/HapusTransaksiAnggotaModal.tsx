@@ -6,6 +6,7 @@ import {
   MemberTransaction,
   WilayahKoperasi,
   PendingMutasiActionRequest,
+  RedMutasiEntry,
 } from '../types';
 import {
   formatRupiah,
@@ -13,6 +14,8 @@ import {
   sortMembersDesc,
   isApprovalRole,
   getRequiredApproverLabel,
+  getRedUnpostedMutasiEntries,
+  compareMemberTransactionsDesc,
 } from '../lib/storage';
 import {
   Trash2,
@@ -58,7 +61,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
 
   const [selectedWilayah, setSelectedWilayah] = useState<WilayahKoperasi | 'semua'>(initialWilayah);
   const [selectedMemberId, setSelectedMemberId] = useState<string>(initialMemberId);
-  const [resetBalance, setResetBalance] = useState<boolean>(() => (initialTxId ? false : true));
+  const [resetBalance, setResetBalance] = useState<boolean>(false);
   const [adminPassword, setAdminPassword] = useState<string>('');
   const [alasan, setAlasan] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
@@ -87,19 +90,79 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
     setErrorMessage('');
   };
 
-  // Filter transactions according to selected wilayah and member
-  const matchingTransactions = useMemo(() => {
-    const memberIdSet = new Set(availableMembers.map((m) => m.id));
-    return (state.memberTransactions || []).filter((tx) => {
-      if (selectedMemberId !== 'semua') {
-        return tx.memberId === selectedMemberId;
-      }
-      if (selectedWilayah !== 'semua') {
-        return memberIdSet.has(tx.memberId);
-      }
-      return true;
+  type DeletableTxRow = MemberTransaction & {
+    isRedMutasi?: boolean;
+    redReason?: string;
+    redSetoranId?: string;
+  };
+
+  const redMutasiEntries = useMemo<RedMutasiEntry[]>(() => {
+    return getRedUnpostedMutasiEntries(state);
+  }, [state]);
+
+  const redByTxIdMap = useMemo(() => {
+    const map = new Map<string, RedMutasiEntry>();
+    redMutasiEntries.forEach((r) => {
+      if (r.txId) map.set(r.txId, r);
+      map.set(r.id, r);
     });
-  }, [state.memberTransactions, availableMembers, selectedMemberId, selectedWilayah]);
+    return map;
+  }, [redMutasiEntries]);
+
+  // Filter transactions according to selected wilayah and member (termasuk Mutasi Merah yang tidak masuk Daftar Anggota & Buku Kas)
+  const matchingTransactions = useMemo<DeletableTxRow[]>(() => {
+    const memberIdSet = new Set(availableMembers.map((m) => m.id));
+    const delTxSet = new Set<string>(state.deletedTransactionIds || []);
+    const activeNormalIds = new Set<string>();
+    const combined: DeletableTxRow[] = [];
+
+    const matchesScope = (mId: string) => {
+      if (selectedMemberId !== 'semua') return mId === selectedMemberId;
+      if (selectedWilayah !== 'semua') return memberIdSet.has(mId);
+      return true;
+    };
+
+    (state.memberTransactions || []).forEach((tx) => {
+      if (!tx || !tx.id || (tx as any).status === 'deleted' || delTxSet.has(tx.id)) return;
+      if (!matchesScope(tx.memberId)) return;
+      activeNormalIds.add(tx.id);
+      const redMatch = redByTxIdMap.get(tx.id);
+      combined.push({
+        ...tx,
+        isRedMutasi: Boolean(redMatch),
+        redReason: redMatch?.reason,
+        redSetoranId: redMatch?.setoranId,
+      });
+    });
+
+    redMutasiEntries.forEach((r) => {
+      if (!matchesScope(r.memberId)) return;
+      if (r.txId && activeNormalIds.has(r.txId)) return;
+      combined.push({
+        id: r.id,
+        memberId: r.memberId,
+        tanggal: r.tanggal,
+        jam: r.jam || '00:00',
+        keterangan: r.keterangan,
+        cbg: '-',
+        tipe: r.tipe,
+        nominal: r.nominal,
+        saldoSetelah: 0,
+        kategori: r.kategori,
+        referensiId: r.setoranId,
+        isRedMutasi: true,
+        redReason: r.reason,
+        redSetoranId: r.setoranId,
+      });
+    });
+
+    return combined.sort(compareMemberTransactionsDesc);
+  }, [state.memberTransactions, state.deletedTransactionIds, availableMembers, selectedMemberId, selectedWilayah, redMutasiEntries, redByTxIdMap]);
+
+  const redTransactionIds = useMemo(
+    () => matchingTransactions.filter((t) => t.isRedMutasi).map((t) => t.id),
+    [matchingTransactions]
+  );
 
   // Search filtered transactions for display in list
   const displayedTransactions = useMemo(() => {
@@ -111,6 +174,7 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         tx.keterangan?.toLowerCase().includes(q) ||
         tx.tanggal?.toLowerCase().includes(q) ||
         tx.nominal?.toString().includes(q) ||
+        (tx.isRedMutasi && 'mutasi merah dobble'.includes(q)) ||
         mem?.nama?.toLowerCase().includes(q) ||
         mem?.nomorRekening?.toLowerCase().includes(q) ||
         mem?.nomorAnggota?.toLowerCase().includes(q)
@@ -125,16 +189,16 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
     }
   }, [matchingTransactions.length, selectAllTx]);
 
-  // Calculate totals
+  // Calculate totals (strictly from posted non-red mutasi)
   const totalMasuk = useMemo(() => {
     return matchingTransactions
-      .filter((t) => t.tipe === 'masuk')
+      .filter((t) => !t.isRedMutasi && t.tipe === 'masuk')
       .reduce((acc, t) => acc + t.nominal, 0);
   }, [matchingTransactions]);
 
   const totalKeluar = useMemo(() => {
     return matchingTransactions
-      .filter((t) => t.tipe === 'keluar')
+      .filter((t) => !t.isRedMutasi && t.tipe === 'keluar')
       .reduce((acc, t) => acc + t.nominal, 0);
   }, [matchingTransactions]);
 
@@ -167,6 +231,13 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
       setSelectAllTx(true);
       setSelectedTxIds(matchingTransactions.map((t) => t.id));
     }
+  };
+
+  const handleSelectRedOnly = () => {
+    setSelectAllTx(false);
+    setSelectedTxIds(redTransactionIds);
+    setResetBalance(false);
+    setErrorMessage('');
   };
 
   const activeSelectedIds = selectAllTx
@@ -323,181 +394,213 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
         await updateState(() => resData.state);
       }
 
-      // Hapus dokumen transaksi langsung dari Firestore
+      // Hapus dokumen transaksi & setoran dobble langsung dari Firestore
       try {
         const { db } = await import('../lib/firebase');
         const { doc, deleteDoc } = await import('firebase/firestore');
         for (const txId of activeSelectedIds) {
-          await deleteDoc(doc(db, 'transactions', txId)).catch(() => {});
+          if (txId.startsWith('red-dep-')) {
+            const setoranId = txId.slice('red-dep-'.length);
+            if (setoranId) {
+              await deleteDoc(doc(db, 'setoran', setoranId)).catch(() => {});
+              await deleteDoc(doc(db, 'transactions', `tx-dep-${setoranId}`)).catch(() => {});
+              await deleteDoc(doc(db, 'transactions', `tx-sdk-${setoranId}`)).catch(() => {});
+            }
+          } else {
+            await deleteDoc(doc(db, 'transactions', txId)).catch(() => {});
+          }
         }
       } catch {}
 
-      // Update client state fallback
-      const targetIdsSet = new Set(activeSelectedIds);
-      await updateState((prev) => {
-        const remainingTx = prev.memberTransactions.filter((tx) => !targetIdsSet.has(tx.id));
+      // Update client state fallback hanya bila server tidak mengembalikan state terbaru
+      if (!resData.state) {
+        const targetIdsSet = new Set(activeSelectedIds);
+        const redSetoranIdsFromSelection = activeSelectedIds
+          .filter((id) => id.startsWith('red-dep-'))
+          .map((id) => id.slice('red-dep-'.length))
+          .filter(Boolean);
 
-        // Tentukan anggota yang terpengaruh
-        const affectedMemberIds = new Set<string>();
-        // Catat memberId dari mutasi yang dihapus
-        prev.memberTransactions
-          .filter((tx) => targetIdsSet.has(tx.id))
-          .forEach((tx) => { if (tx.memberId) affectedMemberIds.add(tx.memberId); });
+        await updateState((prev) => {
+          const redSetoranSet = new Set(redSetoranIdsFromSelection);
+          const extraCanonTxIds: string[] = [];
+          redSetoranIdsFromSelection.forEach((sid) => {
+            extraCanonTxIds.push(`tx-dep-${sid}`, `tx-sdk-${sid}`);
+          });
+          const extraCanonSet = new Set(extraCanonTxIds);
 
-        if (selectedMemberId !== 'semua') {
-          affectedMemberIds.add(selectedMemberId);
-        } else if (selectedWilayah !== 'semua') {
-          prev.members.filter((m) => m.wilayah === selectedWilayah).forEach((m) => affectedMemberIds.add(m.id));
-        } else {
-          prev.members.forEach((m) => affectedMemberIds.add(m.id));
-        }
+          const remainingTx = prev.memberTransactions.filter(
+            (tx) =>
+              !targetIdsSet.has(tx.id) &&
+              !extraCanonSet.has(tx.id) &&
+              !(tx.referensiId && redSetoranSet.has(tx.referensiId))
+          );
 
-        // Sinkronisasi saldo simpanan & recompute running balances
-        const updatedMembers = prev.members.map((m) => {
-          if (!affectedMemberIds.has(m.id)) return m;
+          // Tentukan anggota yang terpengaruh
+          const affectedMemberIds = new Set<string>();
+          prev.memberTransactions
+            .filter((tx) => targetIdsSet.has(tx.id) || (tx.referensiId && redSetoranSet.has(tx.referensiId)))
+            .forEach((tx) => {
+              if (tx.memberId) affectedMemberIds.add(tx.memberId);
+            });
+          redMutasiEntries
+            .filter((r) => targetIdsSet.has(r.id))
+            .forEach((r) => {
+              if (r.memberId) affectedMemberIds.add(r.memberId);
+            });
 
-          if (resetBalance) {
+          if (selectedMemberId !== 'semua') {
+            affectedMemberIds.add(selectedMemberId);
+          } else if (selectedWilayah !== 'semua') {
+            prev.members.filter((m) => m.wilayah === selectedWilayah).forEach((m) => affectedMemberIds.add(m.id));
+          } else if (!redSetoranIdsFromSelection.length) {
+            prev.members.forEach((m) => affectedMemberIds.add(m.id));
+          }
+
+          // Sinkronisasi saldo simpanan & recompute running balances
+          const updatedMembers = prev.members.map((m) => {
+            if (!affectedMemberIds.has(m.id)) return m;
+
+            if (resetBalance) {
+              return {
+                ...m,
+                saldoPokok: 0,
+                saldoZakatFitrah: 0,
+                saldoQurban: 0,
+                saldoUmum: 0,
+                totalSimpanan: 0,
+                jumlahHariPokok: 0,
+              };
+            }
+
+            const mTx = remainingTx
+              .filter((t) => t.memberId === m.id)
+              .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
+
+            let p = 0, u = 0, z = 0, q = 0;
+            mTx.forEach((tx) => {
+              const nom = tx.nominal || 0;
+              const isKewajibanSplit =
+                tx.kategori === 'pokok' ||
+                String(tx.id).startsWith('tx-wajib-') ||
+                String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+                String(tx.keterangan || '').toUpperCase().includes('POKOK') ||
+                String(tx.keterangan || '').includes('50% Pokok');
+
+              if (tx.tipe === 'masuk') {
+                if (isKewajibanSplit) {
+                  const pPart = Math.floor(nom * 0.5);
+                  const qPart = Math.floor(nom * 0.25);
+                  const zPart = nom - pPart - qPart;
+                  p += pPart;
+                  q += qPart;
+                  z += zPart;
+                } else if (tx.kategori === 'qurban') q += nom;
+                else if (tx.kategori === 'zakat') z += nom;
+                else if (tx.kategori !== 'sedekah') u += nom;
+              } else if (tx.kategori !== 'sedekah') {
+                if (isKewajibanSplit) {
+                  const pPart = Math.floor(nom * 0.5);
+                  const qPart = Math.floor(nom * 0.25);
+                  const zPart = nom - pPart - qPart;
+                  p = Math.max(0, p - pPart);
+                  q = Math.max(0, q - qPart);
+                  z = Math.max(0, z - zPart);
+                } else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
+                else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
+                else u = Math.max(0, u - nom);
+              }
+              tx.saldoSetelah = p + u;
+            });
+
             return {
               ...m,
-              saldoPokok: 0,
-              saldoZakatFitrah: 0,
-              saldoQurban: 0,
-              saldoUmum: 0,
-              totalSimpanan: 0,
-              jumlahHariPokok: 0,
+              saldoPokok: p,
+              saldoUmum: u,
+              saldoZakatFitrah: z,
+              saldoQurban: q,
+              totalSimpanan: p + u + z + q,
+              jumlahHariPokok: Math.floor(p / 1000),
             };
-          }
-
-          // Hitung ulang akumulasi persis dari mutasi yang tersisa
-          const mTx = remainingTx
-            .filter((t) => t.memberId === m.id)
-            .sort((a, b) => `${a.tanggal} ${a.jam || '00:00'}`.localeCompare(`${b.tanggal} ${b.jam || '00:00'}`));
-
-          let p = 0, u = 0, z = 0, q = 0, run = 0;
-          mTx.forEach((tx) => {
-            const nom = tx.nominal || 0;
-            const isKewajibanSplit =
-              tx.kategori === 'pokok' ||
-              String(tx.id).startsWith('tx-wajib-') ||
-              String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
-              String(tx.keterangan || '').toUpperCase().includes('POKOK') ||
-              String(tx.keterangan || '').includes('50% Pokok');
-
-            if (tx.tipe === 'masuk') {
-              run += nom;
-              if (isKewajibanSplit) {
-                const pPart = Math.floor(nom * 0.5);
-                const qPart = Math.floor(nom * 0.25);
-                const zPart = nom - pPart - qPart;
-                p += pPart;
-                q += qPart;
-                z += zPart;
-              } else if (tx.kategori === 'qurban') q += nom;
-              else if (tx.kategori === 'zakat') z += nom;
-              else u += nom;
-            } else {
-              run = Math.max(0, run - nom);
-              if (isKewajibanSplit) {
-                const pPart = Math.floor(nom * 0.5);
-                const qPart = Math.floor(nom * 0.25);
-                const zPart = nom - pPart - qPart;
-                p = Math.max(0, p - pPart);
-                q = Math.max(0, q - qPart);
-                z = Math.max(0, z - zPart);
-              } else if (tx.kategori === 'qurban') q = Math.max(0, q - nom);
-              else if (tx.kategori === 'zakat') z = Math.max(0, z - nom);
-              else u = Math.max(0, u - nom);
-            }
-            tx.saldoSetelah = p + u;
           });
+
+          const deletedTxs = prev.memberTransactions.filter((tx) => targetIdsSet.has(tx.id));
+          const deletedRefIds = new Set<string>([
+            ...deletedTxs.map((t) => t.referensiId || t.id),
+            ...redSetoranIdsFromSelection,
+          ]);
+          const deletedTsTokens = new Set<string>();
+          deletedTxs.forEach((tx) => {
+            const tsM = String(tx.id).match(/(\d{10,})/);
+            if (tsM) deletedTsTokens.add(tsM[1]);
+          });
+          const nextDeletedKasIds: string[] = [];
+
+          let remainingKas = (prev.kasList || []).filter((k) => {
+            if (targetIdsSet.has(k.id)) {
+              nextDeletedKasIds.push(k.id);
+              return false;
+            }
+            if (k.referensiId && (deletedRefIds.has(k.referensiId) || targetIdsSet.has(k.referensiId))) {
+              nextDeletedKasIds.push(k.id);
+              return false;
+            }
+            const km = String(k.id).match(/(\d{10,})/);
+            if (km && deletedTsTokens.has(km[1])) {
+              nextDeletedKasIds.push(k.id);
+              return false;
+            }
+            return true;
+          });
+
+          const recomputeKas = (type: 'anggota' | 'koperasi') => {
+            const items = remainingKas
+              .filter((k) => k.bukuKas === type)
+              .slice()
+              .sort((a, b) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+            let run = 0;
+            const map = new Map<string, number>();
+            items.forEach((it) => {
+              if (it.status === 'approved') {
+                run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
+              }
+              map.set(it.id, run);
+            });
+            return map;
+          };
+          const mapAnggota = recomputeKas('anggota');
+          const mapKoperasi = recomputeKas('koperasi');
+          remainingKas = remainingKas.map((k) => ({
+            ...k,
+            saldoKasSetelah:
+              k.bukuKas === 'anggota'
+                ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
+                : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
+          }));
+
+          const nextDeletedSetoranIds = Array.from(deletedRefIds);
+          const remainingSetoran = (prev.setoranList || []).filter((s) => !deletedRefIds.has(s.id) && !targetIdsSet.has(s.id));
+          const remainingSedekah = (prev.sedekahList || []).filter((s) => !deletedRefIds.has(s.id) && !targetIdsSet.has(s.id));
+
+          const audit = createAuditLog(
+            currentAdmin,
+            'Hapus Transaksi Anggota',
+            `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan, mutasi, Buku Kas Anggota & setoran berhasil disinkronkan.`
+          );
 
           return {
-            ...m,
-            saldoPokok: p,
-            saldoUmum: u,
-            saldoZakatFitrah: z,
-            saldoQurban: q,
-            totalSimpanan: p + u + z + q,
-            jumlahHariPokok: Math.floor(p / 1000),
+            ...prev,
+            members: updatedMembers,
+            memberTransactions: remainingTx,
+            kasList: remainingKas,
+            setoranList: remainingSetoran,
+            sedekahList: remainingSedekah,
+            deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...activeSelectedIds, ...extraCanonTxIds])),
+            deletedKasIds: Array.from(new Set([...(prev.deletedKasIds || []), ...nextDeletedKasIds])),
+            deletedSetoranIds: Array.from(new Set([...(prev.deletedSetoranIds || []), ...nextDeletedSetoranIds])),
+            auditLogs: [audit, ...prev.auditLogs],
           };
         });
-
-        // Sinkronkan juga penghapusan catatan terkait pada Buku Kas Anggota & Buku Kas Koperasi
-        const deletedTxs = prev.memberTransactions.filter((tx) => targetIdsSet.has(tx.id));
-        const deletedRefIds = new Set(deletedTxs.map((t) => t.referensiId || t.id));
-        const deletedTsTokens = new Set<string>();
-        deletedTxs.forEach((tx) => {
-          const tsM = String(tx.id).match(/(\d{10,})/);
-          if (tsM) deletedTsTokens.add(tsM[1]);
-        });
-        const nextDeletedKasIds: string[] = [];
-
-        let remainingKas = (prev.kasList || []).filter((k) => {
-          if (targetIdsSet.has(k.id)) {
-            nextDeletedKasIds.push(k.id);
-            return false;
-          }
-          if (k.referensiId && (deletedRefIds.has(k.referensiId) || targetIdsSet.has(k.referensiId))) {
-            nextDeletedKasIds.push(k.id);
-            return false;
-          }
-          const km = String(k.id).match(/(\d{10,})/);
-          if (km && deletedTsTokens.has(km[1])) {
-            nextDeletedKasIds.push(k.id);
-            return false;
-          }
-          return true;
-        });
-
-        // Recompute running saldoKasSetelah pada buku kas
-        const recomputeKas = (type: 'anggota' | 'koperasi') => {
-          const items = remainingKas
-            .filter((k) => k.bukuKas === type)
-            .slice()
-            .sort((a, b) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
-          let run = 0;
-          const map = new Map<string, number>();
-          items.forEach((it) => {
-            if (it.status === 'approved') {
-              run = it.tipe === 'masuk' ? run + it.nominal : Math.max(0, run - it.nominal);
-            }
-            map.set(it.id, run);
-          });
-          return map;
-        };
-        const mapAnggota = recomputeKas('anggota');
-        const mapKoperasi = recomputeKas('koperasi');
-        remainingKas = remainingKas.map((k) => ({
-          ...k,
-          saldoKasSetelah:
-            k.bukuKas === 'anggota'
-              ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
-              : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
-        }));
-
-        const nextDeletedSetoranIds = Array.from(deletedRefIds);
-        const remainingSetoran = (prev.setoranList || []).filter((s) => !deletedRefIds.has(s.id) && !targetIdsSet.has(s.id));
-        const remainingSedekah = (prev.sedekahList || []).filter((s) => !deletedRefIds.has(s.id) && !targetIdsSet.has(s.id));
-
-        const audit = createAuditLog(
-          currentAdmin,
-          'Hapus Transaksi Anggota',
-          `Super Admin menyetujui penghapusan ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel}. Alasan: "${alasan.trim()}". Saldo simpanan, mutasi, Buku Kas Anggota & setoran berhasil disinkronkan.`
-        );
-
-        return {
-          ...prev,
-          members: updatedMembers,
-          memberTransactions: remainingTx,
-          kasList: remainingKas,
-          setoranList: remainingSetoran,
-          sedekahList: remainingSedekah,
-          deletedTransactionIds: Array.from(new Set([...(prev.deletedTransactionIds || []), ...activeSelectedIds])),
-          deletedKasIds: Array.from(new Set([...(prev.deletedKasIds || []), ...nextDeletedKasIds])),
-          deletedSetoranIds: Array.from(new Set([...(prev.deletedSetoranIds || []), ...nextDeletedSetoranIds])),
-          auditLogs: [audit, ...prev.auditLogs],
-        };
-      });
+      }
 
       alert(`✓ Berhasil! Sebanyak ${activeSelectedIds.length} transaksi anggota untuk ${targetLabel} telah resmi dihapus dan saldo rekening disesuaikan.`);
       onClose();
@@ -601,25 +704,43 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
           {/* 2. Ringkasan & Alat Seleksi */}
           <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 space-y-2">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <span className="font-extrabold text-white text-xs flex items-center gap-1.5">
+              <span className="font-extrabold text-white text-xs flex items-center gap-1.5 flex-wrap">
                 <span>Ditemukan:</span>
                 <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-mono font-black border border-rose-500/30">
                   {matchingTransactions.length} Transaksi
                 </span>
+                {redTransactionIds.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-red-600/25 text-red-400 font-mono font-black border border-red-500/50">
+                    {redTransactionIds.length} Mutasi Merah
+                  </span>
+                )}
                 <span className="text-slate-400 font-normal">
                   ({activeSelectedIds.length} dipilih untuk dihapus)
                 </span>
               </span>
 
               {matchingTransactions.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleToggleSelectAll}
-                  className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer bg-slate-800/80 px-2 py-1 rounded-lg border border-slate-700"
-                >
-                  {selectAllTx ? <CheckSquare className="w-3.5 h-3.5 text-rose-400" /> : <Square className="w-3.5 h-3.5" />}
-                  <span>{selectAllTx ? 'Batal Pilih Semua' : 'Pilih Semua Transaksi'}</span>
-                </button>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {redTransactionIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleSelectRedOnly}
+                      className="text-[11px] text-red-400 hover:text-red-300 font-black flex items-center gap-1 cursor-pointer bg-red-950/60 px-2.5 py-1 rounded-lg border border-red-500/50"
+                      title="Pilih hanya mutasi berwarna merah (setoran dobble / tidak masuk Daftar Anggota & Buku Kas)"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                      <span>Pilih Mutasi Merah ({redTransactionIds.length})</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleToggleSelectAll}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer bg-slate-800/80 px-2 py-1 rounded-lg border border-slate-700"
+                  >
+                    {selectAllTx ? <CheckSquare className="w-3.5 h-3.5 text-rose-400" /> : <Square className="w-3.5 h-3.5" />}
+                    <span>{selectAllTx ? 'Batal Pilih Semua' : 'Pilih Semua Transaksi'}</span>
+                  </button>
+                </div>
               )}
             </div>
 
@@ -682,7 +803,11 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                       key={tx.id}
                       onClick={() => handleToggleTx(tx.id)}
                       className={`p-2.5 rounded-xl flex items-center justify-between gap-2.5 transition-all cursor-pointer select-none my-0.5 ${
-                        isChecked
+                        tx.isRedMutasi
+                          ? isChecked
+                            ? 'bg-red-950/70 border-2 border-red-500 text-red-300 shadow-sm'
+                            : 'bg-red-950/35 border border-red-500/50 text-red-400 hover:bg-red-950/55'
+                          : isChecked
                           ? 'bg-rose-950/40 border border-rose-500/50 text-white shadow-sm'
                           : 'hover:bg-slate-800/60 opacity-65 text-slate-300'
                       }`}
@@ -703,19 +828,29 @@ export const HapusTransaksiAnggotaModal: React.FC<HapusTransaksiAnggotaModalProp
                           />
                         </div>
                         <div className="truncate min-w-0">
-                          <div className="font-bold text-white text-[11px] truncate flex items-center gap-1.5">
+                          <div className={`font-bold text-[11px] truncate flex items-center gap-1.5 ${tx.isRedMutasi ? 'text-red-400' : 'text-white'}`}>
                             <span className="truncate">{tx.keterangan || 'Transaksi Simpanan'}</span>
-                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono shrink-0">
-                              {tx.kategori}
-                            </span>
+                            {tx.isRedMutasi ? (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/40 font-black shrink-0">
+                                MUTASI MERAH (TIDAK MASUK SALDO & BUKU KAS)
+                              </span>
+                            ) : (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono shrink-0">
+                                {tx.kategori}
+                              </span>
+                            )}
                           </div>
-                          <div className="text-[10px] text-slate-400 truncate mt-0.5">
-                            {tx.tanggal} {tx.jam || ''} • <b className="text-slate-300">{mem?.nama || 'Anggota'}</b> ({mem?.wilayah || '-'})
+                          <div className={`text-[10px] truncate mt-0.5 ${tx.isRedMutasi ? 'text-red-400/90 font-semibold' : 'text-slate-400'}`}>
+                            {tx.tanggal} {tx.jam || ''} • <b className={tx.isRedMutasi ? 'text-red-300' : 'text-slate-300'}>{mem?.nama || 'Anggota'}</b> ({mem?.wilayah || '-'})
                           </div>
                         </div>
                       </div>
                       <span className={`font-mono font-bold text-xs shrink-0 ${
-                        tx.tipe === 'masuk' ? 'text-emerald-400' : 'text-rose-400'
+                        tx.isRedMutasi
+                          ? 'text-red-400'
+                          : tx.tipe === 'masuk'
+                          ? 'text-emerald-400'
+                          : 'text-rose-400'
                       }`}>
                         {tx.tipe === 'masuk' ? '+' : '-'}{formatRupiah(tx.nominal)}
                       </span>

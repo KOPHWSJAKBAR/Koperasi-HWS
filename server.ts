@@ -2222,6 +2222,17 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       ).catch(() => {});
     }
 
+    const filteredRemoteSedekah = remoteSedekah.filter((sdk) => sdk && sdk.id && !effDelSet.has(sdk.id));
+    const staleRemoteSedekah = remoteSedekah.filter((sdk) => sdk && sdk.id && effDelSet.has(sdk.id));
+    if (staleRemoteSedekah.length > 0) {
+      Promise.all(
+        staleRemoteSedekah.map(async (sdk) => {
+          await deleteDoc(doc(db, 'sedekah', sdk.id)).catch(() => {});
+          serverFirestoreHashMap.set(`deleted_setoran/${sdk.id}`, '1');
+        })
+      ).catch(() => {});
+    }
+
     const remoteSlicePayload = {
       ...remoteSettingsPatch,
       members: remoteMembers,
@@ -2230,7 +2241,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       memberTransactions: filteredRemoteTx,
       setoranList: filteredRemoteSetoran,
       kasList: filteredRemoteKas,
-      sedekahList: remoteSedekah,
+      sedekahList: filteredRemoteSedekah,
       chatMessages: filteredRemoteChats,
       suratList: filteredRemoteSurat,
       auditLogs: remoteLogs,
@@ -2242,7 +2253,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       filteredRemoteTx.length > 0 ||
       filteredRemoteSetoran.length > 0 ||
       filteredRemoteKas.length > 0 ||
-      remoteSedekah.length > 0 ||
+      filteredRemoteSedekah.length > 0 ||
       filteredRemoteChats.length > 0 ||
       filteredRemoteSurat.length > 0 ||
       remoteLogs.length > 0 ||
@@ -2258,6 +2269,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
         true
       );
 
+      const beforeDelSetCount = (currentState.deletedSetoranIds || []).length;
       const beforeDelTxCount = (currentState.deletedTransactionIds || []).length;
       const beforeDelKasCount = (currentState.deletedKasIds || []).length;
 
@@ -2294,6 +2306,13 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
           healedRemoteDiff = true;
         }
       });
+      const remoteSetMap = new Map(filteredRemoteSetoran.map((s: any) => [s.id, s]));
+      (currentState.deletedSetoranIds || []).forEach((delId: string) => {
+        if (remoteSetMap.has(delId)) {
+          serverFirestoreHashMap.delete(`deleted_setoran/${delId}`);
+          healedRemoteDiff = true;
+        }
+      });
       (currentState.deletedKasIds || []).forEach((delId: string) => {
         if (remoteKasMap.has(delId)) {
           serverFirestoreHashMap.delete(`deleted_kas/${delId}`);
@@ -2309,7 +2328,9 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
 
       const remoteDelKasSorted = JSON.stringify([...(remoteSettingsPatch.deletedKasIds || [])].sort());
       const curDelKasSorted = JSON.stringify([...(currentState.deletedKasIds || [])].sort());
-      if (remoteDelKasSorted !== curDelKasSorted) {
+      const remoteDelSetSorted = JSON.stringify([...(remoteSettingsPatch.deletedSetoranIds || [])].sort());
+      const curDelSetSorted = JSON.stringify([...(currentState.deletedSetoranIds || [])].sort());
+      if (remoteDelKasSorted !== curDelKasSorted || remoteDelSetSorted !== curDelSetSorted) {
         serverFirestoreHashMap.delete('settings/general');
         healedRemoteDiff = true;
       }
@@ -2317,6 +2338,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       const afterDigest = buildStateSyncDigest(currentState);
       const afterCount = (currentState.members || []).length;
       const dedupPurged =
+        (currentState.deletedSetoranIds || []).length !== beforeDelSetCount ||
         (currentState.deletedTransactionIds || []).length !== beforeDelTxCount ||
         (currentState.deletedKasIds || []).length !== beforeDelKasCount;
 
@@ -2661,13 +2683,26 @@ async function initServerFirestoreRealtimeWatchers() {
           currentState.members = deduplicateMembersServer(currentState.members || [], currentState.deletedMemberIds);
           currentState = reconcileLegacyMemberNumbers(currentState).state;
         }
+        const beforeDeltaDelSet = new Set(currentState.deletedSetoranIds || []);
         if (needsFinancialReconcile) {
           currentState = reconcileBalancesWithDeposits(currentState).state;
         }
+        const newlySuppressedSetoranIds = (currentState.deletedSetoranIds || []).filter(
+          (id: string) => !beforeDeltaDelSet.has(id)
+        );
 
-        saveDatabase(currentState, { skipFirestore: true });
+        saveDatabase(currentState, { skipFirestore: newlySuppressedSetoranIds.length === 0 });
         for (const ev of broadcastQueue) {
+          if (ev.type === 'SETORAN_UPDATED' && ev.payload?.deposit?.id && newlySuppressedSetoranIds.includes(ev.payload.deposit.id)) {
+            continue;
+          }
           broadcastEvent(ev.type, ev.payload);
+        }
+        if (newlySuppressedSetoranIds.length > 0) {
+          broadcastEvent('SETORAN_DELETED', {
+            deletedCount: newlySuppressedSetoranIds.length,
+            deletedIds: newlySuppressedSetoranIds,
+          });
         }
         broadcastStatePulse(`firestore_${colName}`);
       } catch {}
@@ -3125,6 +3160,194 @@ function compareMemberTransactionsDescServer(a: any, b: any): number {
   return compareMemberTransactionsChronoServer(b, a);
 }
 
+const DOUBLE_DEPOSIT_START_DATE = '2026-11-24';
+
+function getWibDateStrServer(date: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const y = parts.find((p) => p.type === 'year')?.value || String(date.getUTCFullYear());
+    const m = parts.find((p) => p.type === 'month')?.value || String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = parts.find((p) => p.type === 'day')?.value || String(date.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  } catch {
+    return new Date(date.getTime() + 7 * 60 * 60 * 1000).toISOString().split('T')[0];
+  }
+}
+
+function getDepositWibDateStrServer(s: any): string {
+  if (!s) return '';
+  const rawCreated = String(s.createdAt || '').trim();
+  if (rawCreated) {
+    const parsed = new Date(rawCreated);
+    if (!isNaN(parsed.getTime())) {
+      return getWibDateStrServer(parsed);
+    }
+    if (/^\d{4}-\d{2}-\d{2}/.test(rawCreated)) {
+      return rawCreated.slice(0, 10);
+    }
+  }
+  const rawTgl = String(s.tanggal || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawTgl)) {
+    return rawTgl.slice(0, 10);
+  }
+  return '';
+}
+
+function cleanStrServer(v: any): string {
+  return String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function getDepositDoubleSignatureServer(
+  s: any,
+  members: any[] = [],
+  deletedMemSet?: Set<string>
+): string {
+  if (!s) return '';
+  const wibDate = getDepositWibDateStrServer(s);
+  if (!wibDate || wibDate < DOUBLE_DEPOSIT_START_DATE) return '';
+
+  const sMemId = String(s.memberId || '').trim();
+  let memKey = '';
+  if (sMemId && sMemId !== 'donatur-umum' && !(deletedMemSet && deletedMemSet.has(sMemId))) {
+    const foundById = (members || []).find((m: any) => m && m.id === sMemId);
+    memKey = foundById?.id || sMemId;
+  }
+  if (!memKey && s.memberRekening && String(s.memberRekening).trim() !== '-') {
+    const cleanedRek = cleanStrServer(s.memberRekening);
+    const foundByRek = (members || []).find((m: any) => m && cleanStrServer(m.nomorRekening) === cleanedRek);
+    memKey = foundByRek?.id || `rek:${cleanedRek}`;
+  }
+  if (!memKey) {
+    memKey = `nama:${String(s.memberNama || s.donaturNama || '').trim().toLowerCase()}`;
+  }
+
+  let jenisKey = String(
+    s.jenis || (String(s.id || '').startsWith('sdk-') ? 'sedekah' : 'kewajiban')
+  )
+    .trim()
+    .toLowerCase();
+  if (jenisKey === 'sedekah') {
+    const note = String(s.catatanAnggota || s.namaBerbagiKustom || s.keterangan || '').toLowerCase();
+    if (note.includes('subuh')) jenisKey = 'sedekah_subuh';
+    else if (note.includes('jumat')) jenisKey = 'sedekah_jumat';
+    else if (note.includes('umum')) jenisKey = 'sedekah_umum';
+  }
+  const metodeKey = s.metode === 'tabungan_umum' || s.sumberDana === 'tabungan_umum' ? 'tabungan_umum' : 'qris';
+  const nom = Number(s.nominal) || 0;
+  return `${memKey}|${jenisKey}|${metodeKey}|${nom}|${wibDate}`;
+}
+
+function findBlockingDoubleDepositServer(
+  candidate: any,
+  existingList: any[],
+  members: any[] = [],
+  deletedSetoranIds: string[] = [],
+  deletedMemberIds: string[] = []
+): any | null {
+  if (!candidate) return null;
+  const delSetSet = new Set(deletedSetoranIds || []);
+  const delMemSet = new Set(deletedMemberIds || []);
+  const targetSig = getDepositDoubleSignatureServer(candidate, members, delMemSet);
+  if (!targetSig) return null;
+
+  for (const existing of existingList || []) {
+    if (!existing || !existing.id || delSetSet.has(existing.id)) continue;
+    if (candidate.id && existing.id === candidate.id) continue;
+    const st = String(existing.status || '').toLowerCase();
+    if (st !== 'pending' && st !== 'disetujui' && st !== 'approved') continue;
+    if (getDepositDoubleSignatureServer(existing, members, delMemSet) === targetSig) {
+      return existing;
+    }
+  }
+  return null;
+}
+
+function deduplicateSetoranListPostCutoffServer(
+  list: any[],
+  members: any[] = [],
+  deletedMemSet?: Set<string>
+): { list: any[]; removedIds: string[] } {
+  const input = Array.isArray(list) ? list : [];
+  if (input.length <= 1) return { list: input, removedIds: [] };
+
+  const sigGroups = new Map<string, any[]>();
+  input.forEach((s) => {
+    if (!s || !s.id) return;
+    const sig = getDepositDoubleSignatureServer(s, members, deletedMemSet);
+    if (!sig) return;
+    if (!sigGroups.has(sig)) sigGroups.set(sig, []);
+    sigGroups.get(sig)!.push(s);
+  });
+
+  const suppressSet = new Set<string>();
+  const toTs = (iso?: string) => {
+    const t = iso ? new Date(iso).getTime() : 0;
+    return isNaN(t) ? 0 : t;
+  };
+  const isApprovedSt = (s: any) => s?.status === 'disetujui' || s?.status === 'approved';
+  const isRejectedSt = (s: any) => s?.status === 'ditolak' || s?.status === 'rejected';
+
+  sigGroups.forEach((group) => {
+    if (group.length <= 1) return;
+    const activeItems = group.filter((s) => !isRejectedSt(s));
+    const rejectedItems = group.filter((s) => isRejectedSt(s));
+
+    let keptActive: any = null;
+    if (activeItems.length > 0) {
+      const sortedActive = activeItems.slice().sort((a, b) => {
+        const aApp = isApprovedSt(a);
+        const bApp = isApprovedSt(b);
+        if (aApp !== bApp) return aApp ? -1 : 1;
+        if (aApp && bApp) {
+          const vDiff = toTs(a.verifiedAt || a.createdAt) - toTs(b.verifiedAt || b.createdAt);
+          if (vDiff !== 0) return vDiff;
+        }
+        const cDiff = toTs(a.createdAt) - toTs(b.createdAt);
+        if (cDiff !== 0) return cDiff;
+        return String(a.id).localeCompare(String(b.id));
+      });
+      keptActive = sortedActive[0];
+      for (let i = 1; i < sortedActive.length; i++) {
+        suppressSet.add(sortedActive[i].id);
+      }
+    }
+
+    if (rejectedItems.length > 0) {
+      const refCutoffTs = keptActive ? toTs(keptActive.verifiedAt || keptActive.createdAt) : 0;
+      const nonDupRejected: any[] = [];
+      rejectedItems.forEach((r) => {
+        const reason = String(r.alasanTolak || r.catatanAdmin || '').toLowerCase();
+        if (reason.includes('duplikat') || reason.includes('double')) {
+          suppressSet.add(r.id);
+          return;
+        }
+        if (keptActive && toTs(r.createdAt) <= refCutoffTs) {
+          suppressSet.add(r.id);
+          return;
+        }
+        nonDupRejected.push(r);
+      });
+      if (nonDupRejected.length > 1) {
+        const sortedRej = nonDupRejected.slice().sort((a, b) => toTs(b.createdAt) - toTs(a.createdAt));
+        for (let i = 1; i < sortedRej.length; i++) {
+          suppressSet.add(sortedRej[i].id);
+        }
+      }
+    }
+  });
+
+  if (suppressSet.size === 0) return { list: input, removedIds: [] };
+  return {
+    list: input.filter((s) => s && s.id && !suppressSet.has(s.id)),
+    removedIds: Array.from(suppressSet),
+  };
+}
+
 // Authoritative Reconciliation Function for Member Balances, Cash Books & Sedekah (Anti-Resurrection of Deleted Data)
 function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCount: number; addedKasCount: number; addedTxCount: number } {
   if (!state || typeof state !== 'object') {
@@ -3145,7 +3368,7 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
 
   // 2. Filter setoranList strictly: must not be in deletedSetoranIds AND must belong to an active member (or donatur-umum for sedekah)
   const rawSetoran: any[] = Array.isArray(state.setoranList) ? state.setoranList : [];
-  const validSetoran: any[] = [];
+  let validSetoran: any[] = [];
   rawSetoran.forEach((s: any) => {
     if (!s || !s.id) return;
     if (deletedSetSet.has(s.id)) return;
@@ -3255,6 +3478,13 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
       });
     }
   });
+
+  const dedupedPostCutoff = deduplicateSetoranListPostCutoffServer(validSetoran, members, deletedMemSet);
+  dedupedPostCutoff.removedIds.forEach((remId: string) => {
+    deletedSetSet.add(remId);
+    sedekahMap.delete(remId);
+  });
+  validSetoran = dedupedPostCutoff.list;
 
   const approvedAllDeposits = validSetoran.filter(
     (s: any) =>
@@ -4054,6 +4284,8 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
 let currentState = loadDatabase();
 const beforeBootTxCbgDigest = (currentState.memberTransactions || []).map((t: any) => `${t.id}:${t.cbg || ''}:${t.saldoSetelah || 0}`).join('|');
 const beforeBootKasMetaDigest = (currentState.kasList || []).map((k: any) => `${k.id}:${k.memberId || ''}:${k.jam || ''}:${k.saldoKasSetelah || 0}`).join('|');
+const beforeBootSetoranCount = (currentState.setoranList || []).length;
+const beforeBootDelSetCount = (currentState.deletedSetoranIds || []).length;
 const beforeBootTxCount = (currentState.memberTransactions || []).length;
 const beforeBootKasCount = (currentState.kasList || []).length;
 const beforeBootDelTxCount = (currentState.deletedTransactionIds || []).length;
@@ -4066,6 +4298,8 @@ const afterBootKasMetaDigest = (currentState.kasList || []).map((k: any) => `${k
 const bootCbgChanged = beforeBootTxCbgDigest !== afterBootTxCbgDigest;
 const bootKasChanged = beforeBootKasMetaDigest !== afterBootKasMetaDigest;
 const bootDedupChanged =
+  (currentState.setoranList || []).length !== beforeBootSetoranCount ||
+  (currentState.deletedSetoranIds || []).length !== beforeBootDelSetCount ||
   (currentState.memberTransactions || []).length !== beforeBootTxCount ||
   (currentState.kasList || []).length !== beforeBootKasCount ||
   (currentState.deletedTransactionIds || []).length !== beforeBootDelTxCount ||
@@ -4839,6 +5073,27 @@ async function startServer() {
         });
       }
 
+      // Deteksi setoran double mulai tanggal 24/11/2026 (WIB): jangan masukkan atau tampilkan data double
+      const candidateForDupCheck = {
+        ...deposit,
+        createdAt: deposit.createdAt || new Date().toISOString(),
+        ...(sedekahEntry?.namaBerbagiKustom ? { namaBerbagiKustom: sedekahEntry.namaBerbagiKustom } : {}),
+      };
+      const blockingDup = findBlockingDoubleDepositServer(
+        candidateForDupCheck,
+        currentState.setoranList || [],
+        currentState.members || [],
+        currentState.deletedSetoranIds || [],
+        currentState.deletedMemberIds || []
+      );
+      if (blockingDup) {
+        return res.status(409).json({
+          error: `Setoran ganda terdeteksi: pengajuan ${deposit.jenis} sebesar Rp ${Number(deposit.nominal).toLocaleString('id-ID')} pada tanggal ini sudah tercatat (${blockingDup.status === 'disetujui' || blockingDup.status === 'approved' ? 'Terverifikasi' : 'Menunggu Verifikasi'}). Data double tidak dimasukkan.`,
+          duplicate: true,
+          existingDeposit: blockingDup,
+        });
+      }
+
       currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
       if (sedekahEntry && sedekahEntry.id) {
         sedekahEntry.sumberDana = deposit.metode;
@@ -4931,7 +5186,46 @@ async function startServer() {
         });
       }
 
+      const beforeDelSetIds = new Set<string>(currentState.deletedSetoranIds || []);
+
       if (isApproved) {
+        // GUARD DOUBLE POST-CUTOFF (>= 2026-11-24): Hanya 1 setoran yang boleh masuk saat disetujui admin
+        const delMemSet = new Set<string>(currentState.deletedMemberIds || []);
+        const depSig = getDepositDoubleSignatureServer(dep, currentState.members || [], delMemSet);
+        if (depSig) {
+          const alreadyApprovedSibling = (currentState.setoranList || []).find((s: any) => {
+            if (!s || s.id === dep.id) return false;
+            if (beforeDelSetIds.has(s.id)) return false;
+            if (s.status !== 'disetujui' && s.status !== 'approved') return false;
+            return getDepositDoubleSignatureServer(s, currentState.members || [], delMemSet) === depSig;
+          });
+          if (alreadyApprovedSibling) {
+            currentState.deletedSetoranIds = Array.from(new Set([...(currentState.deletedSetoranIds || []), dep.id]));
+            currentState.setoranList = (currentState.setoranList || []).filter((s: any) => s.id !== dep.id);
+            currentState.sedekahList = (currentState.sedekahList || []).filter((sdk: any) => sdk.id !== dep.id);
+            currentState = reconcileBalancesWithDeposits(currentState).state;
+            saveDatabase(currentState);
+            broadcastStatePulse('setoran_verified');
+            broadcastEvent('SETORAN_DELETED', { deletedCount: 1, deletedIds: [dep.id] });
+            broadcastEvent('SETORAN_UPDATED', {
+              action: 'verify',
+              deposit: alreadyApprovedSibling,
+              verifiedBy: alreadyApprovedSibling.verifiedBy || 'Admin Lain',
+            });
+            return res.json({
+              success: true,
+              alreadyProcessed: true,
+              duplicateSuppressed: true,
+              status: alreadyApprovedSibling.status,
+              verifiedBy: alreadyApprovedSibling.verifiedBy || 'Admin Lain',
+              message: `Setoran ganda a/n ${targetMember?.nama || dep.memberNama} tidak dimasukkan lagi karena setoran sah sudah disetujui sebelumnya (hanya 1 setoran masuk).`,
+              deposit: alreadyApprovedSibling,
+              member: targetMember,
+              state: currentState,
+            });
+          }
+        }
+
         // Cek apakah mutasi dengan referensiId atau ID deterministik sudah ada di memberTransactions
         const canonicalTxId = dep.jenis === 'sedekah' ? `tx-sdk-${dep.id}` : `tx-dep-${dep.id}`;
         const alreadyHasTx = (currentState.memberTransactions || []).some(
@@ -5273,8 +5567,18 @@ async function startServer() {
 
       const finalDep = (currentState.setoranList || []).find((s: any) => s.id === dep.id) || dep;
 
+      const newlyRemovedSiblingIds = (currentState.deletedSetoranIds || []).filter(
+        (id: string) => !beforeDelSetIds.has(id)
+      );
+
       saveDatabase(currentState);
       broadcastStatePulse('setoran_verified');
+      if (newlyRemovedSiblingIds.length > 0) {
+        broadcastEvent('SETORAN_DELETED', {
+          deletedCount: newlyRemovedSiblingIds.length,
+          deletedIds: newlyRemovedSiblingIds,
+        });
+      }
       broadcastEvent('SETORAN_UPDATED', {
         action: 'verify',
         deposit: finalDep,

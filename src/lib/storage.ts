@@ -12,6 +12,7 @@ import {
   AuditLog,
   SedekahBerbagiEntry,
   PendingMutasiActionRequest,
+  RedMutasiEntry,
   WilayahKoperasi,
   WILAYAH_CODE_MAP,
   WILAYAH_ABBR_MAP,
@@ -1915,6 +1916,8 @@ export function filterAndDeduplicateMemberTransactions(params: {
   activeMemberIds?: Set<string>;
   members?: MemberUser[];
   deletedMemberIds?: string[];
+  kasList?: KasEntry[];
+  deletedKasIds?: string[];
 }): {
   transactions: MemberTransaction[];
   removedTxIds: string[];
@@ -2023,6 +2026,92 @@ export function filterAndDeduplicateMemberTransactions(params: {
   };
 }
 
+export function isSriParawatiMember(
+  m: { id?: string; nama?: string } | null | undefined
+): boolean {
+  if (!m) return false;
+  const id = String(m.id || '').trim();
+  const nama = String(m.nama || '').trim().toLowerCase();
+  return id === 'mem-1792744119364' || nama === 'sri parawati';
+}
+
+export function getRedUnpostedMutasiEntries(
+  state: AppState,
+  memberId?: string
+): RedMutasiEntry[] {
+  if (!state || typeof state !== 'object') return [];
+  const delMemSet = new Set<string>(state.deletedMemberIds || []);
+  const delSetSet = new Set<string>(state.deletedSetoranIds || []);
+  const delTxSet = new Set<string>(state.deletedTransactionIds || []);
+  const members = (Array.isArray(state.members) ? state.members : []).filter(
+    (m) => m && m.id && !delMemSet.has(m.id)
+  );
+  const activeTxs = (Array.isArray(state.memberTransactions) ? state.memberTransactions : []).filter(
+    (t) => t && t.id && (t as any).status !== 'deleted' && !delTxSet.has(t.id)
+  );
+  const activeTxRefs = new Set<string>();
+  const activeTxIds = new Set<string>();
+  activeTxs.forEach((t) => {
+    activeTxIds.add(t.id);
+    if (t.referensiId) activeTxRefs.add(t.referensiId);
+  });
+
+  const results: RedMutasiEntry[] = [];
+  (Array.isArray(state.setoranList) ? state.setoranList : []).forEach((s) => {
+    if (!s || !s.id || delSetSet.has(s.id)) return;
+    if (s.status !== 'disetujui' && (s as any).status !== 'approved') return;
+    const resolvedM = findMemberForDeposit(s, members, delMemSet);
+    const mId = resolvedM?.id || s.memberId;
+    if (!mId || mId === 'donatur-umum') return;
+    if (memberId && mId !== memberId) return;
+
+    const isSedekah = s.jenis === 'sedekah' || String(s.id).startsWith('sdk-');
+    const canonTxId = isSedekah ? `tx-sdk-${s.id}` : `tx-dep-${s.id}`;
+    const hasActiveTx = activeTxRefs.has(s.id) || activeTxIds.has(canonTxId);
+    if (hasActiveTx) return;
+
+    const tgl =
+      (s as any).tanggal ||
+      (s.createdAt ? String(s.createdAt).slice(0, 10) : getWibDateStr());
+    const jam =
+      (s as any).jam ||
+      (s.createdAt && String(s.createdAt).includes('T')
+        ? String(s.createdAt).split('T')[1].slice(0, 5)
+        : '09:00');
+    const isTftu = s.metode === 'tabungan_umum';
+    const kategori: RedMutasiEntry['kategori'] = isSedekah
+      ? isTftu
+        ? 'umum'
+        : 'sedekah'
+      : s.jenis === 'kewajiban'
+      ? 'pokok'
+      : 'umum';
+    const tipe: RedMutasiEntry['tipe'] = isSedekah && isTftu ? 'keluar' : 'masuk';
+
+    results.push({
+      id: `red-dep-${s.id}`,
+      memberId: mId,
+      setoranId: s.id,
+      txId: canonTxId,
+      tanggal: tgl,
+      jam,
+      keterangan:
+        s.jenis === 'kewajiban'
+          ? `SETORAN KEWAJIBAN ${s.jumlahHari || Math.round((Number(s.nominal) || 0) / 2000) || 1} HARI (POKOK, ZAKAT, QURBAN)`
+          : isSedekah
+          ? `${isTftu ? 'TFTU ' : ''}Sedekah dari ${resolvedM?.nama || s.memberNama || 'Anggota'}`
+          : `Setoran Tunai ${resolvedM?.nama || s.memberNama || 'Anggota'}`,
+      kategori,
+      tipe,
+      nominal: Number(s.nominal) || 0,
+      nomorReferensi: s.nomorReferensi,
+      reason: 'Setoran terverifikasi belum tercatat ke Mutasi & Daftar Anggota',
+    });
+  });
+
+  return results.sort(compareMemberTransactionsDesc);
+}
+
 function cleanStr(str: any): string {
   return String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -2056,6 +2145,177 @@ export function findMemberForDeposit(s: any, members: MemberUser[], deletedMemSe
     if (found) return found;
   }
   return null;
+}
+
+export const DOUBLE_DEPOSIT_START_DATE = '2026-11-24';
+
+export function getDepositWibDateStr(s: any): string {
+  if (!s) return '';
+  const rawCreated = String(s.createdAt || '').trim();
+  if (rawCreated) {
+    const parsed = new Date(rawCreated);
+    if (!isNaN(parsed.getTime())) {
+      return getWibDateStr(parsed);
+    }
+    if (/^\d{4}-\d{2}-\d{2}/.test(rawCreated)) {
+      return rawCreated.slice(0, 10);
+    }
+  }
+  const rawTgl = String(s.tanggal || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(rawTgl)) {
+    return rawTgl.slice(0, 10);
+  }
+  return '';
+}
+
+export function isDoubleDepositDetectionActive(s: any): boolean {
+  const wibDate = getDepositWibDateStr(s);
+  return Boolean(wibDate && wibDate >= DOUBLE_DEPOSIT_START_DATE);
+}
+
+export function getDepositDoubleSignature(
+  s: any,
+  members: MemberUser[] = [],
+  deletedMemSet?: Set<string>
+): string {
+  if (!s) return '';
+  const wibDate = getDepositWibDateStr(s);
+  if (!wibDate || wibDate < DOUBLE_DEPOSIT_START_DATE) return '';
+
+  const matchedMember = findMemberForDeposit(s, members, deletedMemSet);
+  let memKey = matchedMember?.id ? String(matchedMember.id).trim() : '';
+  if (!memKey && s.memberId && String(s.memberId).trim() && String(s.memberId).trim() !== 'donatur-umum') {
+    memKey = String(s.memberId).trim();
+  }
+  if (!memKey && s.memberRekening && String(s.memberRekening).trim() !== '-') {
+    memKey = `rek:${cleanStr(s.memberRekening)}`;
+  }
+  if (!memKey) {
+    memKey = `nama:${String(s.memberNama || s.donaturNama || '').trim().toLowerCase()}`;
+  }
+
+  let jenisKey = String(
+    s.jenis || (String(s.id || '').startsWith('sdk-') ? 'sedekah' : 'kewajiban')
+  )
+    .trim()
+    .toLowerCase();
+  if (jenisKey === 'sedekah') {
+    const note = String(s.catatanAnggota || s.namaBerbagiKustom || s.keterangan || '').toLowerCase();
+    if (note.includes('subuh')) jenisKey = 'sedekah_subuh';
+    else if (note.includes('jumat')) jenisKey = 'sedekah_jumat';
+    else if (note.includes('umum')) jenisKey = 'sedekah_umum';
+  }
+  const metodeKey = s.metode === 'tabungan_umum' || s.sumberDana === 'tabungan_umum' ? 'tabungan_umum' : 'qris';
+  const nom = Number(s.nominal) || 0;
+  return `${memKey}|${jenisKey}|${metodeKey}|${nom}|${wibDate}`;
+}
+
+export function findBlockingDoubleDepositClient(
+  candidate: any,
+  existingList: SetoranVerifikasi[],
+  members: MemberUser[] = [],
+  deletedSetoranIds: string[] = [],
+  deletedMemberIds: string[] = []
+): SetoranVerifikasi | null {
+  if (!candidate || !isDoubleDepositDetectionActive(candidate)) return null;
+  const delSetSet = new Set(deletedSetoranIds || []);
+  const delMemSet = new Set(deletedMemberIds || []);
+  const targetSig = getDepositDoubleSignature(candidate, members, delMemSet);
+  if (!targetSig) return null;
+
+  for (const existing of existingList || []) {
+    if (!existing || !existing.id || delSetSet.has(existing.id)) continue;
+    if (candidate.id && existing.id === candidate.id) continue;
+    const st = String(existing.status || '').toLowerCase();
+    if (st !== 'pending' && st !== 'disetujui' && st !== 'approved') continue;
+    if (getDepositDoubleSignature(existing, members, delMemSet) === targetSig) {
+      return existing;
+    }
+  }
+  return null;
+}
+
+export function deduplicateSetoranListPostCutoffClient(
+  list: SetoranVerifikasi[],
+  members: MemberUser[] = [],
+  deletedMemSet?: Set<string>
+): { list: SetoranVerifikasi[]; removedIds: string[] } {
+  const input = Array.isArray(list) ? list : [];
+  if (input.length <= 1) return { list: input, removedIds: [] };
+
+  const sigGroups = new Map<string, SetoranVerifikasi[]>();
+  input.forEach((s) => {
+    if (!s || !s.id) return;
+    const sig = getDepositDoubleSignature(s, members, deletedMemSet);
+    if (!sig) return;
+    if (!sigGroups.has(sig)) sigGroups.set(sig, []);
+    sigGroups.get(sig)!.push(s);
+  });
+
+  const suppressSet = new Set<string>();
+  const toTs = (iso?: string) => {
+    const t = iso ? new Date(iso).getTime() : 0;
+    return isNaN(t) ? 0 : t;
+  };
+  const isApprovedSt = (s: any) => s?.status === 'disetujui' || s?.status === 'approved';
+  const isRejectedSt = (s: any) => s?.status === 'ditolak' || s?.status === 'rejected';
+
+  sigGroups.forEach((group) => {
+    if (group.length <= 1) return;
+    const activeItems = group.filter((s) => !isRejectedSt(s));
+    const rejectedItems = group.filter((s) => isRejectedSt(s));
+
+    let keptActive: SetoranVerifikasi | null = null;
+    if (activeItems.length > 0) {
+      const sortedActive = activeItems.slice().sort((a, b) => {
+        const aApp = isApprovedSt(a);
+        const bApp = isApprovedSt(b);
+        if (aApp !== bApp) return aApp ? -1 : 1;
+        if (aApp && bApp) {
+          const vDiff = toTs(a.verifiedAt || a.createdAt) - toTs(b.verifiedAt || b.createdAt);
+          if (vDiff !== 0) return vDiff;
+        }
+        const cDiff = toTs(a.createdAt) - toTs(b.createdAt);
+        if (cDiff !== 0) return cDiff;
+        return String(a.id).localeCompare(String(b.id));
+      });
+      keptActive = sortedActive[0];
+      for (let i = 1; i < sortedActive.length; i++) {
+        suppressSet.add(sortedActive[i].id);
+      }
+    }
+
+    if (rejectedItems.length > 0) {
+      const refCutoffTs = keptActive
+        ? toTs(keptActive.verifiedAt || keptActive.createdAt)
+        : 0;
+      const nonDupRejected: SetoranVerifikasi[] = [];
+      rejectedItems.forEach((r) => {
+        const reason = String(r.alasanTolak || r.catatanAdmin || '').toLowerCase();
+        if (reason.includes('duplikat') || reason.includes('double')) {
+          suppressSet.add(r.id);
+          return;
+        }
+        if (keptActive && toTs(r.createdAt) <= refCutoffTs) {
+          suppressSet.add(r.id);
+          return;
+        }
+        nonDupRejected.push(r);
+      });
+      if (nonDupRejected.length > 1) {
+        const sortedRej = nonDupRejected.slice().sort((a, b) => toTs(b.createdAt) - toTs(a.createdAt));
+        for (let i = 1; i < sortedRej.length; i++) {
+          suppressSet.add(sortedRej[i].id);
+        }
+      }
+    }
+  });
+
+  if (suppressSet.size === 0) return { list: input, removedIds: [] };
+  return {
+    list: input.filter((s) => s && s.id && !suppressSet.has(s.id)),
+    removedIds: Array.from(suppressSet),
+  };
 }
 
 export function reconcileBalancesWithDeposits(state: AppState): AppState {
@@ -2207,7 +2467,17 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     }
   });
 
-  const setoranList = Array.from(setoranMap.values());
+  const dedupedSetoran = deduplicateSetoranListPostCutoffClient(
+    Array.from(setoranMap.values()),
+    members,
+    delMemSet
+  );
+  dedupedSetoran.removedIds.forEach((remId) => {
+    delSetoranSet.add(remId);
+    sedekahMap.delete(remId);
+  });
+
+  const setoranList = dedupedSetoran.list;
   const sedekahList = Array.from(sedekahMap.values());
 
   // Heal stale canonical tx tombstones for active verified deposits (not in deletedSetoranIds)
@@ -2359,7 +2629,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
       const linkedTx = memberTransactions.find((t) => t.referensiId === s.id || t.id === `tx-dep-${s.id}`);
       if (!linkedTx && delTxSet.has(`tx-dep-${s.id}`)) return;
       const hasActiveUmumKas = activeKasForDep.some((k) => k.tipe === 'masuk');
-      if (!hasActiveUmumKas && (delKasSet.has(`kas-ang-umum-${s.id}`) || delKasSet.has(`kas-ang-u-${s.id}`))) return;
+      if (!isSriParawatiMember(m) && !hasActiveUmumKas && (delKasSet.has(`kas-ang-umum-${s.id}`) || delKasSet.has(`kas-ang-u-${s.id}`))) return;
       acc.umum += nom;
     } else if (s.jenis === 'sedekah') {
       if (s.metode === 'tabungan_umum') {
@@ -2516,10 +2786,72 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     }
   });
 
-  updatedMembers.forEach((m) => {
+  updatedMembers.forEach((m, idx) => {
     const mTransactions = nextTxList
       .filter((t) => t.memberId === m.id)
       .sort(compareMemberTransactionsChrono);
+
+    if (isSriParawatiMember(m)) {
+      // Khusus Sri Parawati: Data Anggota wajib sinkron mengikuti Mutasi Rekening (memberTransactions) secara penuh
+      let p = 0;
+      let u = 0;
+      let z = 0;
+      let q = 0;
+      mTransactions.forEach((t) => {
+        if (t.kategori === 'sedekah') {
+          t.saldoSetelah = p + u + z + q;
+          return;
+        }
+        const nom = Number(t.nominal) || 0;
+        const isKewajibanSplit =
+          t.kategori === 'pokok' ||
+          String(t.id).startsWith('tx-wajib-') ||
+          String(t.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+          String(t.keterangan || '').includes('50% Pokok');
+        if (t.tipe === 'masuk') {
+          if (isKewajibanSplit) {
+            const pPart = t.splitOverride ? (Number(t.splitOverride.pokok) || 0) : Math.floor(nom * 0.5);
+            const qPart = t.splitOverride ? (Number(t.splitOverride.qurban) || 0) : Math.floor(nom * 0.25);
+            const zPart = t.splitOverride ? (Number(t.splitOverride.zakat) || 0) : (nom - pPart - qPart);
+            p += pPart;
+            q += qPart;
+            z += zPart;
+          } else if (t.kategori === 'qurban') {
+            q += nom;
+          } else if (t.kategori === 'zakat') {
+            z += nom;
+          } else {
+            u += nom;
+          }
+        } else {
+          if (isKewajibanSplit) {
+            const pPart = t.splitOverride ? (Number(t.splitOverride.pokok) || 0) : Math.floor(nom * 0.5);
+            const qPart = t.splitOverride ? (Number(t.splitOverride.qurban) || 0) : Math.floor(nom * 0.25);
+            const zPart = t.splitOverride ? (Number(t.splitOverride.zakat) || 0) : (nom - pPart - qPart);
+            p = Math.max(0, p - pPart);
+            q = Math.max(0, q - qPart);
+            z = Math.max(0, z - zPart);
+          } else if (t.kategori === 'qurban') {
+            q = Math.max(0, q - nom);
+          } else if (t.kategori === 'zakat') {
+            z = Math.max(0, z - nom);
+          } else {
+            u = Math.max(0, u - nom);
+          }
+        }
+        t.saldoSetelah = p + u + z + q;
+      });
+      updatedMembers[idx] = {
+        ...m,
+        saldoPokok: p,
+        saldoUmum: u,
+        saldoZakatFitrah: z,
+        saldoQurban: q,
+        totalSimpanan: p + u + z + q,
+        jumlahHariPokok: Math.floor(p / (state.profile?.pembagianPokokHarian || 1000)),
+      };
+      return;
+    }
 
     let running = 0;
     mTransactions.forEach((t) => {
@@ -3017,6 +3349,7 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     kasList: updatedKasList,
     deletedTransactionIds: Array.from(delTxSet),
     deletedKasIds: Array.from(delKasSet),
+    deletedSetoranIds: Array.from(delSetoranSet),
   };
 }
 
@@ -4172,7 +4505,16 @@ export function useKoperasiState() {
               } else {
                 nextSetoranList = [dep, ...nextSetoranList];
               }
-              const nextSedekahList =
+              const dedupedWs = deduplicateSetoranListPostCutoffClient(
+                nextSetoranList,
+                globalState.members || [],
+                new Set(globalState.deletedMemberIds || [])
+              );
+              const nextDelSetIds = Array.from(
+                new Set([...(globalState.deletedSetoranIds || []), ...dedupedWs.removedIds])
+              );
+              const remSet = new Set(dedupedWs.removedIds);
+              const nextSedekahList = (
                 dep.jenis === 'sedekah' && (dep.status === 'disetujui' || dep.status === 'ditolak')
                   ? (globalState.sedekahList || []).map((sdk) =>
                       sdk.id === dep.id
@@ -4184,11 +4526,14 @@ export function useKoperasiState() {
                           }
                         : sdk
                     )
-                  : globalState.sedekahList;
+                  : globalState.sedekahList || []
+              ).filter((sdk) => sdk && !remSet.has(sdk.id));
+              dedupedWs.removedIds.forEach((rid) => dismissBrowserNotification(`hws-setoran-${rid}`));
               globalState = {
                 ...globalState,
-                setoranList: nextSetoranList,
+                setoranList: dedupedWs.list,
                 sedekahList: nextSedekahList,
+                deletedSetoranIds: nextDelSetIds,
               };
               scheduleLocalStoragePersist();
               notifyListeners();
@@ -4198,6 +4543,21 @@ export function useKoperasiState() {
             }
           }
           window.dispatchEvent(new CustomEvent('hws:setoran_updated', { detail: data.payload }));
+          fetchStateFromServer(true);
+        } else if (evType === 'SETORAN_DELETED') {
+          const delIds: string[] = Array.isArray(data.payload?.deletedIds) ? data.payload.deletedIds : [];
+          if (delIds.length > 0) {
+            const delSet = new Set(delIds);
+            delIds.forEach((id) => dismissBrowserNotification(`hws-setoran-${id}`));
+            globalState = {
+              ...globalState,
+              setoranList: (globalState.setoranList || []).filter((s) => s && !delSet.has(s.id)),
+              sedekahList: (globalState.sedekahList || []).filter((sdk) => sdk && !delSet.has(sdk.id)),
+              deletedSetoranIds: Array.from(new Set([...(globalState.deletedSetoranIds || []), ...delIds])),
+            };
+            scheduleLocalStoragePersist();
+            notifyListeners();
+          }
           fetchStateFromServer(true);
         } else if (
           evType === 'TRANSFER_COMPLETED' ||
@@ -5673,6 +6033,70 @@ export function syncMemberBalancesWithBukuKasAnggota(prev: AppState): AppState {
   const activeMembers = (prev.members || []).filter((m) => m.status !== 'dibekukan' && m.status !== 'nonaktif');
 
   const updatedMembers = (prev.members || []).map((m) => {
+    if (isSriParawatiMember(m)) {
+      const mTransactions = txList
+        .filter((tx) => tx.memberId === m.id)
+        .sort(compareMemberTransactionsChrono);
+      let p = 0;
+      let q = 0;
+      let z = 0;
+      let u = 0;
+      let latestPeriode = m.periodeTabunganPokok;
+      mTransactions.forEach((tx) => {
+        if (tx.periode) latestPeriode = tx.periode;
+        if (tx.kategori === 'sedekah') return;
+        const nom = Number(tx.nominal) || 0;
+        const isKewajibanSplit =
+          tx.kategori === 'pokok' ||
+          String(tx.id).startsWith('tx-wajib-') ||
+          String(tx.keterangan || '').toUpperCase().includes('KEWAJIBAN') ||
+          String(tx.keterangan || '').includes('50% Pokok');
+        if (tx.tipe === 'masuk') {
+          if (isKewajibanSplit) {
+            const pPart = tx.splitOverride ? (Number(tx.splitOverride.pokok) || 0) : Math.floor(nom * 0.5);
+            const qPart = tx.splitOverride ? (Number(tx.splitOverride.qurban) || 0) : Math.floor(nom * 0.25);
+            const zPart = tx.splitOverride ? (Number(tx.splitOverride.zakat) || 0) : (nom - pPart - qPart);
+            p += pPart;
+            q += qPart;
+            z += zPart;
+          } else if (tx.kategori === 'qurban') {
+            q += nom;
+          } else if (tx.kategori === 'zakat') {
+            z += nom;
+          } else {
+            u += nom;
+          }
+        } else {
+          if (isKewajibanSplit) {
+            const pPart = tx.splitOverride ? (Number(tx.splitOverride.pokok) || 0) : Math.floor(nom * 0.5);
+            const qPart = tx.splitOverride ? (Number(tx.splitOverride.qurban) || 0) : Math.floor(nom * 0.25);
+            const zPart = tx.splitOverride ? (Number(tx.splitOverride.zakat) || 0) : (nom - pPart - qPart);
+            p = Math.max(0, p - pPart);
+            q = Math.max(0, q - qPart);
+            z = Math.max(0, z - zPart);
+          } else if (tx.kategori === 'qurban') {
+            q = Math.max(0, q - nom);
+          } else if (tx.kategori === 'zakat') {
+            z = Math.max(0, z - nom);
+          } else {
+            u = Math.max(0, u - nom);
+          }
+        }
+      });
+      const totalSimpanan = p + q + z + u;
+      const jumlahHariPokok = Math.floor(p / (prev.profile?.pembagianPokokHarian || 1000));
+      return {
+        ...m,
+        saldoPokok: p,
+        saldoQurban: q,
+        saldoZakatFitrah: z,
+        saldoUmum: u,
+        totalSimpanan,
+        jumlahHariPokok,
+        periodeTabunganPokok: latestPeriode,
+      };
+    }
+
     const mName = (m.nama || '').trim().toLowerCase();
     const memberKas = approvedKasAnggota.filter((k) => {
       if (k.memberId && k.memberId === m.id) return true;

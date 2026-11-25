@@ -9,7 +9,7 @@ import {
   KasEntry,
   WilayahKoperasi,
 } from '../types';
-import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel, applyAuthoritativeServerState, dismissBrowserNotification } from '../lib/storage';
+import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel, applyAuthoritativeServerState, dismissBrowserNotification, findBlockingDoubleDepositClient, fetchStateFromServer } from '../lib/storage';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { exportLaporanBerbagiPdf, exportLaporanBerbagiExcel } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
@@ -563,6 +563,30 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       return;
     }
 
+    const blockingSedekahDup = findBlockingDoubleDepositClient(
+      {
+        memberId: currentMember ? currentMember.id : 'donatur-umum',
+        memberNama,
+        memberRekening: currentMember ? currentMember.nomorRekening : '-',
+        jenis: 'sedekah',
+        metode: 'qris',
+        nominal,
+        namaBerbagiKustom: jenisLabel,
+        catatanAnggota: doaPesan.trim() ? `[${jenisLabel}] ${doaPesan.trim()}` : `[${jenisLabel}] Sedekah dari ${memberNama}`,
+        createdAt: new Date().toISOString(),
+      },
+      state.setoranList || [],
+      state.members || [],
+      state.deletedSetoranIds || [],
+      state.deletedMemberIds || []
+    );
+    if (blockingSedekahDup) {
+      alert(
+        `Setoran ganda terdeteksi: pengajuan ${jenisLabel} sebesar ${formatRupiah(nominal)} pada tanggal hari ini sudah tercatat (${blockingSedekahDup.status === 'disetujui' ? 'Terverifikasi' : 'Menunggu Verifikasi'}). Data double tidak dimasukkan.`
+      );
+      return;
+    }
+
     const confirmMsg = confirm(
       `Konfirmasi ${jenisLabel}:\nNominal: ${formatRupiah(nominal)}\nMetode: QRIS Resmi Kas Berbagi\n\nPengajuan sedekah ini akan diverifikasi Admin. Setelah disetujui, dana tercatat resmi di Buku Kas Koperasi (${jenisLabel}: Sedekah dari ${memberNama}) dan tercatat pada Mutasi Anggota. Lanjutkan?`
     );
@@ -629,7 +653,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       };
 
       try {
-        await fetch('/api/setoran/submit', {
+        const submitRes = await fetch('/api/setoran/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -637,11 +661,25 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             sedekahEntry: newSedekahEntry,
           }),
         });
+        if (!submitRes.ok) {
+          const errData = await submitRes.json().catch(() => null);
+          alert(errData?.error || 'Setoran gagal diajukan karena terdeteksi data double.');
+          await fetchStateFromServer(true);
+          return;
+        }
       } catch (err) {
         console.warn('Setoran sedekah submit notice:', err);
       }
 
       await updateState((prev) => {
+        const dupInPrev = findBlockingDoubleDepositClient(
+          { ...newSetoranEntry, namaBerbagiKustom: jenisLabel },
+          prev.setoranList || [],
+          prev.members || [],
+          prev.deletedSetoranIds || [],
+          prev.deletedMemberIds || []
+        );
+        if (dupInPrev) return prev;
         const audit = createAuditLog(
           currentMember || ({ nama: 'Donatur', role: 'member' } as any),
           'Pengajuan Donasi Berbagi (QRIS)',
@@ -650,8 +688,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
         return {
           ...prev,
-          sedekahList: [newSedekahEntry, ...(prev.sedekahList || [])],
-          setoranList: [newSetoranEntry, ...(prev.setoranList || [])],
+          sedekahList: [newSedekahEntry, ...(prev.sedekahList || []).filter((sdk) => sdk.id !== newSedekahEntry.id)],
+          setoranList: [newSetoranEntry, ...(prev.setoranList || []).filter((s) => s.id !== newSetoranEntry.id)],
           auditLogs: [audit, ...(prev.auditLogs || [])],
         };
       });

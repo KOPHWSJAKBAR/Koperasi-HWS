@@ -189,6 +189,7 @@ export function generateMutasiRekeningPdf(
     ? filterAndDeduplicateMemberTransactions({
         transactions: transactions || [],
         setoranList: options.setoranList,
+        kasList: options.kasList,
       }).transactions
     : (transactions || []);
 

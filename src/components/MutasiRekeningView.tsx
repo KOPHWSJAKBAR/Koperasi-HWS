@@ -10,6 +10,7 @@ import {
   resolveMutasiCbgCode,
   filterAndDeduplicateMemberTransactions,
   compareMemberTransactionsChrono,
+  getRedUnpostedMutasiEntries,
 } from '../lib/storage';
 import {
   generateMutasiRekeningPdf,
@@ -107,16 +108,35 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
     prevDay = getOneDayBefore(startDate);
   }
 
-  // Transactions for this member (strictly aligned with verified deposits & deduplicated)
+  // Transactions for this member (strictly aligned with verified deposits that entered Daftar Anggota & Buku Kas Anggota)
   const { transactions: cleanAllTxs } = filterAndDeduplicateMemberTransactions({
     transactions: state.memberTransactions || [],
     setoranList: state.setoranList || [],
     deletedTransactionIds: state.deletedTransactionIds || [],
     deletedSetoranIds: state.deletedSetoranIds || [],
+    kasList: state.kasList || [],
+    deletedKasIds: state.deletedKasIds || [],
     members: state.members || [],
     deletedMemberIds: state.deletedMemberIds || [],
   });
   const allMemberTxs = cleanAllTxs.filter((tx) => tx.memberId === member.id);
+
+  // Setoran terverifikasi yang tidak masuk Daftar Anggota & Buku Kas Anggota (tampil merah, 0 dampak saldo, dapat dihapus di Menu Penghapusan Mutasi)
+  const redEntriesAll = getRedUnpostedMutasiEntries(state, member.id);
+  const redEntriesInPeriod = redEntriesAll.filter((r) => {
+    const isRedSedekah =
+      r.kategori === 'sedekah' ||
+      String(r.txId || r.id || '').startsWith('tx-sdk-') ||
+      String(r.keterangan || '').toLowerCase().includes('sedekah');
+    if (kategoriTabungan === 'sedekah') {
+      if (!isRedSedekah) return false;
+    } else if (kategoriTabungan !== 'semua' && r.kategori !== kategoriTabungan) {
+      return false;
+    }
+    if (periodStartDate && r.tanggal < periodStartDate) return false;
+    if (periodEndDate && r.tanggal > periodEndDate) return false;
+    return true;
+  });
 
   const isSedekahTx = (tx: MemberTransaction) =>
     tx.kategori === 'sedekah' ||
@@ -207,6 +227,19 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
   });
 
   const saldoAkhir = runningSaldo;
+
+  type StatementDisplayRow =
+    | { kind: 'clean'; tx: (typeof enrichedFiltered)[number] }
+    | { kind: 'red'; red: (typeof redEntriesInPeriod)[number] };
+
+  const statementRows: StatementDisplayRow[] = [
+    ...enrichedFiltered.map((tx) => ({ kind: 'clean' as const, tx })),
+    ...redEntriesInPeriod.map((red) => ({ kind: 'red' as const, red })),
+  ].sort((a, b) => {
+    const itemA = a.kind === 'clean' ? a.tx : a.red;
+    const itemB = b.kind === 'clean' ? b.tx : b.red;
+    return compareMemberTransactionsChrono(itemA, itemB);
+  });
 
   const getPeriodeLabel = () => {
     if (periodeTipe === 'bulanan') {
@@ -495,6 +528,20 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
           </div>
         </div>
 
+        {redEntriesInPeriod.length > 0 && (
+          <div className="mb-3 p-3 bg-red-50 border border-red-300 rounded-xl text-xs text-red-700 flex items-start gap-2">
+            <ShieldAlert className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-extrabold">
+                Terdapat {redEntriesInPeriod.length} mutasi berwarna merah yang tidak tercatat pada Daftar Anggota, Buku Kas Anggota, maupun saldo mutasi resmi.
+              </div>
+              <div className="text-[11px] mt-0.5">
+                Mutasi berwarna merah dapat dihapus melalui <b>Menu Penghapusan Mutasi Rekening</b> oleh pengurus dan tidak memengaruhi total pemasukan, pengeluaran, maupun saldo akhir.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Table of Transactions with Debit, Credit, Saldo */}
         <div className="overflow-x-auto border border-slate-900 rounded-xl">
           <table className="w-full text-left border-collapse text-xs">
@@ -531,41 +578,79 @@ export const MutasiRekeningView: React.FC<MutasiRekeningViewProps> = ({ state, m
               </tr>
 
               {/* Transaction Rows */}
-              {enrichedFiltered.map((tx) => (
-                <tr key={tx.id} className="hover:bg-slate-50">
-                  <td className="py-2 px-3 font-mono text-slate-700">
-                    {tx.tanggal.split('-').reverse().slice(0, 2).join('/')}
-                  </td>
-                  <td className="py-2 px-3">
-                    <div className="font-bold text-slate-900 uppercase flex items-center gap-1.5 flex-wrap">
-                      <span>{tx.keterangan}</span>
-                      {tx.kategori === 'sedekah' && (
-                        <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[9px] font-extrabold border border-rose-300">
-                          SEDEKAH → KAS KOPERASI
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-slate-500 font-mono">{tx.jam}</div>
-                  </td>
-                  <td className="py-2 px-3 text-center font-mono text-slate-600">
-                    {resolveMutasiCbgCode(tx, {
-                      setoranList: state.setoranList,
-                      kasList: state.kasList,
-                      sedekahList: state.sedekahList,
-                    })}
-                  </td>
-                  <td className="py-2 px-3 text-right font-mono font-bold text-red-700">
-                    {tx.debit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.debit) : '-'}
-                  </td>
-                  <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700">
-                    {tx.kredit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.kredit) : '-'}
-                  </td>
-                  <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
-                    {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.computedSaldo)}
-                  </td>
-                </tr>
-              ))}
-              {enrichedFiltered.length === 0 && (
+              {statementRows.map((row) => {
+                if (row.kind === 'red') {
+                  const red = row.red;
+                  return (
+                    <tr key={red.id} className="bg-red-50/85 text-red-600">
+                      <td className="py-2 px-3 font-mono text-red-600 font-bold">
+                        {red.tanggal.split('-').reverse().slice(0, 2).join('/')}
+                      </td>
+                      <td className="py-2 px-3 text-red-600">
+                        <div className="font-bold text-red-600 uppercase">
+                          {red.keterangan}
+                        </div>
+                        <div className="text-[10px] text-red-600 font-semibold mt-0.5">
+                          {red.jam} • {red.reason}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 text-center font-mono text-red-600">
+                        -
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono font-bold text-red-600">
+                        {red.tipe === 'keluar'
+                          ? `${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(red.nominal)} (TIDAK TERCATAT)`
+                          : '-'}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono font-bold text-red-600">
+                        {red.tipe === 'masuk'
+                          ? `${new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(red.nominal)} (TIDAK TERCATAT)`
+                          : '-'}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono font-bold text-red-600">
+                        Tidak dihitung
+                      </td>
+                    </tr>
+                  );
+                }
+
+                const tx = row.tx;
+                return (
+                  <tr key={tx.id} className="hover:bg-slate-50">
+                    <td className="py-2 px-3 font-mono text-slate-700">
+                      {tx.tanggal.split('-').reverse().slice(0, 2).join('/')}
+                    </td>
+                    <td className="py-2 px-3">
+                      <div className="font-bold text-slate-900 uppercase flex items-center gap-1.5 flex-wrap">
+                        <span>{tx.keterangan}</span>
+                        {tx.kategori === 'sedekah' && (
+                          <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[9px] font-extrabold border border-rose-300">
+                            SEDEKAH → KAS KOPERASI
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono">{tx.jam}</div>
+                    </td>
+                    <td className="py-2 px-3 text-center font-mono text-slate-600">
+                      {resolveMutasiCbgCode(tx, {
+                        setoranList: state.setoranList,
+                        kasList: state.kasList,
+                        sedekahList: state.sedekahList,
+                      })}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono font-bold text-red-700">
+                      {tx.debit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.debit) : '-'}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700">
+                      {tx.kredit > 0 ? new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.kredit) : '-'}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono font-black text-slate-950">
+                      {new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2 }).format(tx.computedSaldo)}
+                    </td>
+                  </tr>
+                );
+              })}
+              {statementRows.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-4 text-center text-slate-500 text-xs italic">
                     Tidak ada mutasi transaksi tambahan pada periode ini. Saldo tetap {formatRupiah(saldoAwal)}.

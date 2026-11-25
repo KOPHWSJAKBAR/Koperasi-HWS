@@ -14,6 +14,7 @@ import {
   getUnifiedSedekahList,
   canApproveByRole,
   getRequiredApproverLabel,
+  deduplicateSetoranListPostCutoffClient,
 } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -149,11 +150,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  // Hitung daftar setoran yang benar-benar masih menunggu verifikasi (belum diproses admin manapun)
+  // Hitung daftar setoran yang benar-benar masih menunggu verifikasi (belum diproses admin manapun & bebas duplikat >= 24/11/2026)
   const pendingDeposits = React.useMemo(() => {
     const deletedSet = new Set(state.deletedSetoranIds || []);
     const sedekahStatusById = new Map((state.sedekahList || []).map((sdk) => [sdk.id, sdk.status]));
-    return (state.setoranList || []).filter((s) => {
+    const dedupedList = deduplicateSetoranListPostCutoffClient(
+      state.setoranList || [],
+      state.members || [],
+      new Set(state.deletedMemberIds || [])
+    ).list;
+    return dedupedList.filter((s) => {
       if (!s || !s.id || deletedSet.has(s.id)) return false;
       if (s.status !== 'pending' || s.verifiedBy || s.verifiedAt) return false;
       if (s.jenis === 'sedekah') {
@@ -162,7 +168,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
       return true;
     });
-  }, [state.setoranList, state.sedekahList, state.deletedSetoranIds]);
+  }, [state.setoranList, state.sedekahList, state.deletedSetoranIds, state.members, state.deletedMemberIds]);
 
   const prevPendingIdsRef = useRef<Set<string>>(
     new Set(pendingDeposits.map((s) => s.id))

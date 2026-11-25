@@ -219,6 +219,10 @@ export interface SetoranVerifikasi {
   verifiedAt?: string;
   alasanTolak?: string;
   createdAt: string;
+  tanggal?: string;
+  jam?: string;
+  excludeFromLedger?: boolean;
+  doubleRefId?: string;
 }
 
 export type TipeMutasi = 'masuk' | 'keluar'; // Kredit = masuk, Debit = keluar
@@ -245,6 +249,21 @@ export interface MemberTransaction {
     zakat: number;
   };
   updatedAt?: string;
+}
+
+export interface RedMutasiEntry {
+  id: string;
+  memberId: string;
+  setoranId?: string;
+  txId?: string;
+  tanggal: string;
+  jam: string;
+  keterangan: string;
+  kategori: KategoriTabunganMutasi;
+  tipe: TipeMutasi;
+  nominal: number;
+  nomorReferensi?: string;
+  reason: string;
 }
 
 export interface KasEntry {

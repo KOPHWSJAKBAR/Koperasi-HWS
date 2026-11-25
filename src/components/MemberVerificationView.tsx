@@ -17,6 +17,9 @@ import {
   getWibTimeStr,
   applyAuthoritativeServerState,
   dismissBrowserNotification,
+  findBlockingDoubleDepositClient,
+  deduplicateSetoranListPostCutoffClient,
+  getDepositDoubleSignature,
 } from '../lib/storage';
 import { sendRealtimeNotification } from '../lib/fcm';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
@@ -80,7 +83,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   );
 
   // Admin Verification State
-  const [filterStatus, setFilterStatus] = useState<'semua' | 'pending' | 'pending_double' | 'disetujui' | 'ditolak'>('pending');
+  const [filterStatus, setFilterStatus] = useState<'semua' | 'pending' | 'disetujui' | 'ditolak'>('pending');
   const [filterJenis, setFilterJenis] = useState<'semua' | 'kewajiban' | 'umum' | 'sedekah'>('semua');
   const [sortBy, setSortBy] = useState<
     | 'pending_first'
@@ -100,28 +103,16 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [rejectReasonInput, setRejectReasonInput] = useState<string>('');
   const [deletingDeposit, setDeletingDeposit] = useState<SetoranVerifikasi | null>(null);
 
-  // Deteksi Data Double / Pengajuan Setoran Ganda (Anggota, Nominal, & Tanggal yang sama)
-  const getDepositSignature = (s: SetoranVerifikasi) => {
-    const tgl = s.createdAt ? s.createdAt.slice(0, 10) : '';
-    const memKey = s.memberId || s.memberRekening || s.memberNama || '';
-    return `${memKey}_${s.nominal}_${tgl}`;
-  };
-
-  const doubleGroupMap = React.useMemo(() => {
-    const map = new Map<string, SetoranVerifikasi[]>();
-    (state.setoranList || []).forEach((s) => {
-      const sig = getDepositSignature(s);
-      const list = map.get(sig) || [];
-      list.push(s);
-      map.set(sig, list);
-    });
-    return map;
-  }, [state.setoranList]);
-
-  const isDepositDouble = (s: SetoranVerifikasi) => {
-    const sig = getDepositSignature(s);
-    return (doubleGroupMap.get(sig)?.length || 0) > 1;
-  };
+  // Deteksi Data Double (Berlaku mulai tanggal 24/11/2026 WIB): jangan tampilkan data double
+  const deduplicatedSetoranList = React.useMemo(
+    () =>
+      deduplicateSetoranListPostCutoffClient(
+        state.setoranList || [],
+        state.members || [],
+        new Set(state.deletedMemberIds || [])
+      ).list,
+    [state.setoranList, state.members, state.deletedMemberIds]
+  );
 
   // Device Back Button: Menutup menu / modal yang telah dibuka (Req 3)
   useEffect(() => {
@@ -238,6 +229,29 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       return;
     }
 
+    const blockingDup = findBlockingDoubleDepositClient(
+      {
+        memberId: currentMember.id,
+        memberNama: currentMember.nama,
+        memberRekening: currentMember.nomorRekening,
+        jenis: jenisSetoran,
+        metode,
+        nominal: nominalFinal,
+        createdAt: new Date().toISOString(),
+      },
+      state.setoranList || [],
+      state.members || [],
+      state.deletedSetoranIds || [],
+      state.deletedMemberIds || []
+    );
+    if (blockingDup) {
+      setMsg({
+        type: 'error',
+        text: `Setoran ganda terdeteksi: pengajuan ${jenisSetoran === 'kewajiban' ? 'Tabungan Kewajiban' : 'Tabungan Umum'} sebesar ${formatRupiah(nominalFinal)} pada tanggal hari ini sudah tercatat (${blockingDup.status === 'disetujui' ? 'Terverifikasi' : 'Menunggu Verifikasi'}). Data double tidak dimasukkan.`,
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     let finalBukti = buktiUrl;
     if (finalBukti && finalBukti.startsWith('data:image')) {
@@ -271,17 +285,37 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
     // Online submission to server (Req 2 & 4)
     try {
-      await fetch('/api/setoran/submit', {
+      const submitRes = await fetch('/api/setoran/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deposit: newDeposit }),
       });
+      if (!submitRes.ok) {
+        const errData = await submitRes.json().catch(() => null);
+        setIsSubmitting(false);
+        setMsg({
+          type: 'error',
+          text: errData?.error || 'Setoran gagal diajukan karena terdeteksi data double.',
+        });
+        await fetchStateFromServer(true);
+        return;
+      }
     } catch {}
 
-    await updateState((prev) => ({
-      ...prev,
-      setoranList: [newDeposit, ...prev.setoranList],
-    }));
+    await updateState((prev) => {
+      const dupInPrev = findBlockingDoubleDepositClient(
+        newDeposit,
+        prev.setoranList || [],
+        prev.members || [],
+        prev.deletedSetoranIds || [],
+        prev.deletedMemberIds || []
+      );
+      if (dupInPrev) return prev;
+      return {
+        ...prev,
+        setoranList: [newDeposit, ...(prev.setoranList || []).filter((s) => s.id !== newDeposit.id)],
+      };
+    });
 
     setIsSubmitting(false);
     setBuktiSetorSuccess(newDeposit);
@@ -647,8 +681,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     alert(`Penarikan ${formatRupiah(amount)} berhasil diproses ke ${bankTujuanTarik}!`);
   };
 
-  // ADMIN: Approve Deposit (Online Realtime Server Sync - ANTI-DUPLIKASI Req 4)
-  const handleApproveDeposit = async (dep: SetoranVerifikasi, rejectOthers: boolean = false) => {
+  // ADMIN: Approve Deposit (Online Realtime Server Sync - ANTI-DUPLIKASI Req 4 & 10)
+  const handleApproveDeposit = async (dep: SetoranVerifikasi) => {
     if (!currentAdmin) return;
     if (approvingId) return; // Mencegah double click secara bersamaan
 
@@ -691,36 +725,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           window.dispatchEvent(new CustomEvent('hws:setoran_processed', { detail: { depositId: dep.id } }));
           setActionBanner({
             type: 'success',
-            text: `Setoran a/n ${dep.memberNama} sudah diproses (${verifyData.status || 'selesai'}) sebelumnya oleh Admin ${verifyData.verifiedBy || 'lain'}.`,
+            text: verifyData?.duplicateSuppressed
+              ? `Setoran ganda a/n ${dep.memberNama} tidak dimasukkan lagi karena setoran sah sudah disetujui sebelumnya.`
+              : `Setoran a/n ${dep.memberNama} sudah diproses (${verifyData.status || 'selesai'}) sebelumnya oleh Admin ${verifyData.verifiedBy || 'lain'}.`,
           });
           setApprovingId(null);
           return;
-        }
-
-        // Jika diminta otomatis menolak duplikat pengajuan lainnya dalam grup
-        if (rejectOthers) {
-          const sig = getDepositSignature(dep);
-          const others = (state.setoranList || []).filter(
-            (s) => s.id !== dep.id && s.status === 'pending' && getDepositSignature(s) === sig
-          );
-          for (const other of others) {
-            try {
-              const rejRes = await fetch('/api/setoran/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  depositId: other.id,
-                  isApproved: false,
-                  adminName: currentAdmin.nama,
-                  alasan: 'Duplikat pengajuan setoran (telah disetujui pada pengajuan lainnya)',
-                }),
-              });
-              if (rejRes.ok) {
-                const rejData = await rejRes.json().catch(() => null);
-                if (rejData?.state) latestState = rejData.state;
-              }
-            } catch {}
-          }
         }
 
         if (latestState) {
@@ -750,7 +760,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
         setActionBanner({
           type: 'success',
-          text: `✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi oleh ${currentAdmin.nama} pada ${getWibTimeStr(now)} WIB.${rejectOthers ? ' Duplikat lainnya otomatis ditolak.' : ''}`,
+          text: `✓ Setoran a/n ${dep.memberNama} (${formatRupiah(dep.nominal)}) berhasil diverifikasi oleh ${currentAdmin.nama} pada ${getWibTimeStr(now)} WIB.`,
         });
         setApprovingId(null);
         return;
@@ -771,6 +781,27 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           (t) => t.referensiId === dep.id || t.id === `tx-dep-${dep.id}` || t.id === `tx-sdk-${dep.id}`
         );
         if (alreadyHasTx) return prev;
+
+        // Guard Double >= 2026-11-24: Jika ada setoran kembar yang sudah disetujui, tolak/hapus duplikat ini tanpa menambah saldo
+        const delMemSet = new Set(prev.deletedMemberIds || []);
+        const depSig = getDepositDoubleSignature(dep, prev.members || [], delMemSet);
+        if (depSig) {
+          const alreadyApprovedSibling = (prev.setoranList || []).find(
+            (s) =>
+              s &&
+              s.id !== dep.id &&
+              (s.status === 'disetujui' || (s as any).status === 'approved') &&
+              getDepositDoubleSignature(s, prev.members || [], delMemSet) === depSig
+          );
+          if (alreadyApprovedSibling) {
+            return {
+              ...prev,
+              setoranList: prev.setoranList.filter((s) => s.id !== dep.id),
+              sedekahList: (prev.sedekahList || []).filter((sdk) => sdk.id !== dep.id),
+              deletedSetoranIds: Array.from(new Set([...(prev.deletedSetoranIds || []), dep.id])),
+            };
+          }
+        }
 
         const targetMember = prev.members.find((m) => {
           if (dep.memberId && m.id === dep.memberId) return true;
@@ -1243,10 +1274,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
 
   // Export deposits table to CSV or printable PDF
   const handleExportDeposits = (format: 'pdf' | 'excel') => {
-    const listToExport = state.setoranList.filter((s) => {
-      if (filterStatus === 'pending_double') {
-        if (s.status !== 'pending' || !isDepositDouble(s)) return false;
-      } else if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
+    const listToExport = deduplicatedSetoranList.filter((s) => {
+      if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
       if (filterStartDate && getWibDateStr(new Date(s.createdAt)) < filterStartDate) return false;
       if (filterEndDate && getWibDateStr(new Date(s.createdAt)) > filterEndDate) return false;
       return true;
@@ -1864,12 +1893,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         {/* Quick Filter Status Tabs */}
         {(() => {
           const baseList = isMember
-            ? state.setoranList.filter((s) => s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening)
-            : state.setoranList;
+            ? deduplicatedSetoranList.filter((s) => s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening)
+            : deduplicatedSetoranList;
           const pendingCount = baseList.filter((s) => s.status === 'pending').length;
           const disetujuiCount = baseList.filter((s) => s.status === 'disetujui').length;
           const ditolakCount = baseList.filter((s) => s.status === 'ditolak').length;
-          const pendingDoubleCount = baseList.filter((s) => s.status === 'pending' && isDepositDouble(s)).length;
 
           const sedekahCount = baseList.filter((s) => s.jenis === 'sedekah').length;
           const pendingSedekahCount = baseList.filter((s) => s.jenis === 'sedekah' && s.status === 'pending').length;
@@ -1900,19 +1928,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 >
                   <Clock className="w-3.5 h-3.5" />
                   <span>Pending Verifikasi ({pendingCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterStatus('pending_double')}
-                  className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    filterStatus === 'pending_double'
-                      ? 'bg-rose-500 text-white shadow-md ring-2 ring-rose-500/50'
-                      : 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/25 border border-rose-500/30'
-                  }`}
-                  title="Tampilkan pengajuan setoran ganda yang masih berstatus pending"
-                >
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
-                  <span>⚠️ Pending Data Double ({pendingDoubleCount})</span>
                 </button>
                 <button
                   type="button"
@@ -1992,31 +2007,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                   )}
                 </button>
               </div>
-
-              {pendingDoubleCount > 0 && !isMember && (
-                <div className="mt-2.5 p-3.5 bg-rose-950/40 border border-rose-500/40 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs text-rose-200 shadow-md">
-                  <div className="flex items-start gap-2.5">
-                    <div className="p-1.5 bg-rose-500/20 text-rose-400 rounded-xl shrink-0 mt-0.5">
-                      <AlertTriangle className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="font-black text-rose-300">
-                        ⚠️ Terdeteksi {pendingDoubleCount} Pengajuan Setoran Pending Karena Data Double
-                      </div>
-                      <div className="text-[11px] text-rose-200/80 mt-0.5 leading-relaxed">
-                        Terdapat anggota yang mengajukan setoran berulang dengan tanggal dan nominal yang sama. Mohon teliti: klik tombol verifikasi <b>"✓ Setujui (Tolak Duplikat)"</b> untuk menyetujui 1 pengajuan yang sah dan menolak duplikatnya secara otomatis agar saldo tidak terhitung ganda.
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setFilterStatus(filterStatus === 'pending_double' ? 'pending' : 'pending_double')}
-                    className="shrink-0 py-1.5 px-3 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-xl text-[11px] cursor-pointer shadow transition-all"
-                  >
-                    {filterStatus === 'pending_double' ? '✓ Menampilkan Data Double' : 'Tampilkan Data Double'}
-                  </button>
-                </div>
-              )}
             </div>
           );
         })()}
@@ -2036,12 +2026,10 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {state.setoranList
+              {deduplicatedSetoranList
                 .filter((s) => {
                   if (isMember) return s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening;
-                  if (filterStatus === 'pending_double') {
-                    if (s.status !== 'pending' || !isDepositDouble(s)) return false;
-                  } else if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
+                  if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
                   if (filterJenis !== 'semua' && s.jenis !== filterJenis) return false;
                   return true;
                 })
@@ -2081,15 +2069,6 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                     <td className="py-3 px-3">
                       <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
                         <span>{dep.memberNama}</span>
-                        {isDepositDouble(dep) && (
-                          <span
-                            className="inline-flex items-center gap-1 py-0.5 px-2 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded-md text-[10px] font-black"
-                            title="Setoran ganda terdeteksi (anggota, tanggal, & nominal sama)"
-                          >
-                            <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
-                            Data Double ({doubleGroupMap.get(getDepositSignature(dep))?.length || 2}x)
-                          </span>
-                        )}
                       </div>
                       <div className="text-[10px] text-slate-400 font-mono">
                         {dep.memberRekening} {dep.memberWilayah ? `• ${dep.memberWilayah}` : ''}
@@ -2190,44 +2169,21 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                         <div className="flex items-center justify-end gap-1.5">
                           {dep.status === 'pending' && (
                             <>
-                              {isDepositDouble(dep) ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    disabled={approvingId === dep.id}
-                                    onClick={() => handleApproveDeposit(dep, true)}
-                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[10px] font-black shadow transition-all flex items-center gap-1 cursor-pointer"
-                                    title="Setujui pengajuan ini dan otomatis tolak pengajuan duplikat lainnya agar saldo tidak ganda"
-                                  >
-                                    {approvingId === dep.id ? 'Memproses...' : '✓ Setujui (Tolak Duplikat)'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRejectDeposit(dep)}
-                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[10px] font-bold cursor-pointer"
-                                  >
-                                    ✕ Tolak
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    disabled={approvingId === dep.id}
-                                    onClick={() => handleApproveDeposit(dep, false)}
-                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
-                                  >
-                                    {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRejectDeposit(dep)}
-                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
-                                  >
-                                    ✕ Tolak
-                                  </button>
-                                </>
-                              )}
+                              <button
+                                type="button"
+                                disabled={approvingId === dep.id}
+                                onClick={() => handleApproveDeposit(dep)}
+                                className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRejectDeposit(dep)}
+                                className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
+                              >
+                                ✕ Tolak
+                              </button>
                             </>
                           )}
                           {currentAdmin?.role === 'super_admin' && (
@@ -2249,7 +2205,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
             </tbody>
           </table>
 
-          {state.setoranList.length === 0 && (
+          {deduplicatedSetoranList.length === 0 && (
             <div className="text-center py-8 text-slate-500 text-xs">
               Belum ada riwayat setoran simpanan yang diajukan.
             </div>

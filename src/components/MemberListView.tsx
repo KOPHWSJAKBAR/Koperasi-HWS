@@ -8,7 +8,7 @@ import {
   MemberTransaction,
   PendingMutasiActionRequest,
 } from '../types';
-import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc, getWibDateStr, formatWibDateShort, formatWibDate, canApproveByRole, getRequiredApproverLabel, filterAndDeduplicateMemberTransactions, compareMemberTransactionsDesc } from '../lib/storage';
+import { formatRupiah, generateNomorRekening, createAuditLog, registerMemberOnline, fetchStateFromServer, validateMemberBiodata, sortMembersDesc, getWibDateStr, formatWibDateShort, formatWibDate, canApproveByRole, getRequiredApproverLabel, filterAndDeduplicateMemberTransactions, compareMemberTransactionsDesc, getRedUnpostedMutasiEntries } from '../lib/storage';
 import { downloadExcelCsv, printDocumentHtml, exportAnggotaExcel, exportAnggotaPdf } from '../lib/exportPdf';
 import { KtaDigitalModal } from './KtaDigitalModal';
 import { HapusTransaksiAnggotaModal } from './HapusTransaksiAnggotaModal';
@@ -2473,12 +2473,27 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                   setoranList: state.setoranList || [],
                   deletedTransactionIds: state.deletedTransactionIds || [],
                   deletedSetoranIds: state.deletedSetoranIds || [],
+                  kasList: state.kasList || [],
+                  deletedKasIds: state.deletedKasIds || [],
                   members: state.members || [],
                   deletedMemberIds: state.deletedMemberIds || [],
                 });
                 const viewingMemberTxs = cleanAllMemberTxs
                   .filter((t) => t.memberId === viewingMemberProfile.id)
                   .sort(compareMemberTransactionsDesc);
+
+                const redMemberEntries = getRedUnpostedMutasiEntries(state, viewingMemberProfile.id);
+                const mergedRows: Array<
+                  | { kind: 'clean'; tx: MemberTransaction }
+                  | { kind: 'red'; red: (typeof redMemberEntries)[number] }
+                > = [
+                  ...viewingMemberTxs.map((tx) => ({ kind: 'clean' as const, tx })),
+                  ...redMemberEntries.map((red) => ({ kind: 'red' as const, red })),
+                ].sort((a, b) => {
+                  const itemA = a.kind === 'clean' ? a.tx : a.red;
+                  const itemB = b.kind === 'clean' ? b.tx : b.red;
+                  return compareMemberTransactionsDesc(itemA, itemB);
+                });
 
                 return (
               <div className="p-3 bg-slate-800/60 rounded-2xl border border-slate-700/80 space-y-2">
@@ -2488,6 +2503,11 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                     <span>
                       Riwayat Mutasi Transaksi ({viewingMemberTxs.length})
                     </span>
+                    {redMemberEntries.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-red-600/25 text-red-400 border border-red-500/50 text-[10px] font-black">
+                        {redMemberEntries.length} Mutasi Merah
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button
@@ -2523,12 +2543,76 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                 </div>
 
                 <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
-                  {viewingMemberTxs.length === 0 ? (
+                  {mergedRows.length === 0 ? (
                     <div className="text-center py-4 text-slate-400 text-xs italic">
                       Belum ada catatan mutasi transaksi untuk anggota ini.
                     </div>
                   ) : (
-                    viewingMemberTxs.map((tx) => (
+                    mergedRows.map((row) => {
+                      if (row.kind === 'red') {
+                        const red = row.red;
+                        const syntheticTx: MemberTransaction = {
+                          id: red.id,
+                          memberId: red.memberId,
+                          tanggal: red.tanggal,
+                          jam: red.jam,
+                          keterangan: red.keterangan,
+                          cbg: '-',
+                          tipe: red.tipe,
+                          nominal: red.nominal,
+                          saldoSetelah: 0,
+                          kategori: red.kategori,
+                          referensiId: red.setoranId,
+                        };
+                        return (
+                          <div
+                            key={red.id}
+                            className="p-2 bg-red-950/40 border border-red-500/60 rounded-xl flex items-center justify-between text-xs text-red-400"
+                          >
+                            <div className="space-y-0.5 min-w-0 pr-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono text-[10px] text-red-400 font-bold">
+                                  {red.tanggal} {red.jam || ''}
+                                </span>
+                                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/40">
+                                  MUTASI MERAH • TIDAK MASUK SALDO & BUKU KAS
+                                </span>
+                              </div>
+                              <div className="font-bold text-red-400 text-[11px]">
+                                {red.keterangan}
+                              </div>
+                              <div className="text-[10px] text-red-400/90">
+                                {red.reason}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 pl-2 shrink-0">
+                              <div className="text-right">
+                                <div className="font-mono font-bold text-xs text-red-400">
+                                  {formatRupiah(red.nominal)}
+                                </div>
+                                <div className="font-mono text-[10px] text-red-400/90">
+                                  Tidak dihitung saldo
+                                </div>
+                              </div>
+
+                              {(isSuperAdmin || isApproval || isWriter) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteSingleTx(syntheticTx)}
+                                  className="p-1.5 bg-red-900/70 hover:bg-red-800 text-red-200 border border-red-500/60 rounded-lg transition-colors cursor-pointer"
+                                  title="Hapus mutasi merah di Menu Penghapusan Mutasi Rekening"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-red-300" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const tx = row.tx;
+                      return (
                         <div
                           key={tx.id}
                           className="p-2 bg-slate-900/80 border border-slate-700/70 rounded-xl flex items-center justify-between text-xs hover:border-slate-600 transition-all"
@@ -2582,7 +2666,8 @@ export const MemberListView: React.FC<MemberListViewProps> = ({
                             )}
                           </div>
                         </div>
-                      ))
+                      );
+                    })
                   )}
                 </div>
               </div>
