@@ -9,7 +9,7 @@ import {
   KasEntry,
   WilayahKoperasi,
 } from '../types';
-import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel, applyAuthoritativeServerState, dismissBrowserNotification, findBlockingDoubleDepositClient, fetchStateFromServer } from '../lib/storage';
+import { formatRupiah, createAuditLog, sortMembersDesc, canApproveByRole, getRequiredApproverLabel, applyAuthoritativeServerState, commitLocalStatePatch, scheduleShardedFirestoreSync, getWibDateStr, getWibTimeStr, dismissBrowserNotification, findBlockingDoubleDepositClient, fetchStateFromServer } from '../lib/storage';
 import { uploadToCloudStorage } from '../lib/cloudStorage';
 import { exportLaporanBerbagiPdf, exportLaporanBerbagiExcel } from '../lib/exportPdf';
 import { LogoHws } from '../lib/logo';
@@ -341,12 +341,17 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       return;
     }
 
+    if (currentMember?.status === 'dibekukan') {
+      setTftuError('Akun Anda sedang dibekukan oleh pengurus koperasi. Pengajuan sedekah tidak dapat diproses.');
+      return;
+    }
+
     const jenisLabel = getJenisLabel(selectedJenis);
     const memberNama = currentMember ? currentMember.nama : 'Donatur Hamba Allah';
 
     if (sumberDana === 'tabungan_umum') {
       if (!currentMember) {
-        alert('Silakan masuk sebagai Anggota untuk menggunakan metode Dari Tabungan Umum Anggota.');
+        setTftuError('Silakan masuk sebagai Anggota untuk menggunakan metode Dari Tabungan Umum Anggota.');
         return;
       }
       const saldoUmumTersedia = Number(currentMember.saldoUmum) || 0;
@@ -376,32 +381,39 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         let successEntry: SedekahBerbagiEntry | null = null;
 
         try {
-          const res = await fetch('/api/sedekah/tftu', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              memberId: currentMember.id,
-              jenis: selectedJenis,
-              namaBerbagiKustom: jenisLabel,
-              nominal,
-              pinTransaksi: pinTftu.trim(),
-              doaPesan: doaPesan.trim(),
-              entryId,
-            }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            if (res.status >= 400 && res.status < 500) {
-              setTftuError(data.error || 'Gagal memproses TFTU Sedekah.');
-              setIsSubmittingDonasi(false);
-              return;
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+          try {
+            const res = await fetch('/api/sedekah/tftu', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                memberId: currentMember.id,
+                jenis: selectedJenis,
+                namaBerbagiKustom: jenisLabel,
+                nominal,
+                pinTransaksi: pinTftu.trim(),
+                doaPesan: doaPesan.trim(),
+                entryId,
+              }),
+              signal: controller?.signal,
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              if (res.status >= 400 && res.status < 500) {
+                setTftuError(data.error || 'Gagal memproses TFTU Sedekah.');
+                setIsSubmittingDonasi(false);
+                return;
+              }
+            } else {
+              serverHandled = true;
+              successEntry = data.entry;
+              if (data.state) {
+                applyAuthoritativeServerState(data.state, true);
+              }
             }
-          } else {
-            serverHandled = true;
-            successEntry = data.entry;
-            if (data.state) {
-              await updateState(() => data.state);
-            }
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
           }
         } catch (err) {
           console.warn('TFTU offline fallback:', err);
@@ -409,8 +421,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
         if (!serverHandled) {
           const now = new Date();
-          const tanggal = now.toISOString().slice(0, 10);
-          const jam = now.toTimeString().slice(0, 5);
+          const tanggal = getWibDateStr(now);
+          const jam = getWibTimeStr(now, false);
           const cleanNote = doaPesan.trim();
           const kasKopId = `kas-sedekah-${entryId}`;
           const kasAngId = `kas-ang-tftu-${entryId}`;
@@ -559,10 +571,11 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
 
     // Metode 1: QRIS (Wajib upload bukti transfer)
     if (!buktiTransferUrl || !buktiTransferUrl.trim()) {
-      alert('Foto bukti transfer / resi pembayaran QRIS wajib di-upload.');
+      setTftuError('Foto bukti transfer / resi pembayaran QRIS wajib di-upload.');
       return;
     }
 
+    const preCheckNow = new Date();
     const blockingSedekahDup = findBlockingDoubleDepositClient(
       {
         memberId: currentMember ? currentMember.id : 'donatur-umum',
@@ -573,7 +586,8 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         nominal,
         namaBerbagiKustom: jenisLabel,
         catatanAnggota: doaPesan.trim() ? `[${jenisLabel}] ${doaPesan.trim()}` : `[${jenisLabel}] Sedekah dari ${memberNama}`,
-        createdAt: new Date().toISOString(),
+        tanggal: getWibDateStr(preCheckNow),
+        createdAt: preCheckNow.toISOString(),
       },
       state.setoranList || [],
       state.members || [],
@@ -581,7 +595,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       state.deletedMemberIds || []
     );
     if (blockingSedekahDup) {
-      alert(
+      setTftuError(
         `Setoran ganda terdeteksi: pengajuan ${jenisLabel} sebesar ${formatRupiah(nominal)} pada tanggal hari ini sudah tercatat (${blockingSedekahDup.status === 'disetujui' ? 'Terverifikasi' : 'Menunggu Verifikasi'}). Data double tidak dimasukkan.`
       );
       return;
@@ -595,8 +609,9 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
     setIsSubmittingDonasi(true);
     try {
       const now = new Date();
-      const tanggal = now.toISOString().slice(0, 10);
-      const jam = now.toTimeString().slice(0, 5);
+      const tanggal = getWibDateStr(now);
+      const jam = getWibTimeStr(now, false);
+      const createdAtIso = now.toISOString();
       const entryId = `sdk-${Date.now()}`;
       const cleanNote = doaPesan.trim();
 
@@ -631,7 +646,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         keterangan: cleanNote ? `Sedekah dari ${memberNama} - ${cleanNote}` : `Sedekah dari ${memberNama}`,
         sumberDana: 'qris',
         inputBy: currentMember ? `Anggota (${currentMember.nama})` : 'Sistem Donasi',
-        createdAt: now.toISOString(),
+        createdAt: createdAtIso,
       };
 
       const newSetoranEntry = {
@@ -648,53 +663,80 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
         ...(finalBukti ? { buktiTransferUrl: finalBukti } : {}),
         catatanAnggota: cleanNote ? `[${jenisLabel}] ${cleanNote}` : `[${jenisLabel}] Sedekah dari ${memberNama}`,
         status: 'pending' as const,
-        createdAt: now.toISOString(),
+        tanggal,
+        jam,
+        createdAt: createdAtIso,
         nomorReferensi: `SDK-${Date.now().toString().slice(-6)}`,
       };
 
+      let submittedToServer = false;
+      let savedDeposit: any = newSetoranEntry;
+      let savedSedekah: SedekahBerbagiEntry = newSedekahEntry;
+      let savedAudit: any = null;
       try {
-        const submitRes = await fetch('/api/setoran/submit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            deposit: newSetoranEntry,
-            sedekahEntry: newSedekahEntry,
-          }),
-        });
-        if (!submitRes.ok) {
-          const errData = await submitRes.json().catch(() => null);
-          alert(errData?.error || 'Setoran gagal diajukan karena terdeteksi data double.');
-          await fetchStateFromServer(true);
-          return;
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        try {
+          const submitRes = await fetch('/api/setoran/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deposit: newSetoranEntry,
+              sedekahEntry: newSedekahEntry,
+            }),
+            signal: controller?.signal,
+          });
+          const resData = await submitRes.json().catch(() => null);
+          if (!submitRes.ok) {
+            setTftuError(resData?.error || 'Setoran gagal diajukan. Silakan periksa kembali data Anda.');
+            await fetchStateFromServer(true);
+            return;
+          }
+          submittedToServer = true;
+          if (resData?.deposit) savedDeposit = resData.deposit;
+          if (resData?.sedekahEntry) savedSedekah = resData.sedekahEntry;
+          if (resData?.auditLog) savedAudit = resData.auditLog;
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
         }
       } catch (err) {
         console.warn('Setoran sedekah submit notice:', err);
       }
 
-      await updateState((prev) => {
-        const dupInPrev = findBlockingDoubleDepositClient(
-          { ...newSetoranEntry, namaBerbagiKustom: jenisLabel },
-          prev.setoranList || [],
-          prev.members || [],
-          prev.deletedSetoranIds || [],
-          prev.deletedMemberIds || []
-        );
-        if (dupInPrev) return prev;
-        const audit = createAuditLog(
-          currentMember || ({ nama: 'Donatur', role: 'member' } as any),
-          'Pengajuan Donasi Berbagi (QRIS)',
-          `${memberNama} mengajukan ${jenisLabel} senilai ${formatRupiah(nominal)} via QRIS Resmi. Status: PENDING VERIFIKASI.`
-        );
-
-        return {
+      if (submittedToServer) {
+        const nextLocalState = commitLocalStatePatch((prev) => ({
           ...prev,
-          sedekahList: [newSedekahEntry, ...(prev.sedekahList || []).filter((sdk) => sdk.id !== newSedekahEntry.id)],
-          setoranList: [newSetoranEntry, ...(prev.setoranList || []).filter((s) => s.id !== newSetoranEntry.id)],
-          auditLogs: [audit, ...(prev.auditLogs || [])],
-        };
-      });
+          sedekahList: [savedSedekah, ...(prev.sedekahList || []).filter((sdk) => sdk.id !== savedSedekah.id)],
+          setoranList: [savedDeposit, ...(prev.setoranList || []).filter((s) => s.id !== savedDeposit.id)],
+          ...(savedAudit ? { auditLogs: [savedAudit, ...(prev.auditLogs || [])] } : {}),
+        }));
+        scheduleShardedFirestoreSync(nextLocalState, 10);
+      } else {
+        await updateState((prev) => {
+          const dupInPrev = findBlockingDoubleDepositClient(
+            { ...newSetoranEntry, namaBerbagiKustom: jenisLabel },
+            prev.setoranList || [],
+            prev.members || [],
+            prev.deletedSetoranIds || [],
+            prev.deletedMemberIds || []
+          );
+          if (dupInPrev) return prev;
+          const audit = createAuditLog(
+            currentMember || ({ nama: 'Donatur', role: 'member' } as any),
+            'Pengajuan Donasi Berbagi (QRIS)',
+            `${memberNama} mengajukan ${jenisLabel} senilai ${formatRupiah(nominal)} via QRIS Resmi. Status: PENDING VERIFIKASI.`
+          );
 
-      setDonasiSuccessEntry(newSedekahEntry);
+          return {
+            ...prev,
+            sedekahList: [newSedekahEntry, ...(prev.sedekahList || []).filter((sdk) => sdk.id !== newSedekahEntry.id)],
+            setoranList: [newSetoranEntry, ...(prev.setoranList || []).filter((s) => s.id !== newSetoranEntry.id)],
+            auditLogs: [audit, ...(prev.auditLogs || [])],
+          };
+        });
+      }
+
+      setDonasiSuccessEntry(savedSedekah);
       setCustomNominal('');
       setDoaPesan('');
       setBuktiTransferUrl('');

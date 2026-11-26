@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AppState,
   MemberUser,
@@ -16,6 +16,8 @@ import {
   getWibDateStr,
   getWibTimeStr,
   applyAuthoritativeServerState,
+  commitLocalStatePatch,
+  scheduleShardedFirestoreSync,
   dismissBrowserNotification,
   findBlockingDoubleDepositClient,
   deduplicateSetoranListPostCutoffClient,
@@ -73,17 +75,27 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const [catatan, setCatatan] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const proofInputRef = useRef<HTMLInputElement | null>(null);
 
   // Penarikan Tabungan Umum State
   const [isTarikModalOpen, setIsTarikModalOpen] = useState(false);
   const [tipeTarik, setTipeTarik] = useState<'umum' | 'pokok'>('umum');
   const [nominalTarik, setNominalTarik] = useState<string>('');
+  const [tarikError, setTarikError] = useState<string>('');
   const [bankTujuanTarik, setBankTujuanTarik] = useState<string>(
     currentMember ? `${currentMember.bankPribadi.namaBank} - ${currentMember.bankPribadi.nomorRekening}` : ''
   );
 
-  // Admin Verification State
-  const [filterStatus, setFilterStatus] = useState<'semua' | 'pending' | 'disetujui' | 'ditolak'>('pending');
+  useEffect(() => {
+    if (currentMember) {
+      setBankTujuanTarik(`${currentMember.bankPribadi.namaBank} - ${currentMember.bankPribadi.nomorRekening}`);
+    }
+  }, [currentMember?.id, currentMember?.bankPribadi?.namaBank, currentMember?.bankPribadi?.nomorRekening]);
+
+  // Admin Verification & Member Filter State
+  const [filterStatus, setFilterStatus] = useState<'semua' | 'pending' | 'disetujui' | 'ditolak'>(
+    isMember ? 'semua' : 'pending'
+  );
   const [filterJenis, setFilterJenis] = useState<'semua' | 'kewajiban' | 'umum' | 'sedekah'>('semua');
   const [sortBy, setSortBy] = useState<
     | 'pending_first'
@@ -93,7 +105,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     | 'terlama'
     | 'nominal_besar'
     | 'nominal_kecil'
-  >('pending_first');
+  >(isMember ? 'terbaru' : 'pending_first');
   const [previewBukti, setPreviewBukti] = useState<string | null>(null);
   const [filterStartDate, setFilterStartDate] = useState<string>('');
   const [filterEndDate, setFilterEndDate] = useState<string>('');
@@ -173,9 +185,33 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.type && !file.type.startsWith('image/')) {
+      setMsg({ type: 'error', text: 'File bukti setoran harus berupa gambar (JPG, PNG, WebP).' });
+      if (proofInputRef.current) proofInputRef.current.value = '';
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setMsg({ type: 'error', text: 'Ukuran foto bukti maksimal 15 MB.' });
+      if (proofInputRef.current) proofInputRef.current.value = '';
+      return;
+    }
+
     const reader = new FileReader();
+    reader.onerror = () => {
+      setMsg({ type: 'error', text: 'Gagal membaca file foto bukti. Silakan pilih ulang foto.' });
+      if (proofInputRef.current) proofInputRef.current.value = '';
+    };
     reader.onload = (event) => {
+      const rawDataUrl = event.target?.result as string;
+      if (!rawDataUrl) {
+        setMsg({ type: 'error', text: 'File gambar kosong atau tidak terbaca.' });
+        return;
+      }
       const img = new Image();
+      img.onerror = () => {
+        setMsg({ type: 'error', text: 'Format foto bukti tidak didukung. Gunakan foto JPG/PNG.' });
+        if (proofInputRef.current) proofInputRef.current.value = '';
+      };
       img.onload = () => {
         const canvas = document.createElement('canvas');
         const MAX_WIDTH = 800;
@@ -195,14 +231,19 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           }
         }
 
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = Math.max(1, Math.round(width));
+        canvas.height = Math.max(1, Math.round(height));
         const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
+        if (!ctx) {
+          setBuktiUrl(rawDataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
-        setBuktiUrl(compressedDataUrl);
+        setBuktiUrl(compressedDataUrl || rawDataUrl);
+        setMsg(null);
       };
-      img.src = event.target?.result as string;
+      img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
   };
@@ -211,6 +252,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMember) return;
+    if (isSubmitting) return;
+
+    if (currentMember.status === 'dibekukan') {
+      setMsg({
+        type: 'error',
+        text: 'Akun Anda sedang dibekukan oleh pengurus koperasi. Pengajuan setoran tidak dapat diproses.',
+      });
+      return;
+    }
     if (jenisSetoran === 'kewajiban' && daysCount <= 0) {
       setMsg({ type: 'error', text: 'Silakan isi jumlah hari setoran kewajiban terlebih dahulu.' });
       return;
@@ -229,6 +279,11 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       return;
     }
 
+    const now = new Date();
+    const tglWib = getWibDateStr(now);
+    const jamWib = getWibTimeStr(now, false);
+    const createdAtIso = now.toISOString();
+
     const blockingDup = findBlockingDoubleDepositClient(
       {
         memberId: currentMember.id,
@@ -237,7 +292,8 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         jenis: jenisSetoran,
         metode,
         nominal: nominalFinal,
-        createdAt: new Date().toISOString(),
+        tanggal: tglWib,
+        createdAt: createdAtIso,
       },
       state.setoranList || [],
       state.members || [],
@@ -253,6 +309,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     }
 
     setIsSubmitting(true);
+    setMsg(null);
     let finalBukti = buktiUrl;
     if (finalBukti && finalBukti.startsWith('data:image')) {
       try {
@@ -265,12 +322,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         }
       } catch {}
     }
+
+    const depId = `dep-${Date.now()}`;
     const newDeposit: SetoranVerifikasi = {
-      id: `dep-${Date.now()}`,
+      id: depId,
       nomorReferensi: `REF-HWS-${Date.now().toString().slice(-6)}`,
       memberId: currentMember.id,
       memberNama: currentMember.nama,
       memberRekening: currentMember.nomorRekening,
+      memberNomorAnggota: currentMember.nomorAnggota,
       memberWilayah: currentMember.wilayah,
       jenis: jenisSetoran,
       jumlahHari: jenisSetoran === 'kewajiban' ? daysCount : undefined,
@@ -280,50 +340,77 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       buktiTransferUrl: finalBukti,
       catatanAnggota: catatan,
       status: 'pending',
-      createdAt: new Date().toISOString(),
+      tanggal: tglWib,
+      jam: jamWib,
+      createdAt: createdAtIso,
     };
 
-    // Online submission to server (Req 2 & 4)
+    // Online submission to server (Req 2 & 4) dengan timeout & tanpa redundant full-state rebroadcast
+    let submittedToServer = false;
+    let savedDeposit: SetoranVerifikasi = newDeposit;
+    let savedAudit: any = null;
     try {
-      const submitRes = await fetch('/api/setoran/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deposit: newDeposit }),
-      });
-      if (!submitRes.ok) {
-        const errData = await submitRes.json().catch(() => null);
-        setIsSubmitting(false);
-        setMsg({
-          type: 'error',
-          text: errData?.error || 'Setoran gagal diajukan karena terdeteksi data double.',
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+      try {
+        const submitRes = await fetch('/api/setoran/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deposit: newDeposit }),
+          signal: controller?.signal,
         });
-        await fetchStateFromServer(true);
-        return;
+        const resData = await submitRes.json().catch(() => null);
+        if (!submitRes.ok) {
+          setIsSubmitting(false);
+          setMsg({
+            type: 'error',
+            text: resData?.error || 'Setoran gagal diajukan. Silakan periksa kembali data Anda.',
+          });
+          await fetchStateFromServer(true);
+          return;
+        }
+        submittedToServer = true;
+        if (resData?.deposit) savedDeposit = resData.deposit;
+        if (resData?.auditLog) savedAudit = resData.auditLog;
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
       }
-    } catch {}
+    } catch {
+      submittedToServer = false;
+    }
 
-    await updateState((prev) => {
-      const dupInPrev = findBlockingDoubleDepositClient(
-        newDeposit,
-        prev.setoranList || [],
-        prev.members || [],
-        prev.deletedSetoranIds || [],
-        prev.deletedMemberIds || []
-      );
-      if (dupInPrev) return prev;
-      return {
+    if (submittedToServer) {
+      const nextLocalState = commitLocalStatePatch((prev) => ({
         ...prev,
-        setoranList: [newDeposit, ...(prev.setoranList || []).filter((s) => s.id !== newDeposit.id)],
-      };
-    });
+        setoranList: [savedDeposit, ...(prev.setoranList || []).filter((s) => s.id !== savedDeposit.id)],
+        ...(savedAudit ? { auditLogs: [savedAudit, ...(prev.auditLogs || [])] } : {}),
+      }));
+      scheduleShardedFirestoreSync(nextLocalState, 10);
+    } else {
+      await updateState((prev) => {
+        const dupInPrev = findBlockingDoubleDepositClient(
+          newDeposit,
+          prev.setoranList || [],
+          prev.members || [],
+          prev.deletedSetoranIds || [],
+          prev.deletedMemberIds || []
+        );
+        if (dupInPrev) return prev;
+        return {
+          ...prev,
+          setoranList: [newDeposit, ...(prev.setoranList || []).filter((s) => s.id !== newDeposit.id)],
+        };
+      });
+    }
 
     setIsSubmitting(false);
-    setBuktiSetorSuccess(newDeposit);
+    setBuktiSetorSuccess(savedDeposit);
     setMsg({
       type: 'success',
       text: 'Setoran berhasil diajukan! Menunggu verifikasi admin koperasi.',
     });
     setBuktiUrl('');
+    if (proofInputRef.current) proofInputRef.current.value = '';
     setCatatan('');
     setJumlahHari('');
   };
@@ -516,10 +603,15 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     };
 
     const waktuStr = deposit.createdAt ? formatWibDateTime(deposit.createdAt) : formatWibDateTime(new Date());
-    drawRow('No. Referensi / Transaksi:', deposit.nomorReferensi || deposit.id, 285);
-    drawRow('Waktu Pengajuan (WIB):', waktuStr, 322);
-    drawRow('Nama Lengkap Anggota:', deposit.memberNama, 359);
-    drawRow('No. Rekening Anggota:', deposit.memberRekening, 396);
+    let cursorY = 285;
+    drawRow('No. Referensi / Transaksi:', deposit.nomorReferensi || deposit.id, cursorY);
+    cursorY += 37;
+    drawRow('Waktu Pengajuan (WIB):', waktuStr, cursorY);
+    cursorY += 37;
+    drawRow('Nama Lengkap Anggota:', deposit.memberNama, cursorY);
+    cursorY += 37;
+    drawRow('No. Rekening Anggota:', deposit.memberRekening, cursorY);
+    cursorY += 37;
     drawRow(
       'Jenis Setoran:',
       deposit.jenis === 'kewajiban'
@@ -527,10 +619,12 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         : deposit.jenis === 'sedekah'
         ? 'Setoran Sedekah / Berbagi'
         : 'Tabungan Umum Bebas',
-      433
+      cursorY
     );
+    cursorY += 37;
     if (deposit.jenis === 'kewajiban') {
-      drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || 1} Hari`, 470);
+      drawRow('Jumlah Hari Kewajiban:', `${deposit.jumlahHari || Math.max(1, Math.round(deposit.nominal / 2000))} Hari`, cursorY);
+      cursorY += 37;
     }
     const isApproved = deposit.status === 'disetujui';
     const isRejected = deposit.status === 'ditolak';
@@ -544,11 +638,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       deposit.metode === 'tabungan_umum'
         ? 'Tabungan Umum (TFTU)'
         : `${deposit.rekeningTujuan || 'QRIS Resmi Koperasi HWS'} (${(deposit.metode || 'QRIS').toUpperCase()})`;
-    drawRow('Metode Pembayaran:', metodeSlipLabel, 507);
-    drawRow('Status Verifikasi:', statusLabel, 544, true);
+    drawRow('Metode Pembayaran:', metodeSlipLabel, cursorY);
+    cursorY += 37;
+    drawRow('Status Verifikasi:', statusLabel, cursorY, true);
+    cursorY += 32;
     if (isApproved || isRejected) {
-      drawRow('Diverifikasi Oleh:', deposit.verifiedBy || 'Admin Koperasi', 576);
-      drawRow('Waktu Verifikasi (WIB):', deposit.verifiedAt ? formatWibDateTime(deposit.verifiedAt) : '-', 604);
+      drawRow('Diverifikasi Oleh:', deposit.verifiedBy || 'Admin Koperasi', cursorY);
+      cursorY += 28;
+      drawRow('Waktu Verifikasi (WIB):', deposit.verifiedAt ? formatWibDateTime(deposit.verifiedAt) : '-', cursorY);
     }
 
     ctx.fillStyle = isApproved ? '#ecfdf5' : isRejected ? '#fef2f2' : '#fffbeb';
@@ -598,34 +695,45 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
   const handleTarikSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMember) return;
+    setTarikError('');
+
+    if (currentMember.status === 'dibekukan') {
+      setTarikError('Akun Anda sedang dibekukan oleh pengurus koperasi. Penarikan saldo tidak diizinkan.');
+      return;
+    }
+
     const amount = Number(nominalTarik);
     if (!amount || amount <= 0) {
-      alert('Masukkan nominal penarikan yang valid.');
+      setTarikError('Masukkan nominal penarikan yang valid.');
       return;
     }
 
     if (tipeTarik === 'umum') {
       if (amount > currentMember.saldoUmum) {
-        alert(`Saldo Tabungan Umum tidak mencukupi (Tersedia: ${formatRupiah(currentMember.saldoUmum)})`);
+        setTarikError(`Saldo Tabungan Umum tidak mencukupi (Tersedia: ${formatRupiah(currentMember.saldoUmum)})`);
         return;
       }
     } else {
       if (currentMember.isPokokLocked) {
-        alert('Tabungan Pokok masih terkunci oleh sistem/admin.');
+        setTarikError('Tabungan Pokok masih terkunci oleh sistem/admin.');
         return;
       }
       if (amount > currentMember.saldoPokok) {
-        alert(`Saldo Tabungan Pokok tidak mencukupi (Tersedia: ${formatRupiah(currentMember.saldoPokok)})`);
+        setTarikError(`Saldo Tabungan Pokok tidak mencukupi (Tersedia: ${formatRupiah(currentMember.saldoPokok)})`);
         return;
       }
     }
 
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const tgl = getWibDateStr(now);
+    const jam = getWibTimeStr(now, false);
+    const refTarikId = `TRK-${Date.now().toString().slice(-6)}`;
 
     // Keterangan penarikan tabungan umum per req 42: "Tarikan Tunai [nama anggota]"
     const ket = tipeTarik === 'umum' ? `Tarikan Tunai ${currentMember.nama}` : `Tarikan Tabungan Pokok ${currentMember.nama}`;
+
+    const newPokok = tipeTarik === 'pokok' ? Math.max(0, currentMember.saldoPokok - amount) : currentMember.saldoPokok;
+    const newUmum = tipeTarik === 'umum' ? Math.max(0, currentMember.saldoUmum - amount) : currentMember.saldoUmum;
 
     // New member transaction
     const newTx: MemberTransaction = {
@@ -637,17 +745,22 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       cbg: `KCP ${currentMember.wilayah.toUpperCase()}`,
       tipe: 'keluar',
       nominal: amount,
-      saldoSetelah: tipeTarik === 'umum' ? currentMember.saldoUmum - amount : currentMember.saldoPokok - amount,
+      saldoSetelah: newPokok + newUmum + currentMember.saldoZakatFitrah + currentMember.saldoQurban,
       kategori: tipeTarik === 'umum' ? 'umum' : 'pokok',
+      referensiId: refTarikId,
     };
 
     // Entry in Buku Kas Anggota (Keluar)
     const newKas: KasEntry = {
-      id: `kas-${Date.now()}`,
+      id: `kas-tarik-${Date.now()}`,
       bukuKas: 'anggota',
       tanggal: tgl,
+      jam,
       kategori: tipeTarik === 'umum' ? 'Penarikan Tabungan Umum' : 'Penarikan Tabungan Pokok',
       keterangan: ket,
+      namaPenerima: currentMember.nama,
+      memberId: currentMember.id,
+      referensiId: refTarikId,
       tipe: 'keluar',
       nominal: amount,
       saldoKasSetelah: 0,
@@ -659,10 +772,14 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     await updateState((prev) => {
       const updatedMembers = prev.members.map((m) => {
         if (m.id === currentMember.id) {
+          const mUmum = tipeTarik === 'umum' ? Math.max(0, m.saldoUmum - amount) : m.saldoUmum;
+          const mPokok = tipeTarik === 'pokok' ? Math.max(0, m.saldoPokok - amount) : m.saldoPokok;
           return {
             ...m,
-            saldoUmum: tipeTarik === 'umum' ? m.saldoUmum - amount : m.saldoUmum,
-            saldoPokok: tipeTarik === 'pokok' ? m.saldoPokok - amount : m.saldoPokok,
+            saldoUmum: mUmum,
+            saldoPokok: mPokok,
+            totalSimpanan: mPokok + mUmum + (Number(m.saldoZakatFitrah) || 0) + (Number(m.saldoQurban) || 0),
+            jumlahHariPokok: Math.floor(mPokok / (prev.profile?.pembagianPokokHarian || 1000)),
           };
         }
         return m;
@@ -671,14 +788,18 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       return {
         ...prev,
         members: updatedMembers,
-        memberTransactions: [...prev.memberTransactions, newTx],
+        memberTransactions: [newTx, ...prev.memberTransactions],
         kasList: [newKas, ...prev.kasList],
       };
     });
 
     setIsTarikModalOpen(false);
     setNominalTarik('');
-    alert(`Penarikan ${formatRupiah(amount)} berhasil diproses ke ${bankTujuanTarik}!`);
+    setTarikError('');
+    setMsg({
+      type: 'success',
+      text: `✓ Penarikan ${formatRupiah(amount)} berhasil diproses ke ${bankTujuanTarik}!`,
+    });
   };
 
   // ADMIN: Approve Deposit (Online Realtime Server Sync - ANTI-DUPLIKASI Req 4 & 10)
@@ -1272,10 +1393,21 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
     });
   };
 
+  const isOwnDeposit = (s: SetoranVerifikasi) => {
+    if (!currentMember) return true;
+    return (
+      s.memberId === currentMember.id ||
+      (!!currentMember.nomorRekening && s.memberRekening === currentMember.nomorRekening) ||
+      (!!currentMember.nomorAnggota && s.memberNomorAnggota === currentMember.nomorAnggota)
+    );
+  };
+
   // Export deposits table to CSV or printable PDF
   const handleExportDeposits = (format: 'pdf' | 'excel') => {
     const listToExport = deduplicatedSetoranList.filter((s) => {
+      if (isMember && !isOwnDeposit(s)) return false;
       if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
+      if (filterJenis !== 'semua' && s.jenis !== filterJenis) return false;
       if (filterStartDate && getWibDateStr(new Date(s.createdAt)) < filterStartDate) return false;
       if (filterEndDate && getWibDateStr(new Date(s.createdAt)) > filterEndDate) return false;
       return true;
@@ -1600,15 +1732,27 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
                 </div>
                 <div className="flex flex-col sm:flex-row items-center gap-3">
                   <input
+                    ref={proofInputRef}
                     type="file"
-                    required
+                    required={!buktiUrl}
                     accept="image/*"
                     onChange={handleProofUpload}
                     className="text-xs text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer"
                   />
                   {buktiUrl ? (
-                    <div className="relative w-24 h-16 rounded-xl overflow-hidden border border-emerald-500 shadow-md">
+                    <div className="relative w-24 h-16 rounded-xl overflow-hidden border border-emerald-500 shadow-md shrink-0">
                       <img src={buktiUrl} alt="Preview Bukti" className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBuktiUrl('');
+                          if (proofInputRef.current) proofInputRef.current.value = '';
+                        }}
+                        className="absolute top-1 right-1 w-5 h-5 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center shadow cursor-pointer"
+                        title="Hapus & ganti foto bukti"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
                       <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center text-emerald-400 py-0.5 font-bold">
                         ✓ Terlampir
                       </span>
@@ -1728,12 +1872,25 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           <div className="bg-[#0f172a] border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700">
               <h3 className="text-sm font-extrabold text-white">Formulir Penarikan Saldo Simpanan</h3>
-              <button onClick={() => setIsTarikModalOpen(false)} className="text-slate-400 hover:text-white">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTarikModalOpen(false);
+                  setTarikError('');
+                }}
+                className="text-slate-400 hover:text-white"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={handleTarikSubmit} className="pt-4 space-y-4">
+              {tarikError && (
+                <div className="p-2.5 bg-red-950/80 border border-red-500/40 text-red-200 rounded-xl text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>{tarikError}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">Pilih Tabungan</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1893,7 +2050,7 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
         {/* Quick Filter Status Tabs */}
         {(() => {
           const baseList = isMember
-            ? deduplicatedSetoranList.filter((s) => s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening)
+            ? deduplicatedSetoranList.filter((s) => isOwnDeposit(s))
             : deduplicatedSetoranList;
           const pendingCount = baseList.filter((s) => s.status === 'pending').length;
           const disetujuiCount = baseList.filter((s) => s.status === 'disetujui').length;
@@ -1902,315 +2059,319 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           const sedekahCount = baseList.filter((s) => s.jenis === 'sedekah').length;
           const pendingSedekahCount = baseList.filter((s) => s.jenis === 'sedekah' && s.status === 'pending').length;
 
+          const filteredDeposits = baseList
+            .filter((s) => {
+              if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
+              if (filterJenis !== 'semua' && s.jenis !== filterJenis) return false;
+              return true;
+            })
+            .sort((a, b) => {
+              if (sortBy === 'pending_first') {
+                if (a.status === 'pending' && b.status !== 'pending') return -1;
+                if (a.status !== 'pending' && b.status === 'pending') return 1;
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              }
+              if (sortBy === 'approved_first') {
+                if (a.status === 'disetujui' && b.status !== 'disetujui') return -1;
+                if (a.status !== 'disetujui' && b.status === 'disetujui') return 1;
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              }
+              if (sortBy === 'rejected_first') {
+                if (a.status === 'ditolak' && b.status !== 'ditolak') return -1;
+                if (a.status !== 'ditolak' && b.status === 'ditolak') return 1;
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              }
+              if (sortBy === 'terbaru') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+              if (sortBy === 'terlama') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+              if (sortBy === 'nominal_besar') return b.nominal - a.nominal;
+              if (sortBy === 'nominal_kecil') return a.nominal - b.nominal;
+              return 0;
+            });
+
           return (
-            <div className="space-y-2 mt-3 pt-3 border-t border-slate-800">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Status Setoran:</span>
-                <button
-                  type="button"
-                  onClick={() => setFilterStatus('semua')}
-                  className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    filterStatus === 'semua'
-                      ? 'bg-slate-700 text-white shadow'
-                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Semua ({baseList.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterStatus('pending')}
-                  className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    filterStatus === 'pending'
-                      ? 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-500/50'
-                      : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
-                  }`}
-                >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Pending Verifikasi ({pendingCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterStatus('disetujui')}
-                  className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                    filterStatus === 'disetujui'
-                      ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-emerald-500/50'
-                      : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
-                  }`}
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Terverifikasi Setoran ({disetujuiCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterStatus('ditolak')}
-                  className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                    filterStatus === 'ditolak'
-                      ? 'bg-red-500 text-white shadow-md ring-2 ring-red-500/50'
-                      : 'bg-red-500/15 text-red-300 hover:bg-red-500/25 border border-red-500/30'
-                  }`}
-                >
-                  <XCircle className="w-3.5 h-3.5" />
-                  <span>Ditolak ({ditolakCount})</span>
-                </button>
+            <>
+              <div className="space-y-2 mt-3 pt-3 border-t border-slate-800">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Status Setoran:</span>
+                  <button
+                    type="button"
+                    onClick={() => setFilterStatus('semua')}
+                    className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      filterStatus === 'semua'
+                        ? 'bg-slate-700 text-white shadow'
+                        : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Semua ({baseList.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterStatus('pending')}
+                    className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterStatus === 'pending'
+                        ? 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-500/50'
+                        : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Pending Verifikasi ({pendingCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterStatus('disetujui')}
+                    className={`py-1 px-3 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterStatus === 'disetujui'
+                        ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-emerald-500/50'
+                        : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Terverifikasi Setoran ({disetujuiCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterStatus('ditolak')}
+                    className={`py-1 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterStatus === 'ditolak'
+                        ? 'bg-red-500 text-white shadow-md ring-2 ring-red-500/50'
+                        : 'bg-red-500/15 text-red-300 hover:bg-red-500/25 border border-red-500/30'
+                    }`}
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                    <span>Ditolak ({ditolakCount})</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Jenis Setoran:</span>
+                  <button
+                    type="button"
+                    onClick={() => setFilterJenis('semua')}
+                    className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                      filterJenis === 'semua'
+                        ? 'bg-sky-500 text-slate-950 shadow'
+                        : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Semua Jenis
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterJenis('kewajiban')}
+                    className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                      filterJenis === 'kewajiban'
+                        ? 'bg-amber-500 text-slate-950 shadow'
+                        : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Kewajiban Pokok
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterJenis('umum')}
+                    className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                      filterJenis === 'umum'
+                        ? 'bg-teal-500 text-slate-950 shadow'
+                        : 'bg-slate-800/80 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Tabungan Umum
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFilterJenis('sedekah')}
+                    className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                      filterJenis === 'sedekah'
+                        ? 'bg-rose-500 text-white shadow'
+                        : 'bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25'
+                    }`}
+                  >
+                    <span>Sedekah / Berbagi ({sedekahCount})</span>
+                    {pendingSedekahCount > 0 && (
+                      <span className="px-1.5 py-0.2 bg-amber-400 text-slate-950 rounded-full text-[10px] font-black">
+                        {pendingSedekahCount} Baru
+                      </span>
+                    )}
+                  </button>
+                </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <span className="text-[11px] font-bold text-slate-400 mr-1">Filter Jenis Setoran:</span>
-                <button
-                  type="button"
-                  onClick={() => setFilterJenis('semua')}
-                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                    filterJenis === 'semua'
-                      ? 'bg-sky-500 text-slate-950 shadow'
-                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Semua Jenis
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterJenis('kewajiban')}
-                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                    filterJenis === 'kewajiban'
-                      ? 'bg-amber-500 text-slate-950 shadow'
-                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Kewajiban Pokok
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterJenis('umum')}
-                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                    filterJenis === 'umum'
-                      ? 'bg-teal-500 text-slate-950 shadow'
-                      : 'bg-slate-800/80 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Tabungan Umum
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterJenis('sedekah')}
-                  className={`py-1 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                    filterJenis === 'sedekah'
-                      ? 'bg-rose-500 text-white shadow'
-                      : 'bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25'
-                  }`}
-                >
-                  <span>Sedekah / Berbagi ({sedekahCount})</span>
-                  {pendingSedekahCount > 0 && (
-                    <span className="px-1.5 py-0.2 bg-amber-400 text-slate-950 rounded-full text-[10px] font-black">
-                      {pendingSedekahCount} Baru
-                    </span>
-                  )}
-                </button>
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* List / Table */}
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-700 bg-slate-800/40 text-slate-400 font-bold uppercase text-[10px]">
-                <th className="py-2.5 px-3">Tanggal & Ref</th>
-                <th className="py-2.5 px-3">Anggota</th>
-                <th className="py-2.5 px-3">Jenis Setoran</th>
-                <th className="py-2.5 px-3">Nominal</th>
-                <th className="py-2.5 px-3">Bukti Setor (Format JPG)</th>
-                <th className="py-2.5 px-3">Status Verifikasi</th>
-                {!isMember && <th className="py-2.5 px-3 text-right">Aksi</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {deduplicatedSetoranList
-                .filter((s) => {
-                  if (isMember) return s.memberId === currentMember.id || s.memberRekening === currentMember.nomorRekening;
-                  if (filterStatus !== 'semua' && s.status !== filterStatus) return false;
-                  if (filterJenis !== 'semua' && s.jenis !== filterJenis) return false;
-                  return true;
-                })
-                .sort((a, b) => {
-                  if (sortBy === 'pending_first') {
-                    if (a.status === 'pending' && b.status !== 'pending') return -1;
-                    if (a.status !== 'pending' && b.status === 'pending') return 1;
-                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-                  }
-                  if (sortBy === 'approved_first') {
-                    if (a.status === 'disetujui' && b.status !== 'disetujui') return -1;
-                    if (a.status !== 'disetujui' && b.status === 'disetujui') return 1;
-                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-                  }
-                  if (sortBy === 'rejected_first') {
-                    if (a.status === 'ditolak' && b.status !== 'ditolak') return -1;
-                    if (a.status !== 'ditolak' && b.status === 'ditolak') return 1;
-                    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-                  }
-                  if (sortBy === 'terbaru') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-                  if (sortBy === 'terlama') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-                  if (sortBy === 'nominal_besar') return b.nominal - a.nominal;
-                  if (sortBy === 'nominal_kecil') return a.nominal - b.nominal;
-                  return 0;
-                })
-                .map((dep) => (
-                  <tr key={dep.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <div className="font-mono font-bold text-slate-200">
-                        {dep.createdAt ? formatWibDateShort(dep.createdAt) : '-'}
-                      </div>
-                      <div className="text-[10px] text-amber-300 font-mono font-bold mt-0.5">
-                        Jam: {dep.createdAt ? `${getWibTimeStr(new Date(dep.createdAt), false)} WIB` : '-'}
-                      </div>
-                      <div className="text-[10px] text-slate-500 font-mono mt-0.5">{dep.nomorReferensi}</div>
-                    </td>
-                    <td className="py-3 px-3">
-                      <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
-                        <span>{dep.memberNama}</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 font-mono">
-                        {dep.memberRekening} {dep.memberWilayah ? `• ${dep.memberWilayah}` : ''}
-                      </div>
-                    </td>
-                    <td className="py-3 px-3">
-                      {dep.jenis === 'sedekah' ? (
-                        <div>
-                          <span className="py-0.5 px-2 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-lg text-[10px] font-extrabold inline-block">
-                            Sedekah / Berbagi
-                          </span>
-                          {dep.catatanAnggota && (
-                            <div className="text-[10px] text-slate-400 mt-0.5">{dep.catatanAnggota}</div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="font-semibold text-slate-200">
-                          {dep.jenis === 'kewajiban'
-                            ? `Tabungan Kewajiban (${dep.jumlahHari} hari)`
-                            : 'Tabungan Umum'}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 font-mono font-bold text-amber-400">
-                      {formatRupiah(dep.nominal)}
-                    </td>
-                    <td className="py-3 px-3">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {dep.buktiTransferUrl && (
-                          <button
-                            type="button"
-                            onClick={() => setPreviewBukti(dep.buktiTransferUrl || null)}
-                            className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-sky-500/30 cursor-pointer"
-                            title="Lihat foto bukti resi QRIS anggota"
-                          >
-                            <Eye className="w-3 h-3" />
-                            Foto Bukti
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleDownloadBuktiSetorJpg(dep)}
-                          className="py-1 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg text-[10px] font-extrabold flex items-center gap-1 border border-amber-500/30 cursor-pointer"
-                          title="Unduh slip tanda terima bukti setor resmi format .JPG sesuai status transaksi"
-                        >
-                          <FileDown className="w-3 h-3 text-amber-400" />
-                          <span>Format .JPG</span>
-                        </button>
-                      </div>
-                    </td>
-                    <td className="py-3 px-3">
-                      {dep.status === 'pending' && (
-                        <span className="py-1 px-2.5 bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
-                          <Clock className="w-3.5 h-3.5 shrink-0" />
-                          <span>Pending Verifikasi</span>
-                        </span>
-                      )}
-                      {dep.status === 'disetujui' && (
-                        <div className="space-y-1">
-                          <span className="py-1 px-2.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
-                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                            <span>Terverifikasi Setoran</span>
-                          </span>
-                          <div className="text-[10px] text-emerald-300 font-bold leading-tight">
-                            Admin: <span className="text-white">{dep.verifiedBy || 'Admin Koperasi'}</span>
+              {/* List / Table */}
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-700 bg-slate-800/40 text-slate-400 font-bold uppercase text-[10px]">
+                      <th className="py-2.5 px-3">Tanggal & Ref</th>
+                      <th className="py-2.5 px-3">Anggota</th>
+                      <th className="py-2.5 px-3">Jenis Setoran</th>
+                      <th className="py-2.5 px-3">Nominal</th>
+                      <th className="py-2.5 px-3">Bukti Setor (Format JPG)</th>
+                      <th className="py-2.5 px-3">Status Verifikasi</th>
+                      {!isMember && <th className="py-2.5 px-3 text-right">Aksi</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {filteredDeposits.map((dep) => (
+                      <tr key={dep.id} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <div className="font-mono font-bold text-slate-200">
+                            {dep.createdAt ? formatWibDateShort(dep.createdAt) : '-'}
                           </div>
-                          {dep.verifiedAt && (
-                            <div className="text-[10px] text-slate-400 font-mono">
-                              {formatWibDateTime(dep.verifiedAt)}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {dep.status === 'ditolak' && (
-                        <div className="space-y-1">
-                          <span className="py-1 px-2.5 bg-red-500/15 text-red-400 border border-red-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
-                            <XCircle className="w-3.5 h-3.5 shrink-0" />
-                            <span>Setoran Ditolak</span>
-                          </span>
-                          <div className="text-[10px] text-rose-300 font-bold leading-tight">
-                            Admin: <span className="text-white">{dep.verifiedBy || 'Admin Koperasi'}</span>
+                          <div className="text-[10px] text-amber-300 font-mono font-bold mt-0.5">
+                            Jam: {dep.createdAt ? `${getWibTimeStr(new Date(dep.createdAt), false)} WIB` : '-'}
                           </div>
-                          {dep.verifiedAt && (
-                            <div className="text-[10px] text-slate-400 font-mono">
-                              {formatWibDateTime(dep.verifiedAt)}
+                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">{dep.nomorReferensi}</div>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
+                            <span>{dep.memberNama}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            {dep.memberRekening} {dep.memberWilayah ? `• ${dep.memberWilayah}` : ''}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3">
+                          {dep.jenis === 'sedekah' ? (
+                            <div>
+                              <span className="py-0.5 px-2 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-lg text-[10px] font-extrabold inline-block">
+                                Sedekah / Berbagi
+                              </span>
+                              {dep.catatanAnggota && (
+                                <div className="text-[10px] text-slate-400 mt-0.5">{dep.catatanAnggota}</div>
+                              )}
                             </div>
+                          ) : (
+                            <span className="font-semibold text-slate-200">
+                              {dep.jenis === 'kewajiban'
+                                ? `Tabungan Kewajiban (${dep.jumlahHari || Math.max(1, Math.round(dep.nominal / 2000))} hari)`
+                                : 'Tabungan Umum'}
+                            </span>
                           )}
-                          {(dep.alasanTolak || dep.catatanAdmin) && (
-                            <div className="text-[9px] text-rose-300/80 max-w-[180px] leading-snug">
-                              Alasan: {dep.alasanTolak || dep.catatanAdmin}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    {!isMember && (
-                      <td className="py-3 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {dep.status === 'pending' && (
-                            <>
+                        </td>
+                        <td className="py-3 px-3 font-mono font-bold text-amber-400">
+                          {formatRupiah(dep.nominal)}
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {dep.buktiTransferUrl && (
                               <button
                                 type="button"
-                                disabled={approvingId === dep.id}
-                                onClick={() => handleApproveDeposit(dep)}
-                                className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
+                                onClick={() => setPreviewBukti(dep.buktiTransferUrl || null)}
+                                className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-sky-400 rounded-lg text-[10px] font-bold flex items-center gap-1 border border-sky-500/30 cursor-pointer"
+                                title="Lihat foto bukti resi QRIS anggota"
                               >
-                                {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
+                                <Eye className="w-3 h-3" />
+                                Foto Bukti
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRejectDeposit(dep)}
-                                className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
-                              >
-                                ✕ Tolak
-                              </button>
-                            </>
-                          )}
-                          {currentAdmin?.role === 'super_admin' && (
+                            )}
                             <button
                               type="button"
-                              onClick={() => handleDeleteDeposit(dep)}
-                              className="py-1 px-2 bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 border border-rose-500/50 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 transition-all"
-                              title="Super Admin: Hapus Pengajuan Setoran"
+                              onClick={() => handleDownloadBuktiSetorJpg(dep)}
+                              className="py-1 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 rounded-lg text-[10px] font-extrabold flex items-center gap-1 border border-amber-500/30 cursor-pointer"
+                              title="Unduh slip tanda terima bukti setor resmi format .JPG sesuai status transaksi"
                             >
-                              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                              <span className="hidden sm:inline">Hapus</span>
+                              <FileDown className="w-3 h-3 text-amber-400" />
+                              <span>Format .JPG</span>
                             </button>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3">
+                          {dep.status === 'pending' && (
+                            <span className="py-1 px-2.5 bg-amber-500/15 text-amber-400 border border-amber-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                              <Clock className="w-3.5 h-3.5 shrink-0" />
+                              <span>Pending Verifikasi</span>
+                            </span>
                           )}
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-            </tbody>
-          </table>
+                          {dep.status === 'disetujui' && (
+                            <div className="space-y-1">
+                              <span className="py-1 px-2.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <span>Terverifikasi Setoran</span>
+                              </span>
+                              <div className="text-[10px] text-emerald-300 font-bold leading-tight">
+                                Admin: <span className="text-white">{dep.verifiedBy || 'Admin Koperasi'}</span>
+                              </div>
+                              {dep.verifiedAt && (
+                                <div className="text-[10px] text-slate-400 font-mono">
+                                  {formatWibDateTime(dep.verifiedAt)}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {dep.status === 'ditolak' && (
+                            <div className="space-y-1">
+                              <span className="py-1 px-2.5 bg-red-500/15 text-red-400 border border-red-500/30 rounded-full text-[10px] font-black inline-flex items-center gap-1.5 shadow-sm">
+                                <XCircle className="w-3.5 h-3.5 shrink-0" />
+                                <span>Setoran Ditolak</span>
+                              </span>
+                              <div className="text-[10px] text-rose-300 font-bold leading-tight">
+                                Admin: <span className="text-white">{dep.verifiedBy || 'Admin Koperasi'}</span>
+                              </div>
+                              {dep.verifiedAt && (
+                                <div className="text-[10px] text-slate-400 font-mono">
+                                  {formatWibDateTime(dep.verifiedAt)}
+                                </div>
+                              )}
+                              {(dep.alasanTolak || dep.catatanAdmin) && (
+                                <div className="text-[9px] text-rose-300/80 max-w-[180px] leading-snug">
+                                  Alasan: {dep.alasanTolak || dep.catatanAdmin}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        {!isMember && (
+                          <td className="py-3 px-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {dep.status === 'pending' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={approvingId === dep.id}
+                                    onClick={() => handleApproveDeposit(dep)}
+                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-[11px] font-bold shadow transition-all flex items-center gap-1 cursor-pointer"
+                                  >
+                                    {approvingId === dep.id ? 'Memproses...' : '✓ Setujui'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRejectDeposit(dep)}
+                                    className="py-1 px-2 bg-red-900/60 hover:bg-red-800 text-red-300 rounded-lg text-[11px] font-bold cursor-pointer"
+                                  >
+                                    ✕ Tolak
+                                  </button>
+                                </>
+                              )}
+                              {currentAdmin?.role === 'super_admin' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDeposit(dep)}
+                                  className="py-1 px-2 bg-rose-950/50 hover:bg-rose-900/80 text-rose-300 border border-rose-500/50 rounded-lg text-[11px] font-bold cursor-pointer flex items-center gap-1 transition-all"
+                                  title="Super Admin: Hapus Pengajuan Setoran"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                                  <span className="hidden sm:inline">Hapus</span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
 
-          {deduplicatedSetoranList.length === 0 && (
-            <div className="text-center py-8 text-slate-500 text-xs">
-              Belum ada riwayat setoran simpanan yang diajukan.
-            </div>
-          )}
-        </div>
+                {filteredDeposits.length === 0 && (
+                  <div className="text-center py-8 text-slate-500 text-xs">
+                    {baseList.length === 0
+                      ? 'Belum ada riwayat setoran simpanan yang diajukan.'
+                      : 'Tidak ada data setoran yang sesuai dengan filter status atau jenis yang dipilih.'}
+                  </div>
+                )}
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {/* ================= MODAL PREVIEW BUKTI TRANSFER ================= */}

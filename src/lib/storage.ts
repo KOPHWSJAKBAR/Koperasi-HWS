@@ -2070,14 +2070,9 @@ export function getRedUnpostedMutasiEntries(
     const hasActiveTx = activeTxRefs.has(s.id) || activeTxIds.has(canonTxId);
     if (hasActiveTx) return;
 
-    const tgl =
-      (s as any).tanggal ||
-      (s.createdAt ? String(s.createdAt).slice(0, 10) : getWibDateStr());
-    const jam =
-      (s as any).jam ||
-      (s.createdAt && String(s.createdAt).includes('T')
-        ? String(s.createdAt).split('T')[1].slice(0, 5)
-        : '09:00');
+    const createdDate = s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? new Date(s.createdAt) : null;
+    const tgl = (s as any).tanggal || (createdDate ? getWibDateStr(createdDate) : getWibDateStr());
+    const jam = (s as any).jam || (createdDate ? getWibTimeStr(createdDate, false) : '09:00');
     const isTftu = s.metode === 'tabungan_umum';
     const kategori: RedMutasiEntry['kategori'] = isSedekah
       ? isTftu
@@ -2380,12 +2375,9 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
         ? safeUmumName
         : state.pengaturanBerbagi?.namaSubuh || 'Sedekah Subuh';
 
-    const tgl = s.createdAt && s.createdAt.includes('T')
-      ? s.createdAt.split('T')[0]
-      : new Date().toISOString().split('T')[0];
-    const jam = s.createdAt && s.createdAt.includes('T')
-      ? s.createdAt.split('T')[1].slice(0, 5)
-      : '08:00';
+    const createdDate = s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? new Date(s.createdAt) : null;
+    const tgl = (s as any).tanggal || (createdDate ? getWibDateStr(createdDate) : getWibDateStr());
+    const jam = (s as any).jam || (createdDate ? getWibTimeStr(createdDate, false) : '08:00');
 
     if (!existingSdk) {
       sedekahMap.set(s.id, {
@@ -2743,8 +2735,9 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
       nextTxList.some((t) => t.referensiId === s.id || t.id === txId);
 
     if (!isPresent) {
-      const tgl = (s as any).tanggal || (s.createdAt ? s.createdAt.split('T')[0] : new Date().toISOString().split('T')[0]);
-      const jam = (s as any).jam || (s.createdAt && s.createdAt.includes('T') ? s.createdAt.split('T')[1].slice(0, 5) : '09:00');
+      const createdDate = s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? new Date(s.createdAt) : null;
+      const tgl = (s as any).tanggal || (createdDate ? getWibDateStr(createdDate) : getWibDateStr());
+      const jam = (s as any).jam || (createdDate ? getWibTimeStr(createdDate, false) : '09:00');
       if (isSedekah) {
         const sdk = sedekahMap.get(s.id);
         const jenisLabel = resolveSedekahCat(s, sdk);
@@ -5932,7 +5925,9 @@ export function syncMemberBalancesWithBukuKasAnggota(prev: AppState): AppState {
       );
       if (!member) return;
 
-      const tgl = (dep.verifiedAt || dep.createdAt || getWibDateStr()).slice(0, 10);
+      const rawDate = dep.verifiedAt || dep.createdAt;
+      const parsedDepDate = rawDate && !isNaN(new Date(rawDate).getTime()) ? new Date(rawDate) : null;
+      const tgl = dep.tanggal || (parsedDepDate ? getWibDateStr(parsedDepDate) : getWibDateStr());
       const hasKasForDep = kasList.some(
         (k) =>
           k.bukuKas === 'anggota' &&

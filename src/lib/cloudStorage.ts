@@ -12,6 +12,23 @@ export interface UploadOptions {
   contentType?: string;
 }
 
+const STORAGE_UPLOAD_TIMEOUT_MS = 4000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 /**
  * Upload a File object or Base64 Data URL to Google Cloud / Firebase Storage.
  * Returns public HTTPS download URL or a resilient fallback URL.
@@ -44,12 +61,20 @@ export async function uploadToCloudStorage(
       const storagePath = `${folder}/${fileName}`;
       const storageRef = ref(storage, storagePath);
 
-      // Upload directly to Firebase Storage bucket (gen-lang-client-0761736071.firebasestorage.app)
-      await uploadString(storageRef, fileOrDataUrl, 'data_url', {
-        contentType: mime,
-      });
+      // Upload directly to Firebase Storage bucket with timeout guard
+      await withTimeout(
+        uploadString(storageRef, fileOrDataUrl, 'data_url', {
+          contentType: mime,
+        }),
+        STORAGE_UPLOAD_TIMEOUT_MS,
+        'Firebase Storage uploadString'
+      );
 
-      const downloadUrl = await getDownloadURL(storageRef);
+      const downloadUrl = await withTimeout(
+        getDownloadURL(storageRef),
+        STORAGE_UPLOAD_TIMEOUT_MS,
+        'Firebase Storage getDownloadURL'
+      );
       logAnalyticsEvent('file_uploaded', { folder, type: 'data_url', ext });
       return downloadUrl;
     } catch (err) {
@@ -66,11 +91,19 @@ export async function uploadToCloudStorage(
     const storagePath = `${folder}/${name}`;
     const storageRef = ref(storage, storagePath);
 
-    await uploadBytes(storageRef, file, {
-      contentType: options.contentType || file.type || 'application/octet-stream',
-    });
+    await withTimeout(
+      uploadBytes(storageRef, file, {
+        contentType: options.contentType || file.type || 'application/octet-stream',
+      }),
+      STORAGE_UPLOAD_TIMEOUT_MS,
+      'Firebase Storage uploadBytes'
+    );
 
-    const downloadUrl = await getDownloadURL(storageRef);
+    const downloadUrl = await withTimeout(
+      getDownloadURL(storageRef),
+      STORAGE_UPLOAD_TIMEOUT_MS,
+      'Firebase Storage getDownloadURL'
+    );
     logAnalyticsEvent('file_uploaded', { folder, type: 'binary', name });
     return downloadUrl;
   } catch (err) {

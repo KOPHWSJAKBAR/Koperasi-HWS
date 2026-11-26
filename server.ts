@@ -3179,6 +3179,22 @@ function getWibDateStrServer(date: Date = new Date()): string {
   }
 }
 
+function getWibTimeStrServer(date: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(date);
+    const h = parts.find((p) => p.type === 'hour')?.value || '00';
+    const m = parts.find((p) => p.type === 'minute')?.value || '00';
+    return `${h}:${m}`;
+  } catch {
+    return new Date(date.getTime() + 7 * 60 * 60 * 1000).toISOString().slice(11, 16);
+  }
+}
+
 function getDepositWibDateStrServer(s: any): string {
   if (!s) return '';
   const rawCreated = String(s.createdAt || '').trim();
@@ -3585,10 +3601,9 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     if (existingDepositRefs.has(s.id) || existingDepositRefs.has(depTxId)) return;
 
     addedTxCount++;
-    const createdDate = s.createdAt ? new Date(s.createdAt) : new Date();
-    const wibTime = new Date(createdDate.getTime() + 7 * 60 * 60 * 1000);
-    const tgl = s.tanggal || (s.createdAt && s.createdAt.includes('T') ? s.createdAt.split('T')[0] : wibTime.toISOString().split('T')[0]);
-    const jam = s.jam || (s.createdAt && s.createdAt.includes('T') ? s.createdAt.split('T')[1].slice(0, 5) : wibTime.toISOString().split('T')[1].slice(0, 5));
+    const createdDate = s.createdAt && !isNaN(new Date(s.createdAt).getTime()) ? new Date(s.createdAt) : new Date();
+    const tgl = s.tanggal || getWibDateStrServer(createdDate);
+    const jam = s.jam || getWibTimeStrServer(createdDate);
 
     if (isSedekah) {
       const sdkEntry = sedekahMap.get(s.id);
@@ -5032,10 +5047,12 @@ async function startServer() {
   // Online Realtime Setoran Submission Endpoint (QRIS & Sedekah Tabungan Umum / TFTU)
   app.post('/api/setoran/submit', (req: Request, res: Response) => {
     try {
-      const { deposit, sedekahEntry } = req.body;
-      if (!deposit || !deposit.memberId || !deposit.nominal) {
-        return res.status(400).json({ error: 'Data setoran tidak lengkap' });
+      const { deposit, sedekahEntry } = req.body || {};
+      const numNominal = Number(deposit?.nominal) || 0;
+      if (!deposit || !deposit.memberId || numNominal <= 0) {
+        return res.status(400).json({ error: 'Data setoran tidak lengkap atau nominal tidak valid.' });
       }
+      deposit.nominal = numNominal;
 
       const isSedekah = deposit.jenis === 'sedekah';
       const isTftu = isSedekah && deposit.metode === 'tabungan_umum';
@@ -5057,6 +5074,35 @@ async function startServer() {
         return res.status(400).json({ error: 'Foto bukti pembayaran / resi QRIS wajib di-upload.' });
       }
 
+      // Validasi & sinkronisasi identitas anggota pemilik setoran
+      const deletedMemSet = new Set<string>(currentState.deletedMemberIds || []);
+      const targetMember = (currentState.members || []).find((m: any) => {
+        if (!m || !m.id || deletedMemSet.has(m.id)) return false;
+        if (deposit.memberId && m.id === deposit.memberId) return true;
+        if (deposit.memberRekening && m.nomorRekening && String(m.nomorRekening).trim().toLowerCase() === String(deposit.memberRekening).trim().toLowerCase()) return true;
+        if (deposit.memberNomorAnggota && m.nomorAnggota && String(m.nomorAnggota).trim().toLowerCase() === String(deposit.memberNomorAnggota).trim().toLowerCase()) return true;
+        return false;
+      });
+      if (!targetMember && !(isSedekah && deposit.memberId === 'donatur-umum')) {
+        return res.status(404).json({ error: 'Akun anggota pemilik setoran tidak ditemukan.' });
+      }
+      if (targetMember && targetMember.status === 'dibekukan') {
+        return res.status(403).json({ error: 'Akun anggota sedang dibekukan oleh pengurus. Pengajuan setoran tidak dapat diproses.' });
+      }
+      if (targetMember) {
+        deposit.memberId = targetMember.id;
+        deposit.memberNama = targetMember.nama;
+        deposit.memberRekening = targetMember.nomorRekening;
+        deposit.memberNomorAnggota = targetMember.nomorAnggota;
+        deposit.memberWilayah = targetMember.wilayah;
+      }
+
+      const now = new Date();
+      const createdDate = deposit.createdAt && !isNaN(new Date(deposit.createdAt).getTime()) ? new Date(deposit.createdAt) : now;
+      deposit.createdAt = deposit.createdAt || now.toISOString();
+      deposit.tanggal = deposit.tanggal || getWibDateStrServer(createdDate);
+      deposit.jam = deposit.jam || getWibTimeStrServer(createdDate);
+      deposit.status = deposit.status || 'pending';
       deposit.metode = isTftu ? 'tabungan_umum' : 'qris';
       deposit.rekeningTujuan = isTftu
         ? 'Tabungan Umum Anggota (TFTU)'
@@ -5076,7 +5122,7 @@ async function startServer() {
       // Deteksi setoran double mulai tanggal 24/11/2026 (WIB): jangan masukkan atau tampilkan data double
       const candidateForDupCheck = {
         ...deposit,
-        createdAt: deposit.createdAt || new Date().toISOString(),
+        createdAt: deposit.createdAt || now.toISOString(),
         ...(sedekahEntry?.namaBerbagiKustom ? { namaBerbagiKustom: sedekahEntry.namaBerbagiKustom } : {}),
       };
       const blockingDup = findBlockingDoubleDepositServer(
@@ -5097,6 +5143,16 @@ async function startServer() {
       currentState.setoranList = [deposit, ...(currentState.setoranList || []).filter((s: any) => s.id !== deposit.id)];
       if (sedekahEntry && sedekahEntry.id) {
         sedekahEntry.sumberDana = deposit.metode;
+        sedekahEntry.tanggal = sedekahEntry.tanggal || deposit.tanggal;
+        sedekahEntry.jam = sedekahEntry.jam || deposit.jam;
+        sedekahEntry.createdAt = sedekahEntry.createdAt || deposit.createdAt;
+        if (targetMember) {
+          sedekahEntry.donaturMemberId = targetMember.id;
+          sedekahEntry.donaturNama = targetMember.nama;
+          sedekahEntry.donaturRekening = targetMember.nomorRekening;
+          sedekahEntry.donaturNomorAnggota = targetMember.nomorAnggota;
+          sedekahEntry.donaturWilayah = targetMember.wilayah;
+        }
         currentState.sedekahList = [
           sedekahEntry,
           ...(currentState.sedekahList || []).filter((s: any) => s.id !== sedekahEntry.id),
@@ -5104,22 +5160,56 @@ async function startServer() {
       }
 
       // Auto-record audit log
-      currentState.auditLogs = currentState.auditLogs || [];
-      currentState.auditLogs.unshift({
+      const auditEntry = {
         id: `log-setoran-${Date.now()}`,
-        timestamp: new Date().toISOString(),
+        timestamp: now.toISOString(),
         adminId: deposit.memberId,
         adminNama: deposit.memberNama,
         adminRole: 'member',
         action: isTftu ? 'Pengajuan Sedekah TFTU Tabungan Umum' : 'Pengajuan Setoran Online (QRIS)',
         detail: `Mengajukan setoran ${deposit.jenis} sebesar Rp ${Number(deposit.nominal).toLocaleString('id-ID')} via ${isTftu ? 'Tabungan Umum (TFTU)' : 'QRIS Resmi'}`,
         targetId: deposit.id,
-      });
+      };
+      currentState.auditLogs = currentState.auditLogs || [];
+      currentState.auditLogs.unshift(auditEntry);
 
       saveDatabase(currentState);
       broadcastStatePulse('updated');
       broadcastEvent('SETORAN_UPDATED', { action: 'submit', deposit });
-      res.json({ success: true, message: 'Setoran berhasil diajukan online ke server!', deposit });
+
+      // Push dokumen setoran (dan sedekah bila ada) + pulse metadata segera ke Firestore agar admin & semua perangkat langsung tersinkron
+      ensureServerFirestore()
+        .then(async (fsCtx) => {
+          if (!fsCtx) return;
+          const { db, doc, setDoc } = fsCtx;
+          const cleanDep = sanitizeServerDocForFirestore({ ...deposit });
+          await setDoc(doc(db, 'setoran', deposit.id), cleanDep, { merge: true }).catch(() => {});
+          serverFirestoreHashMap.set(`setoran/${deposit.id}`, JSON.stringify(cleanDep));
+          if (sedekahEntry && sedekahEntry.id) {
+            const cleanSdk = sanitizeServerDocForFirestore({ ...sedekahEntry });
+            await setDoc(doc(db, 'sedekah', sedekahEntry.id), cleanSdk, { merge: true }).catch(() => {});
+            serverFirestoreHashMap.set(`sedekah/${sedekahEntry.id}`, JSON.stringify(cleanSdk));
+          }
+          await setDoc(
+            doc(db, 'koperasi_state', 'main_database'),
+            {
+              id: 'main_database',
+              lastSynced: now.toISOString(),
+              updatedBy: SERVER_INSTANCE_ID,
+              totalSetoran: (currentState.setoranList || []).length,
+            },
+            { merge: true }
+          ).catch(() => {});
+        })
+        .catch(() => {});
+
+      res.json({
+        success: true,
+        message: 'Setoran berhasil diajukan online ke server!',
+        deposit,
+        ...(sedekahEntry && sedekahEntry.id ? { sedekahEntry } : {}),
+        auditLog: auditEntry,
+      });
     } catch (err: any) {
       console.error('Error in /api/setoran/submit:', err);
       res.status(500).json({ error: 'Gagal memproses setoran online: ' + (err.message || 'Server error') });
@@ -5263,7 +5353,7 @@ async function startServer() {
         dep.updatedAt = now.toISOString();
 
         if (dep.jenis === 'kewajiban') {
-          const jlhHari = dep.jumlahHari || 1;
+          const jlhHari = dep.jumlahHari || Math.max(1, Math.round((Number(dep.nominal) || 0) / (currentState.profile?.biayaWajibHarian || 2000)));
           const pokokNominal = jlhHari * (currentState.profile?.pembagianPokokHarian || 1000);
           const zakatNominal = jlhHari * (currentState.profile?.pembagianZakatHarian || 500);
           const qurbanNominal = jlhHari * (currentState.profile?.pembagianQurbanHarian || 500);
@@ -5275,6 +5365,7 @@ async function startServer() {
             (Number(targetMember.saldoUmum) || 0) +
             (Number(targetMember.saldoZakatFitrah) || 0) +
             (Number(targetMember.saldoQurban) || 0);
+          targetMember.jumlahHariPokok = Math.floor(targetMember.saldoPokok / (currentState.profile?.pembagianPokokHarian || 1000));
 
           currentState.memberTransactions = currentState.memberTransactions || [];
           currentState.memberTransactions.unshift({
@@ -5299,9 +5390,12 @@ async function startServer() {
               id: `kas-ang-pokok-${dep.id}`,
               bukuKas: 'anggota',
               tanggal: tgl,
+              jam,
               kategori: 'Tabungan Pokok',
               keterangan: `Setoran Tabungan Pokok ${targetMember.nama} (${jlhHari} Hari)`,
               namaPenerima: targetMember.nama,
+              memberId: targetMember.id,
+              jumlahHari: jlhHari,
               referensiId: dep.id,
               tipe: 'masuk',
               nominal: pokokNominal,
@@ -5316,9 +5410,12 @@ async function startServer() {
               id: `kas-ang-zakat-${dep.id}`,
               bukuKas: 'anggota',
               tanggal: tgl,
+              jam,
               kategori: 'Tabungan Zakat',
               keterangan: `Setoran Tabungan Zakat ${targetMember.nama} (${jlhHari} Hari)`,
               namaPenerima: targetMember.nama,
+              memberId: targetMember.id,
+              jumlahHari: jlhHari,
               referensiId: dep.id,
               tipe: 'masuk',
               nominal: zakatNominal,
@@ -5333,9 +5430,12 @@ async function startServer() {
               id: `kas-ang-qurban-${dep.id}`,
               bukuKas: 'anggota',
               tanggal: tgl,
+              jam,
               kategori: 'Tabungan Qurban',
               keterangan: `Setoran Tabungan Qurban ${targetMember.nama} (${jlhHari} Hari)`,
               namaPenerima: targetMember.nama,
+              memberId: targetMember.id,
+              jumlahHari: jlhHari,
               referensiId: dep.id,
               tipe: 'masuk',
               nominal: qurbanNominal,
@@ -5495,9 +5595,11 @@ async function startServer() {
               id: `kas-ang-umum-${dep.id}`,
               bukuKas: 'anggota',
               tanggal: tgl,
+              jam,
               kategori: 'Tabungan Bebas',
               keterangan: `Setoran Tunai ${targetMember.nama}`,
               namaPenerima: targetMember.nama,
+              memberId: targetMember.id,
               referensiId: dep.id,
               tipe: 'masuk',
               nominal: dep.nominal,
@@ -5877,6 +5979,28 @@ async function startServer() {
       saveDatabase(currentState);
       broadcastStatePulse('updated');
       broadcastEvent('SETORAN_DELETED', { deletedCount, deletedIds: Array.from(idsToDelete) });
+
+      // Hapus dokumen setoran yang dihapus dari Firestore agar tidak muncul kembali pada perangkat lain
+      ensureServerFirestore()
+        .then(async (fsCtx) => {
+          if (!fsCtx) return;
+          const { db, doc, setDoc, deleteDoc } = fsCtx;
+          for (const delId of idsToDelete) {
+            await deleteDoc(doc(db, 'setoran', delId)).catch(() => {});
+            serverFirestoreHashMap.delete(`setoran/${delId}`);
+          }
+          await setDoc(
+            doc(db, 'koperasi_state', 'main_database'),
+            {
+              id: 'main_database',
+              lastSynced: new Date().toISOString(),
+              updatedBy: SERVER_INSTANCE_ID,
+              totalSetoran: (currentState.setoranList || []).length,
+            },
+            { merge: true }
+          ).catch(() => {});
+        })
+        .catch(() => {});
 
       res.json({ success: true, message: `${deletedCount} setoran berhasil dihapus secara permanen oleh Super Admin!`, state: currentState });
     } catch (err: any) {

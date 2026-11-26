@@ -5,7 +5,7 @@ import {
   MemberTransaction,
   KasEntry,
 } from '../types';
-import { formatRupiah, applyAuthoritativeServerState, createAuditLog, fetchStateFromServer, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete, filterAndDeduplicateMemberTransactions } from '../lib/storage';
+import { formatRupiah, applyAuthoritativeServerState, createAuditLog, fetchStateFromServer, getWibDateStr, getWibTimeStr, triggerBrowserNotification, playNotificationSound, getUnifiedSedekahList, isMemberBiodataIncomplete, filterAndDeduplicateMemberTransactions } from '../lib/storage';
 import { LogoHws } from '../lib/logo';
 import { initFCM } from '../lib/fcm';
 import { MemberVerificationView } from './MemberVerificationView';
@@ -325,8 +325,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     }
 
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const tgl = getWibDateStr(now);
+    const jam = getWibTimeStr(now, false);
     const refId = `TF-${Date.now().toString().slice(-6)}`;
 
     // 1. Transaction for Sender (Keluar / DB)
@@ -477,6 +477,11 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     e.preventDefault();
     setTarikError('');
 
+    if (currentMember.status === 'dibekukan') {
+      setTarikError('Akun Anda sedang dibekukan oleh pengurus koperasi. Penarikan saldo tidak diizinkan.');
+      return;
+    }
+
     const amount = Number(tarikNominal);
     if (!amount || amount <= 0) {
       setTarikError('Nominal penarikan harus lebih dari Rp 0.');
@@ -504,8 +509,8 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
     }
 
     const now = new Date();
-    const tgl = now.toISOString().split('T')[0];
-    const jam = now.toTimeString().split(' ')[0].slice(0, 5);
+    const tgl = getWibDateStr(now);
+    const jam = getWibTimeStr(now, false);
     const ket = `Tarikan ${labelTabungan} ${currentMember.nama}${tarikCatatan ? ' - ' + tarikCatatan : ''}`;
 
     const refTarikId = `TRK-${Date.now().toString().slice(-6)}`;
@@ -551,6 +556,7 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
             ...m,
             saldoPokok: newPokok,
             totalSimpanan: newPokok + m.saldoZakatFitrah + m.saldoQurban + m.saldoUmum,
+            jumlahHariPokok: Math.floor(newPokok / (prev.profile?.pembagianPokokHarian || 1000)),
           };
         } else {
           const newUmum = Math.max(0, m.saldoUmum - amount);
@@ -570,7 +576,16 @@ export const MemberDashboard: React.FC<MemberDashboardProps> = ({
       };
     });
 
-    alert(`✓ Penarikan ${labelTabungan} senilai ${formatRupiah(amount)} berhasil diproses ke rekening ${currentMember.bankPribadi.namaBank} (${currentMember.bankPribadi.nomorRekening})!`);
+    setMemberToasts((prev) => [
+      {
+        id: `toast-tarik-${Date.now()}`,
+        title: `Penarikan ${labelTabungan} Berhasil`,
+        message: `${formatRupiah(amount)} diproses ke ${currentMember.bankPribadi.namaBank} (${currentMember.bankPribadi.nomorRekening}).`,
+        type: 'success',
+        timestamp: `${jam} WIB`,
+      },
+      ...prev.slice(0, 3),
+    ]);
     setShowTarikModal(false);
     setTarikNominal('');
     setTarikCatatan('');
