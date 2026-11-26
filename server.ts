@@ -196,10 +196,16 @@ function loadDatabase() {
   return initialState;
 }
 
+const archivedDataUrlSet = new Set<string>();
+
 // Archive base64 data URL to permanent physical file on disk (UPLOADS_DIR)
 function archiveBase64File(dataUrl: string, prefix: string): string {
   try {
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+      return dataUrl;
+    }
+    const fastKey = `${prefix}:${dataUrl.length}:${dataUrl.slice(0, 32)}:${dataUrl.slice(-24)}`;
+    if (archivedDataUrlSet.has(fastKey)) {
       return dataUrl;
     }
     const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -218,6 +224,7 @@ function archiveBase64File(dataUrl: string, prefix: string): string {
     if (!fs.existsSync(targetPath)) {
       fs.writeFileSync(targetPath, Buffer.from(matches[2], 'base64'));
     }
+    archivedDataUrlSet.add(fastKey);
     return dataUrl;
   } catch (err) {
     console.error('File archiving warning:', err);
@@ -1190,7 +1197,10 @@ function mergeServerState(current: any, incoming: any): any {
     chatMessages: Array.from(chatMap.values()).sort((a: any, b: any) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1)),
     memberTransactions: normalizedTxArr,
-    kasList: mergedKasList.sort((a: any, b: any) => (b.tanggal > a.tanggal ? 1 : -1)),
+    kasList: mergedKasList.sort((a: any, b: any) => {
+      const cmp = `${b.tanggal || ''} ${b.createdAt || ''}`.localeCompare(`${a.tanggal || ''} ${a.createdAt || ''}`);
+      return cmp !== 0 ? cmp : String(b.id || '').localeCompare(String(a.id || ''));
+    }),
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: mergedSedekahArr,
     pendingMutasiRequests: mergedPendingMutasi,
@@ -1315,7 +1325,7 @@ function rebuildStateHttpCache(state: any) {
     const digestSource = buildStateSyncDigest(state);
     cachedStateDigest = crypto.createHash('sha1').update(digestSource).digest('hex');
     cachedStateJsonBuffer = Buffer.from(JSON.stringify(state));
-    cachedStateGzipBuffer = zlib.gzipSync(cachedStateJsonBuffer, { level: 6 });
+    cachedStateGzipBuffer = zlib.gzipSync(cachedStateJsonBuffer, { level: 1 });
   } catch (err) {
     cachedStateDigest = String(Date.now());
     cachedStateJsonBuffer = null;
@@ -1380,10 +1390,29 @@ function sanitizeServerDocForFirestore(data: any): any {
     return data.map((v) => sanitizeServerDocForFirestore(v)).filter((v) => v !== undefined);
   }
   const clean: Record<string, any> = {};
-  for (const [k, v] of Object.entries(data)) {
+  for (const k of Object.keys(data).sort()) {
+    const v = data[k];
     if (v !== undefined) {
       clean[k] = sanitizeServerDocForFirestore(v);
     }
+  }
+  return clean;
+}
+
+function stripDerivedKasCompareFields(k: any) {
+  const clean = sanitizeServerDocForFirestore({ ...k });
+  if (clean && typeof clean === 'object') {
+    delete clean.saldoKasSetelah;
+    delete clean.updatedAt;
+  }
+  return clean;
+}
+
+function stripDerivedTxCompareFields(tx: any) {
+  const clean = sanitizeServerDocForFirestore({ ...tx });
+  if (clean && typeof clean === 'object') {
+    delete clean.saldoSetelah;
+    delete clean.updatedAt;
   }
   return clean;
 }
@@ -1455,7 +1484,7 @@ function seedServerFirestoreHashMap(data: Partial<any>, forceOverwrite = false) 
     }
     if (Array.isArray(data.kasList)) {
       for (const k of data.kasList) {
-        if (k && k.id) setHash(`kas/${k.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...k })));
+        if (k && k.id) setHash(`kas/${k.id}`, JSON.stringify(stripDerivedKasCompareFields(k)));
       }
     }
     if (Array.isArray(data.setoranList)) {
@@ -1465,7 +1494,7 @@ function seedServerFirestoreHashMap(data: Partial<any>, forceOverwrite = false) 
     }
     if (Array.isArray(data.memberTransactions)) {
       for (const tx of data.memberTransactions) {
-        if (tx && tx.id) setHash(`transactions/${tx.id}`, JSON.stringify(sanitizeServerDocForFirestore({ ...tx })));
+        if (tx && tx.id) setHash(`transactions/${tx.id}`, JSON.stringify(stripDerivedTxCompareFields(tx)));
       }
     }
     if (Array.isArray(data.sedekahList)) {
@@ -1644,7 +1673,7 @@ async function syncStateToFirestoreServer(state: any) {
       if (k && k.id) {
         const cleanKas = sanitizeServerDocForFirestore({ ...k });
         const kKey = `kas/${k.id}`;
-        const kStr = JSON.stringify(cleanKas);
+        const kStr = JSON.stringify(stripDerivedKasCompareFields(cleanKas));
         if (serverFirestoreHashMap.get(kKey) !== kStr) {
           tasks.push(async () => {
             await setDoc(doc(db, 'kas', k.id), cleanKas, { merge: true }).catch(() => {});
@@ -1697,7 +1726,7 @@ async function syncStateToFirestoreServer(state: any) {
       if (tx && tx.id) {
         const cleanTx = sanitizeServerDocForFirestore({ ...tx });
         const txKey = `transactions/${tx.id}`;
-        const txStr = JSON.stringify(cleanTx);
+        const txStr = JSON.stringify(stripDerivedTxCompareFields(cleanTx));
         if (serverFirestoreHashMap.get(txKey) !== txStr) {
           tasks.push(async () => {
             await setDoc(doc(db, 'transactions', tx.id), cleanTx, { merge: true }).catch(() => {});
@@ -1821,6 +1850,8 @@ async function syncStateToFirestoreServer(state: any) {
   }
 }
 
+let lastBackupCopyAtMs = 0;
+
 // Save DB with automated backup and physical file archiving
 function saveDatabase(state: any, options?: { skipFirestore?: boolean }) {
   try {
@@ -1843,11 +1874,13 @@ function saveDatabase(state: any, options?: { skipFirestore?: boolean }) {
       state.admins.forEach((a: any) => { if (a) delete a.biometricActive; });
     }
 
-    // Rolling backup before writing to prevent data corruption or loss
+    // Rolling backup (throttled every 30s to avoid heavy 8MB synchronous disk copy loops)
     try {
-      if (fs.existsSync(DB_FILE)) {
+      const nowMs = Date.now();
+      if (nowMs - lastBackupCopyAtMs >= 30000 && fs.existsSync(DB_FILE)) {
+        lastBackupCopyAtMs = nowMs;
         fs.copyFileSync(DB_FILE, path.join(DATA_DIR, 'koperasi_db.bak'));
-        const dateKey = new Date().toISOString().slice(0, 13).replace('T', '_');
+        const dateKey = new Date(nowMs).toISOString().slice(0, 13).replace('T', '_');
         const snapPath = path.join(BACKUPS_DIR, `koperasi_snapshot_${dateKey}.json`);
         if (!fs.existsSync(snapPath)) {
           fs.copyFileSync(DB_FILE, snapPath);
@@ -1858,7 +1891,7 @@ function saveDatabase(state: any, options?: { skipFirestore?: boolean }) {
     // Physical file archiving for all uploaded base64 data URLs
     archiveAllUploadedFiles(state);
 
-    fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2));
+    fs.writeFileSync(DB_FILE, JSON.stringify(state));
     rebuildStateHttpCache(state);
 
     // Asynchronous Realtime sync to Cloud Firestore (unless just pulled directly from Firestore)
@@ -2292,7 +2325,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       (currentState.kasList || []).forEach((k: any) => {
         if (!k || !k.id) return;
         const rk = remoteKasMap.get(k.id);
-        if (!rk || JSON.stringify(sanitizeServerDocForFirestore({ ...rk })) !== JSON.stringify(sanitizeServerDocForFirestore({ ...k }))) {
+        if (!rk || JSON.stringify(stripDerivedKasCompareFields(rk)) !== JSON.stringify(stripDerivedKasCompareFields(k))) {
           serverFirestoreHashMap.delete(`kas/${k.id}`);
           healedRemoteDiff = true;
         }
@@ -2301,7 +2334,7 @@ async function pullFromFirestoreServer(): Promise<{ success: boolean; newMembers
       (currentState.memberTransactions || []).forEach((tx: any) => {
         if (!tx || !tx.id) return;
         const rt = remoteTxMap.get(tx.id);
-        if (!rt || JSON.stringify(sanitizeServerDocForFirestore({ ...rt })) !== JSON.stringify(sanitizeServerDocForFirestore({ ...tx }))) {
+        if (!rt || JSON.stringify(stripDerivedTxCompareFields(rt)) !== JSON.stringify(stripDerivedTxCompareFields(tx))) {
           serverFirestoreHashMap.delete(`transactions/${tx.id}`);
           healedRemoteDiff = true;
         }
@@ -2492,7 +2525,12 @@ async function initServerFirestoreRealtimeWatchers() {
             delete cleanDoc.biometricActive;
           }
           const hashKey = `${colName}/${docId}`;
-          const cleanStr = JSON.stringify(cleanDoc);
+          const cleanStr =
+            colName === 'kas'
+              ? JSON.stringify(stripDerivedKasCompareFields(cleanDoc))
+              : colName === 'transactions'
+              ? JSON.stringify(stripDerivedTxCompareFields(cleanDoc))
+              : JSON.stringify(cleanDoc);
           if (serverFirestoreHashMap.get(hashKey) === cleanStr) {
             continue; // Echo of our own write or already identical
           }
@@ -2585,7 +2623,7 @@ async function initServerFirestoreRealtimeWatchers() {
               };
             }
             upsertById(currentState.kasList, mergedKas);
-            serverFirestoreHashMap.set(`kas/${kId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedKas)));
+            serverFirestoreHashMap.set(`kas/${kId}`, JSON.stringify(stripDerivedKasCompareFields(mergedKas)));
             hasActualMutation = true;
             needsFinancialReconcile = true;
           } else if (colName === 'transactions') {
@@ -2596,7 +2634,7 @@ async function initServerFirestoreRealtimeWatchers() {
             const mergedTx = ex ? { ...ex, ...cleanDoc } : cleanDoc;
             mergedTx.cbg = resolveMutasiCbgCodeServer(mergedTx, currentState.setoranList, currentState.kasList, currentState.sedekahList);
             upsertById(currentState.memberTransactions, mergedTx);
-            serverFirestoreHashMap.set(`transactions/${txId}`, JSON.stringify(sanitizeServerDocForFirestore(mergedTx)));
+            serverFirestoreHashMap.set(`transactions/${txId}`, JSON.stringify(stripDerivedTxCompareFields(mergedTx)));
             hasActualMutation = true;
             needsFinancialReconcile = true;
           } else if (colName === 'sedekah') {
@@ -2708,6 +2746,9 @@ async function initServerFirestoreRealtimeWatchers() {
       } catch {}
     };
 
+    let lastPulsePullAtMs = 0;
+    let lastAppliedMainPulseKey = '';
+
     onSnapshot(
       doc(db, 'koperasi_state', 'main_database'),
       (snap: any) => {
@@ -2715,7 +2756,13 @@ async function initServerFirestoreRealtimeWatchers() {
         const d = snap.data();
         if (d && d.updatedBy && d.updatedBy !== SERVER_INSTANCE_ID) {
           broadcastStatePulse('firestore_pulse');
-          triggerDebouncedPull(800);
+          const pulseKey = `${d.lastSynced || ''}|${d.totalMembers || 0}|${d.totalKas || 0}|${d.totalSetoran || 0}|${d.totalTransactions || 0}`;
+          const nowMs = Date.now();
+          if (pulseKey !== lastAppliedMainPulseKey && nowMs - lastPulsePullAtMs >= 15000) {
+            lastAppliedMainPulseKey = pulseKey;
+            lastPulsePullAtMs = nowMs;
+            triggerDebouncedPull(800);
+          }
         }
       },
       () => {}
@@ -4255,12 +4302,15 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
     }
   }
 
-  // Recompute running saldoKasSetelah on kasList
+  // Recompute running saldoKasSetelah on kasList (with deterministic id tie-breaker)
   const recomputeType = (type: string) => {
     const items = nextKasList
       .filter((k: any) => k.bukuKas === type)
       .slice()
-      .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+      .sort((a: any, b: any) => {
+        const cmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+        return cmp !== 0 ? cmp : String(a.id || '').localeCompare(String(b.id || ''));
+      });
     let run = 0;
     const map = new Map<string, number>();
     items.forEach((it: any) => {
@@ -4282,7 +4332,10 @@ function reconcileBalancesWithDeposits(state: any): { state: any; reconciledCoun
           ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
           : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
     }))
-    .sort((a: any, b: any) => `${b.tanggal} ${b.createdAt || ''}`.localeCompare(`${a.tanggal} ${a.createdAt || ''}`));
+    .sort((a: any, b: any) => {
+      const cmp = `${b.tanggal || ''} ${b.createdAt || ''}`.localeCompare(`${a.tanggal || ''} ${a.createdAt || ''}`);
+      return cmp !== 0 ? cmp : String(b.id || '').localeCompare(String(a.id || ''));
+    });
 
   state.setoranList = validSetoran.sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1));
   state.sedekahList = Array.from(sedekahMap.values()).sort((a: any, b: any) =>
@@ -5045,13 +5098,14 @@ async function startServer() {
   });
 
   // Online Realtime Setoran Submission Endpoint (QRIS & Sedekah Tabungan Umum / TFTU)
-  app.post('/api/setoran/submit', (req: Request, res: Response) => {
+  app.post('/api/setoran/submit', async (req: Request, res: Response) => {
     try {
       const { deposit, sedekahEntry } = req.body || {};
       const numNominal = Number(deposit?.nominal) || 0;
-      if (!deposit || !deposit.memberId || numNominal <= 0) {
+      if (!deposit || (!deposit.memberId && !deposit.memberRekening && !deposit.memberNomorAnggota && !deposit.memberNama) || numNominal <= 0) {
         return res.status(400).json({ error: 'Data setoran tidak lengkap atau nominal tidak valid.' });
       }
+      deposit.id = String(deposit.id || `dep-${Date.now()}`).trim();
       deposit.nominal = numNominal;
 
       const isSedekah = deposit.jenis === 'sedekah';
@@ -5070,19 +5124,32 @@ async function startServer() {
       }
 
       // Bukti pembayaran / resi QRIS wajib di-upload untuk metode QRIS
-      if (!isTftu && (!deposit.buktiTransferUrl || !deposit.buktiTransferUrl.trim())) {
+      if (!isTftu && (!deposit.buktiTransferUrl || !String(deposit.buktiTransferUrl).trim())) {
         return res.status(400).json({ error: 'Foto bukti pembayaran / resi QRIS wajib di-upload.' });
       }
 
       // Validasi & sinkronisasi identitas anggota pemilik setoran
-      const deletedMemSet = new Set<string>(currentState.deletedMemberIds || []);
-      const targetMember = (currentState.members || []).find((m: any) => {
-        if (!m || !m.id || deletedMemSet.has(m.id)) return false;
-        if (deposit.memberId && m.id === deposit.memberId) return true;
-        if (deposit.memberRekening && m.nomorRekening && String(m.nomorRekening).trim().toLowerCase() === String(deposit.memberRekening).trim().toLowerCase()) return true;
-        if (deposit.memberNomorAnggota && m.nomorAnggota && String(m.nomorAnggota).trim().toLowerCase() === String(deposit.memberNomorAnggota).trim().toLowerCase()) return true;
-        return false;
-      });
+      const findMatchingMember = () => {
+        const deletedMemSet = new Set<string>(currentState.deletedMemberIds || []);
+        return (currentState.members || []).find((m: any) => {
+          if (!m || !m.id || deletedMemSet.has(m.id)) return false;
+          if (deposit.memberId && m.id === deposit.memberId) return true;
+          if (deposit.memberRekening && m.nomorRekening && String(m.nomorRekening).trim().toLowerCase() === String(deposit.memberRekening).trim().toLowerCase()) return true;
+          if (deposit.memberNomorAnggota && m.nomorAnggota && String(m.nomorAnggota).trim().toLowerCase() === String(deposit.memberNomorAnggota).trim().toLowerCase()) return true;
+          if (deposit.memberNama && m.nama && String(m.nama).trim().toLowerCase() === String(deposit.memberNama).trim().toLowerCase()) return true;
+          return false;
+        });
+      };
+
+      let targetMember = findMatchingMember();
+      if (!targetMember && !(isSedekah && deposit.memberId === 'donatur-umum')) {
+        // Pull latest members from Firestore in case member was newly registered on another device
+        await Promise.race([
+          pullFromFirestoreServer().catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, 2500)),
+        ]);
+        targetMember = findMatchingMember();
+      }
       if (!targetMember && !(isSedekah && deposit.memberId === 'donatur-umum')) {
         return res.status(404).json({ error: 'Akun anggota pemilik setoran tidak ditemukan.' });
       }
@@ -6202,7 +6269,10 @@ async function startServer() {
       const items = (currentState.kasList || [])
         .filter((k: any) => k.bukuKas === type && !(currentState.deletedKasIds || []).includes(k.id))
         .slice()
-        .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+        .sort((a: any, b: any) => {
+          const cmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+          return cmp !== 0 ? cmp : String(a.id || '').localeCompare(String(b.id || ''));
+        });
       let run = 0;
       const map = new Map<string, number>();
       items.forEach((it: any) => {
@@ -6428,7 +6498,10 @@ async function startServer() {
       const items = (currentState.kasList || [])
         .filter((k: any) => k.bukuKas === type && !currentState.deletedKasIds.includes(k.id))
         .slice()
-        .sort((a: any, b: any) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+        .sort((a: any, b: any) => {
+          const cmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+          return cmp !== 0 ? cmp : String(a.id || '').localeCompare(String(b.id || ''));
+        });
       let run = 0;
       const map = new Map<string, number>();
       items.forEach((it: any) => {
@@ -6791,7 +6864,10 @@ async function startServer() {
         // Recompute running saldoKasSetelah for both books
         let runningKasAnggota = 0;
         let runningKasKoperasi = 0;
-        const sortedKas = [...currentState.kasList].sort((a: any, b: any) => (a.tanggal || '').localeCompare(b.tanggal || ''));
+        const sortedKas = [...currentState.kasList].sort((a: any, b: any) => {
+          const cmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+          return cmp !== 0 ? cmp : String(a.id || '').localeCompare(String(b.id || ''));
+        });
         sortedKas.forEach((k: any) => {
           const nom = Number(k.nominal) || 0;
           if (k.bukuKas === 'anggota') {
@@ -9431,6 +9507,16 @@ exit
         }
       ]
     });
+  });
+
+  // Always return JSON errors for /api/* routes (never fall back to Express HTML error pages)
+  app.use('/api', (err: any, _req: Request, res: Response, _next: any) => {
+    const status = err?.status || err?.statusCode || 500;
+    const message =
+      err?.type === 'entity.too.large'
+        ? 'Ukuran data atau foto bukti setoran terlalu besar untuk dikirim.'
+        : err?.message || 'Terjadi kesalahan pada server API.';
+    res.status(status).json({ error: message });
   });
 
   const server = http.createServer(app);

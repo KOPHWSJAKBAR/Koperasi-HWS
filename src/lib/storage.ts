@@ -1778,7 +1778,10 @@ export function mergeStates(base: AppState, incoming: AppState): AppState {
       .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1)),
     suratList: Array.from(suratMap.values()).sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1)),
     memberTransactions: mergedTxList.sort((a, b) => ((b.tanggal + (b.jam || '')) > (a.tanggal + (a.jam || '')) ? 1 : -1)),
-    kasList: mergedKasList.sort((a, b) => (b.tanggal > a.tanggal ? 1 : -1)),
+    kasList: mergedKasList.sort((a, b) => {
+      const cmp = `${b.tanggal || ''} ${b.createdAt || ''}`.localeCompare(`${a.tanggal || ''} ${a.createdAt || ''}`);
+      return cmp !== 0 ? cmp : String(b.id || '').localeCompare(String(a.id || ''));
+    }),
     penyaluranList: Array.from(penyaluranMap.values()),
     sedekahList: Array.from(sedekahMap.values()).sort((a, b) => ((b.createdAt || b.tanggal) > (a.createdAt || a.tanggal) ? 1 : -1)),
     pengaturanBerbagi,
@@ -3309,7 +3312,10 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
     const items = nextKasList
       .filter((k) => k.bukuKas === type)
       .slice()
-      .sort((a, b) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+      .sort((a, b) => {
+        const cmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+        return cmp !== 0 ? cmp : String(a.id || '').localeCompare(String(b.id || ''));
+      });
     let run = 0;
     const map = new Map<string, number>();
     items.forEach((it) => {
@@ -3331,7 +3337,10 @@ export function reconcileBalancesWithDeposits(state: AppState): AppState {
           ? (mapAnggota.get(k.id) ?? k.saldoKasSetelah)
           : (mapKoperasi.get(k.id) ?? k.saldoKasSetelah),
     }))
-    .sort((a, b) => `${b.tanggal} ${b.createdAt || ''}`.localeCompare(`${a.tanggal} ${a.createdAt || ''}`));
+    .sort((a, b) => {
+      const cmp = `${b.tanggal || ''} ${b.createdAt || ''}`.localeCompare(`${a.tanggal || ''} ${a.createdAt || ''}`);
+      return cmp !== 0 ? cmp : String(b.id || '').localeCompare(String(a.id || ''));
+    });
 
   return {
     ...state,
@@ -3424,17 +3433,34 @@ export function getUnifiedSedekahList(state: AppState): SedekahBerbagiEntry[] {
   return Array.from(sedekahMap.values());
 }
 
-// Deep sanitization helper to strip all undefined values before writing to Firestore
+function canonicalizeSanitizedValue(val: any): any {
+  if (val === null || val === undefined) return null;
+  if (typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val.map((item) => canonicalizeSanitizedValue(item));
+  }
+  const sorted: Record<string, any> = {};
+  for (const k of Object.keys(val).sort()) {
+    const v = val[k];
+    if (v !== undefined) {
+      sorted[k] = canonicalizeSanitizedValue(v);
+    }
+  }
+  return sorted;
+}
+
+// Deep sanitization helper to strip all undefined values & stabilize key order before hashing/writing to Firestore
 export function sanitizeForFirestore<T>(data: T): T {
   if (data === null || data === undefined) {
     return null as any;
   }
   try {
-    return JSON.parse(JSON.stringify(data));
+    return canonicalizeSanitizedValue(JSON.parse(JSON.stringify(data))) as T;
   } catch {
     if (typeof data === 'object') {
       const clean: any = Array.isArray(data) ? [] : {};
-      for (const [k, v] of Object.entries(data as any)) {
+      for (const k of Object.keys(data as any).sort()) {
+        const v = (data as any)[k];
         if (v !== undefined) {
           clean[k] = v;
         }
@@ -3528,14 +3554,24 @@ function seedFirestoreSyncedHashesFromServer(serverData: Partial<AppState>, forc
     if (Array.isArray(serverData.kasList)) {
       for (const k of serverData.kasList) {
         if (k && k.id) {
-          setHash(`kas/${k.id}`, JSON.stringify(sanitizeForFirestore({ ...k })));
+          const coreK: any = sanitizeForFirestore({ ...k });
+          if (coreK && typeof coreK === 'object') {
+            delete coreK.saldoKasSetelah;
+            delete coreK.updatedAt;
+          }
+          setHash(`kas/${k.id}`, JSON.stringify(coreK));
         }
       }
     }
     if (Array.isArray(serverData.memberTransactions)) {
       for (const tx of serverData.memberTransactions) {
         if (tx && tx.id) {
-          setHash(`transactions/${tx.id}`, JSON.stringify(sanitizeForFirestore({ ...tx })));
+          const coreTx: any = sanitizeForFirestore({ ...tx });
+          if (coreTx && typeof coreTx === 'object') {
+            delete coreTx.saldoSetelah;
+            delete coreTx.updatedAt;
+          }
+          setHash(`transactions/${tx.id}`, JSON.stringify(coreTx));
         }
       }
     }
@@ -3779,7 +3815,10 @@ export async function syncShardedToFirestore(state: AppState) {
       if (k && k.id) {
         const key = `kas/${k.id}`;
         const cleanKas = sanitizeForFirestore({ ...k });
-        const kStr = JSON.stringify(cleanKas);
+        const coreKas: any = { ...cleanKas };
+        delete coreKas.saldoKasSetelah;
+        delete coreKas.updatedAt;
+        const kStr = JSON.stringify(coreKas);
         if (lastWrittenMap.get(key) !== kStr) {
           tasks.push(async () => {
             await setDoc(doc(db, 'kas', k.id), { ...cleanKas, updatedAt: now }, { merge: true }).catch((e) =>
@@ -3807,7 +3846,10 @@ export async function syncShardedToFirestore(state: AppState) {
       if (tx && tx.id) {
         const key = `transactions/${tx.id}`;
         const cleanTx = sanitizeForFirestore({ ...tx });
-        const txStr = JSON.stringify(cleanTx);
+        const coreTx: any = { ...cleanTx };
+        delete coreTx.saldoSetelah;
+        delete coreTx.updatedAt;
+        const txStr = JSON.stringify(coreTx);
         if (lastWrittenMap.get(key) !== txStr) {
           tasks.push(async () => {
             await setDoc(doc(db, 'transactions', tx.id), { ...cleanTx, updatedAt: now }, { merge: true }).catch((e) =>
@@ -6177,7 +6219,10 @@ export function syncMemberBalancesWithBukuKasAnggota(prev: AppState): AppState {
     const items = kasList
       .filter((k) => k.bukuKas === type)
       .slice()
-      .sort((a, b) => `${a.tanggal} ${a.createdAt || ''}`.localeCompare(`${b.tanggal} ${b.createdAt || ''}`));
+      .sort((a, b) => {
+        const cmp = `${a.tanggal || ''} ${a.createdAt || ''}`.localeCompare(`${b.tanggal || ''} ${b.createdAt || ''}`);
+        return cmp !== 0 ? cmp : String(a.id || '').localeCompare(String(b.id || ''));
+      });
     let run = 0;
     const map = new Map<string, number>();
     items.forEach((it) => {

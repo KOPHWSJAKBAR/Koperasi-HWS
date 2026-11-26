@@ -675,7 +675,7 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
       let savedAudit: any = null;
       try {
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 15000) : null;
         try {
           const submitRes = await fetch('/api/setoran/submit', {
             method: 'POST',
@@ -686,16 +686,26 @@ export const MenuBerbagiModal: React.FC<MenuBerbagiModalProps> = ({
             }),
             signal: controller?.signal,
           });
-          const resData = await submitRes.json().catch(() => null);
-          if (!submitRes.ok) {
-            setTftuError(resData?.error || 'Setoran gagal diajukan. Silakan periksa kembali data Anda.');
-            await fetchStateFromServer(true);
-            return;
+          const rawText = await submitRes.text().catch(() => '');
+          let resData: any = null;
+          try {
+            resData = rawText ? JSON.parse(rawText) : null;
+          } catch {
+            resData = null;
           }
-          submittedToServer = true;
-          if (resData?.deposit) savedDeposit = resData.deposit;
-          if (resData?.sedekahEntry) savedSedekah = resData.sedekahEntry;
-          if (resData?.auditLog) savedAudit = resData.auditLog;
+          if (!submitRes.ok) {
+            if (submitRes.status >= 400 && submitRes.status < 500 && resData?.error) {
+              setTftuError(resData.error);
+              await fetchStateFromServer(true);
+              return;
+            }
+            submittedToServer = false;
+          } else {
+            submittedToServer = true;
+            if (resData?.deposit) savedDeposit = resData.deposit;
+            if (resData?.sedekahEntry) savedSedekah = resData.sedekahEntry;
+            if (resData?.auditLog) savedAudit = resData.auditLog;
+          }
         } finally {
           if (timeoutId) clearTimeout(timeoutId);
         }

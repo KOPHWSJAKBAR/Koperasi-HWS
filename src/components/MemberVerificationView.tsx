@@ -238,9 +238,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           setBuktiUrl(rawDataUrl);
           return;
         }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
-        setBuktiUrl(compressedDataUrl || rawDataUrl);
+        try {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+          setBuktiUrl(compressedDataUrl || rawDataUrl);
+        } catch {
+          setBuktiUrl(rawDataUrl);
+        }
         setMsg(null);
       };
       img.src = rawDataUrl;
@@ -345,13 +349,13 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
       createdAt: createdAtIso,
     };
 
-    // Online submission to server (Req 2 & 4) dengan timeout & tanpa redundant full-state rebroadcast
+    // Online submission to server (Req 2 & 4) dengan timeout & resilient Firestore fallback
     let submittedToServer = false;
     let savedDeposit: SetoranVerifikasi = newDeposit;
     let savedAudit: any = null;
     try {
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 15000) : null;
       try {
         const submitRes = await fetch('/api/setoran/submit', {
           method: 'POST',
@@ -359,19 +363,32 @@ export const MemberVerificationView: React.FC<MemberVerificationViewProps> = ({
           body: JSON.stringify({ deposit: newDeposit }),
           signal: controller?.signal,
         });
-        const resData = await submitRes.json().catch(() => null);
-        if (!submitRes.ok) {
-          setIsSubmitting(false);
-          setMsg({
-            type: 'error',
-            text: resData?.error || 'Setoran gagal diajukan. Silakan periksa kembali data Anda.',
-          });
-          await fetchStateFromServer(true);
-          return;
+        const rawText = await submitRes.text().catch(() => '');
+        let resData: any = null;
+        try {
+          resData = rawText ? JSON.parse(rawText) : null;
+        } catch {
+          resData = null;
         }
-        submittedToServer = true;
-        if (resData?.deposit) savedDeposit = resData.deposit;
-        if (resData?.auditLog) savedAudit = resData.auditLog;
+
+        if (!submitRes.ok) {
+          // Hanya hentikan pengajuan jika server secara eksplisit menolak validasi bisnis (4xx + JSON error)
+          if (submitRes.status >= 400 && submitRes.status < 500 && resData?.error) {
+            setIsSubmitting(false);
+            setMsg({
+              type: 'error',
+              text: resData.error,
+            });
+            await fetchStateFromServer(true);
+            return;
+          }
+          // Untuk 5xx / proxy timeout / HTML fallback, lanjutkan simpan & sinkronkan via Cloud Firestore
+          submittedToServer = false;
+        } else {
+          submittedToServer = true;
+          if (resData?.deposit) savedDeposit = resData.deposit;
+          if (resData?.auditLog) savedAudit = resData.auditLog;
+        }
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
       }
